@@ -1,59 +1,52 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+export PATH="/opt/venv/bin:$PATH"
+export PYTHONPATH="/opt/mmh3/runtime${PYTHONPATH:+:$PYTHONPATH}"
 
-CMD="${1:-help}"
-LOG_DIR="${MMH3_LOG_DIR:-/workspace/mmh3/logs}"
-COMFY_DIR="${MMH3_COMFY_DIR:-/workspace/ComfyUI}"
-PHONE_DIR="${MMH3_PHONE_DIR:-/workspace/h3_phone_ui_7860}"
-mkdir -p "$LOG_DIR"
-
-comfy_pid() { pgrep -f '[p]ython.*main.py.*8188' | head -1 || true; }
-phone_pid() { pgrep -f '[p]ython.*server.py.*7860' | head -1 || true; }
-
-status() {
-  echo "=== MMH3 STATUS ==="
-  printf "ComfyUI:  "; [ -n "$(comfy_pid)" ] && echo "running ($(comfy_pid))" || echo "stopped"
-  printf "Phone UI: "; [ -n "$(phone_pid)" ] && echo "running ($(phone_pid))" || echo "stopped"
-  echo
-  nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader 2>/dev/null || true
-  free -h | sed -n '1,2p' || true
-}
-
-start_comfy() {
-  [ -f "$COMFY_DIR/main.py" ] || { echo "Missing $COMFY_DIR/main.py"; exit 1; }
-  cd "$COMFY_DIR"
-  nohup python3 main.py --listen 0.0.0.0 --port 8188 >"$LOG_DIR/comfyui.log" 2>&1 &
-  echo "ComfyUI started."
-}
-
-stop_comfy() {
-  local p; p="$(comfy_pid)"
-  [ -n "$p" ] && kill "$p" || true
-}
-
-start_phone() {
-  [ -f "$PHONE_DIR/server.py" ] || { echo "Missing $PHONE_DIR/server.py"; exit 1; }
-  cd "$PHONE_DIR"
-  nohup python3 server.py --port 7860 --comfy http://127.0.0.1:8188 >"$LOG_DIR/phone-ui.log" 2>&1 &
-  echo "Phone UI started."
-}
-
-stop_phone() {
-  local p; p="$(phone_pid)"
-  [ -n "$p" ] && kill "$p" || true
-}
-
-case "$CMD" in
-  status) status ;;
-  start-comfy) start_comfy ;;
-  stop-comfy) stop_comfy ;;
-  restart-comfy) stop_comfy; sleep 2; start_comfy ;;
-  start-phone) start_phone ;;
-  stop-phone) stop_phone ;;
-  restart-phone) stop_phone; sleep 1; start_phone ;;
-  logs-comfy) tail -n 100 -f "$LOG_DIR/comfyui.log" ;;
-  logs-phone) tail -n 100 -f "$LOG_DIR/phone-ui.log" ;;
-  *)
-    echo "Usage: mmh3 {status|start-comfy|stop-comfy|restart-comfy|start-phone|stop-phone|restart-phone|logs-comfy|logs-phone}"
+cmd="${1:-status}"
+case "$cmd" in
+  status)
+    python - <<'PY'
+from pathlib import Path
+from mmh3.hardware import detect
+from mmh3 import comfy
+h=detect(); print("=== MMH3 STATUS ===")
+print(f"GPU: {h.gpu_name} | VRAM: {h.vram_mib} MiB")
+print(f"RAM cgroup: {h.cgroup_memory_current_bytes/2**30:.1f} / {h.cgroup_memory_limit_bytes/2**30:.1f} GiB")
+print("Comfy:", "ready" if comfy.wait_ready(1) else "down")
+for name in ("hardware.json","memory.json"):
+ p=Path("/workspace/mmh3/state")/name
+ if p.exists(): print(f"{name}: {p}")
+PY
     ;;
+  free)
+    python - <<'PY'
+from mmh3.comfy import free_memory
+print("cleanup requested" if free_memory(True,True) else "cleanup request failed")
+PY
+    ;;
+  interrupt)
+    python - <<'PY'
+from mmh3.comfy import interrupt
+print("interrupt requested" if interrupt() else "interrupt request failed")
+PY
+    ;;
+  sync-loras)
+    python - <<'PY'
+from pathlib import Path
+from mmh3.loras import sync_loras
+print(sync_loras(Path('/workspace/mmh3/config/loras.yaml')))
+PY
+    ;;
+  sync-models)
+    python - <<'PY'
+from pathlib import Path
+from mmh3.models import sync_models
+for x in sync_models(Path('/opt/mmh3/config/models.yaml')): print(x)
+PY
+    ;;
+  logs-comfy) tail -n 200 -f /workspace/mmh3/logs/comfyui.log ;;
+  logs-phone) tail -n 200 -f /workspace/mmh3/logs/phone-ui.log ;;
+  logs-memory) tail -n 200 -f /workspace/mmh3/logs/memory-guard.log ;;
+  *) echo "Usage: mmh3 {status|free|interrupt|sync-models|sync-loras|logs-comfy|logs-phone|logs-memory}"; exit 2 ;;
 esac
