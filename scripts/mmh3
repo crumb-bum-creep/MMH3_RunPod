@@ -57,6 +57,9 @@ except Exception as e:
     print("cgroup memory unavailable:",e)
 PY
     echo
+    echo "--- startup timing ---"
+    cat /workspace/mmh3/state/startup.json 2>/dev/null || echo "No startup timing state."
+    echo
     echo "--- provisioning ---"
     cat /workspace/mmh3/state/provisioning.json 2>/dev/null || echo "No provisioning state."
     echo
