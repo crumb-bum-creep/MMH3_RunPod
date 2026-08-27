@@ -1,0 +1,34 @@
+version: 1
+
+paths:
+  persistent_root: /workspace/mmh3
+  comfy_persistent_root: /workspace/ComfyUI
+  comfy_code_root: /ComfyUI
+
+services:
+  comfy_port: 8188
+  phone_ui_port: 7860
+  jupyter_port: 8888
+  start_jupyter: true
+  start_phone_ui: true
+
+comfy:
+  use_sage_attention: true
+  disable_dynamic_vram: true
+  cors: "*"
+
+memory:
+  warn_fraction: 0.78
+  cleanup_fraction: 0.84
+  resume_fraction: 0.76
+  critical_fraction: 0.92
+  poll_seconds: 5
+  cleanup_only_when_queue_idle: true
+  interrupt_running_on_critical: false
+  cleanup_cooldown_seconds: 90
+
+provisioning:
+  download_models: true
+  download_loras: true
+  continue_on_download_error: true
+  workflow_install_mode: overwrite
