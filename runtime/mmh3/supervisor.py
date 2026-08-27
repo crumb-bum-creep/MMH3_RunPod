@@ -64,7 +64,10 @@ def start_jupyter() -> subprocess.Popen | None:
         "--notebook-dir=/workspace",
         "--ServerApp.port=" + os.environ.get("MMH3_JUPYTER_PORT", "8888"),
     ]
-    if not os.environ.get("JUPYTER_TOKEN"):
+    token = os.environ.get("JUPYTER_TOKEN", "").strip()
+    if token:
+        args += ["--IdentityProvider.token=" + token]
+    else:
         args += ["--IdentityProvider.token=", "--ServerApp.password="]
         print("[mmh3] WARNING: JUPYTER_TOKEN is not set; Jupyter will be unauthenticated.", flush=True)
     return subprocess.Popen(args, stdout=log_file("jupyter.log"), stderr=subprocess.STDOUT)
