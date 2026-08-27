@@ -76,3 +76,7 @@ def run() -> None:
     except Exception as exc:
         _state(status="error", stage="failed", core_ready=False, error=repr(exc), message="Provisioning failed")
         print("[mmh3] provisioner failed:", repr(exc), flush=True)
+
+
+if __name__ == "__main__":
+    run()
