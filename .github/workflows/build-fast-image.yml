@@ -45,24 +45,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull validated baseline
+      - name: Set validated baseline reference
         run: |
           PROD=ghcr.io/crumb-bum-creep/mmh3-runpod:sha-7200522bcf6e
-          docker pull "$PROD"
           echo "PROD=$PROD" >> "$GITHUB_ENV"
-
-      - name: Baseline inventory
-        shell: bash
-        run: |
-          echo "=== BASELINE IMAGE ==="
-          docker image inspect "$PROD" --format='uncompressed_bytes={{.Size}}'
-          echo "history_entries=$(docker history -q "$PROD" | wc -l)"
-          echo "nonempty_history_entries=$(docker history --format '{{.Size}}' "$PROD" | grep -vc '^0B$' || true)"
-          docker run --rm --entrypoint bash "$PROD" -lc '
-            echo "python=$(readlink -f /opt/venv/bin/python || true)"
-            cat /opt/venv/pyvenv.cfg || true
-            du -sh /opt/venv /ComfyUI /opt/mmh3 2>/dev/null || true
-          '
+          echo "Baseline manifest is inspected remotely; do not cold-pull the old image."
 
       - name: Build fast image
         shell: bash
