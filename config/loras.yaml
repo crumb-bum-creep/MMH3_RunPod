@@ -1,13 +1,260 @@
-# User-managed LoRA catalog. Copied to /workspace/mmh3/config on first boot
-# and never overwritten by later image updates.
-loras: []
-
-# Example:
-# loras:
-#   - version_id: 3236596
-#     enabled: true
-#     nickname: My Friendly Name
-#     recommended_strength: 0.75
-#     notes:
-#       - Personal note here.
-#     tags: [realism]
+# Seed catalog imported from the user's 2026-08-27 MMH3 LoRA backup.
+# Bootstrap copies this file to /workspace/mmh3/config/loras.yaml only when
+# that persistent file does not already exist. Edits made in the 7860 UI
+# therefore survive later image upgrades and are never overwritten by this seed.
+loras:
+- version_id: 3224980
+  enabled: true
+  recommended_strength: 1.2
+  nickname: Digicam
+  tags:
+  - Style/Camera
+  trigger_words:
+  - d1g1cam
+  notes: []
+  filename: minimax-h3-digicam.safetensors
+- version_id: 3266628
+  enabled: true
+  recommended_strength: 0.6
+  nickname: Mystic XXX v4
+  tags:
+  - Sexual
+  trigger_words: []
+  notes:
+  - ref2va added to v4, experimental
+  filename: MysticXXX_MMH3-V4.safetensors
+- version_id: 3260276
+  enabled: true
+  recommended_strength: 0.6
+  nickname: Mystic XXX v3
+  tags:
+  - Sex
+  - General
+  trigger_words: []
+  notes: []
+  filename: MysticXXX_MMH3-V3.safetensors
+- version_id: 3242519
+  enabled: true
+  recommended_strength: 0.55
+  nickname: Mystic XXX v2
+  tags:
+  - Sex
+  - General
+  trigger_words: []
+  notes: []
+  filename: MysticXXX_MMH3-V2.safetensors
+- version_id: 3268303
+  enabled: true
+  recommended_strength: 0.5
+  nickname: HearMeMan - AIO Sex v2.5
+  tags:
+  - Sex
+  - General
+  trigger_words:
+  - hmmotion
+  notes: []
+  filename: HMNSFW-AIO-V2.5.safetensors
+- version_id: 3206518
+  enabled: true
+  recommended_strength: 0.5
+  nickname: HearMeMan - AIO Sex v2.0
+  tags:
+  - Sex
+  - General
+  trigger_words:
+  - hmmotion
+  notes: []
+  filename: HMNSFW_AIO_V2.safetensors
+- version_id: 3226989
+  enabled: true
+  recommended_strength: 1.0
+  nickname: Daring's Deepthroat
+  tags:
+  - Sex
+  - Oral
+  - Blowjob
+  trigger_words:
+  - shaft
+  - penis
+  - glans
+  - saliva
+  - glistening
+  - wet
+  - smooth
+  - lips
+  - mouth
+  - eyes
+  - deepthroat
+  - hair
+  - sucking
+  - moaning
+  - breathing
+  - squelches
+  - gagging
+  notes: []
+  filename: deepthroat_v02.safetensors
+- version_id: 3215304
+  enabled: true
+  recommended_strength: 0.5
+  nickname: HearMeMan Pussy v0.5
+  tags:
+  - Sex
+  - Body
+  - Vagina
+  trigger_words:
+  - Vagina
+  - hmpussy
+  notes: []
+  filename: vagassist_e40.safetensors
+- version_id: 3252213
+  enabled: true
+  recommended_strength: 1.0
+  nickname: HearMeManPussy v1.0
+  tags:
+  - Sex
+  - Body
+  - Vagina
+  trigger_words:
+  - pussy
+  notes: []
+  filename: Vagina_minimax-h3_epoch20.safetensors
+- version_id: 3228867
+  enabled: true
+  recommended_strength: 0.6
+  nickname: H3 Motion Booster
+  tags:
+  - Sex
+  - Motion
+  trigger_words:
+  - dynv2
+  notes: []
+  filename: H3_Motion_BoosterV2.safetensors
+- version_id: 3264805
+  enabled: true
+  recommended_strength: 0.8
+  nickname: Side Fuck
+  tags:
+  - Sex
+  - Position
+  trigger_words: []
+  notes:
+  - What it's good at
+  - '- Closed-thigh side entry (legs together, he fucks between them)'
+  - '- Open side (bottom leg straight, top knee bent)'
+  - '- One of her legs on his shoulder'
+  - '- Side-lying spoon (he behind her on the bed)'
+  - '- Standing side with her leg hooked around him'
+  - '- Table or bed as the surface'
+  - '- Keeping her face from Picture 1 visible in profile / three-quarter'
+  - Strength
+  - Start at 0.75–0.85. If the bodies melt or extra limbs show up, drop toward 0.6.
+  - Prompt must say
+  - '- Side camera, static, no cut'
+  - '- She is on her side / he is at her hips'
+  - '- Vagina from the side, penis stays in (full in, partial out)'
+  - '- Face lock on Picture 1 every frame'
+  - '- Two people only, four hands, no extra person'
+  - What it's bad at
+  - '- Missionary, doggy, cowgirl, blowjob (use a different LoRA)'
+  - '- Front-on or POV cameras (the side view is the point)'
+  - '- Crowds, clothes, long stories, fast montage cuts'
+  - '- Swapping her into a different body than Picture 1'
+  - How not to use it
+  - '- Do not pair it with a doggy or cowgirl LoRA in the same clip'
+  - '- Do not use photos of people you do not have the right to use'
+  filename: side_fuck_h3_000000750.safetensors
+- version_id: 3243753
+  enabled: true
+  recommended_strength: 0.7
+  nickname: Pillow Humping
+  tags:
+  - Sex
+  - Motion
+  trigger_words:
+  - She is straddling a pillow. She is humping the pillow.
+  notes:
+  - 'Trigger: She is straddling a pillow. She is humping the pillow.'
+  filename: MM-H3 - Pillow Humping v2.safetensors
+- version_id: 3264127
+  enabled: true
+  recommended_strength: 1.0
+  nickname: Fingering
+  tags:
+  - Sex
+  - Motion
+  trigger_words: []
+  notes: []
+  filename: MinimaxH3-Fingering_000002000.safetensors
+- version_id: 3205014
+  enabled: true
+  recommended_strength: 0.7
+  nickname: Hand in Panties Rub
+  tags:
+  - Sex
+  - Motion
+  trigger_words:
+  - She has her hand in her panties
+  - She slides her hand in her panties
+  - She rubs her vagina
+  notes: []
+  filename: MM-H3 - Hand in Panties.safetensors
+- version_id: 3258236
+  enabled: true
+  recommended_strength: 1.0
+  nickname: Cowgirl Position
+  tags:
+  - Sex
+  - Motion
+  trigger_words:
+  - cowgirl position
+  - thrusting her body
+  notes: []
+  filename: Minimaxh3-cowgirl_position-Ref2V-512_000000550.safetensors
+- version_id: 3236596
+  enabled: true
+  recommended_strength: 1.0
+  nickname: Sagging Breasts
+  tags:
+  - Sex
+  - Breasts
+  trigger_words: []
+  notes: []
+  filename: MM-H3 - Naturally Sagging Breasts v1.01.safetensors
+- version_id: 3228089
+  enabled: true
+  recommended_strength: 0.7
+  nickname: Moaning/Writhing
+  tags: []
+  trigger_words:
+  - moawxx
+  notes:
+  - moawxx, soft sensual female moan, body gently writhing and arching
+  - moawxx, intense high-pitched female orgasm moan, hips bucking, legs trembling
+  - moawxx, deep throaty pleasure moan, woman squirming and twisting
+  filename: moawxx_000002000.safetensors
+- version_id: 3250559
+  enabled: true
+  recommended_strength: 1.0
+  nickname: Male Anatomy
+  tags:
+  - Sex
+  - Penis
+  trigger_words:
+  - asshole
+  - ass
+  - anus gap
+  - penis
+  - glans
+  - testicles
+  notes:
+  - This was trained A LOT more steps at 2048 resolution, read the model details. I decided to change the model name because it doesn't make sense anymore. This should be a "fix" for the whole male anatomy.
+  - This might not be the final version, but I don't consider this an experimental version anymore.
+  - I like to use the Realism people lora from 0.2 - 0.6 to get rid of the plastic look the model has, specially at higher resolution. But the Realism LoRA can make weird anatomy so you will need to experiment.
+  - 'Limitations:'
+  - It still cannot control cut/uncut and barely show foreskin.
+  - not that many penis diversities. Glans are very well converged now, but the penises can all look the same. Size difference works.
+  - frenulum is barely there.
+  - depending on the pose the anus can still look misplaced, but changing strength and seed helps
+  - 'motion: it was not trained on motion. If you want sex and cum perfect motion, even though this lora can do it as you can see in the examples, you better try to use it with another lora.'
+  - 'woman: untested. It might work but it was not trained on it. Since MM H3 is a really good prompt follower and learns pretty well.'
+  filename: Male_Anatomy-v2.02-ep4.safetensors
