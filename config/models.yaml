@@ -1,31 +1,49 @@
-# Canonical MMH3 model manifest.
-# URLs and checksums will be pinned after capture from the known-good Pod.
-
 models:
   video_vae:
-    filename: minimax_h3_video_vae_fp16.safetensors
-    directory: vae
+    source: huggingface
+    repo_id: Comfy-Org/MiniMax-H3
+    source_path: vae/minimax_h3_video_vae_fp16.safetensors
+    destination: vae/minimax_h3_video_vae_fp16.safetensors
+    min_size_mb: 100
 
   audio_vae:
-    filename: minimax_h3_audio_vae_fp32.safetensors
-    directory: vae
+    source: huggingface
+    repo_id: Comfy-Org/MiniMax-H3
+    source_path: vae/minimax_h3_audio_vae_fp32.safetensors
+    destination: vae/minimax_h3_audio_vae_fp32.safetensors
+    min_size_mb: 100
 
-  text_encoder:
-    filename: qwen3vl_32b_minimax_h3_int8_convrot.safetensors
-    directory: text_encoders
+  text_encoder_int8:
+    source: huggingface
+    repo_id: Comfy-Org/MiniMax-H3
+    source_path: text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors
+    destination: text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors
+    min_size_mb: 1000
 
-  fl2v_model:
-    filename: minimax_h3_fl2va_pruned_int8_convrot.safetensors
-    directory: diffusion_models
+  fl2va_int8:
+    source: huggingface
+    repo_id: Comfy-Org/MiniMax-H3
+    source_path: diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
+    destination: diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
+    min_size_mb: 1000
 
-  ref2v_model:
-    filename: minimax_h3_ref2va_pruned_int8_convrot.safetensors
-    directory: diffusion_models
+  ref2va_int8:
+    source: huggingface
+    repo_id: Comfy-Org/MiniMax-H3
+    source_path: diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
+    destination: diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
+    min_size_mb: 1000
 
-  fl2v_turbo_lora:
-    filename: minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors
-    directory: loras
+  fl2v_turbo_4step:
+    source: huggingface
+    repo_id: Kijai/MiniMax-H3_comfy
+    source_path: loras/minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors
+    destination: loras/minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors
+    min_size_mb: 500
 
-  ref2v_turbo_lora:
-    filename: minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
-    directory: loras
+  ref2v_turbo_4step:
+    source: huggingface
+    repo_id: Comfy-Org/MiniMax-H3
+    source_path: loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
+    destination: loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
+    min_size_mb: 500
