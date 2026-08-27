@@ -28,6 +28,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Reclaim runner disk for CUDA image
+        shell: bash
+        run: |
+          echo "=== disk before cleanup ==="
+          df -h /
+          sudo swapoff -a || true
+          sudo rm -f /swapfile || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /opt/hostedtoolcache || true
+          sudo apt-get clean || true
+          docker system prune -af --volumes || true
+          echo "=== disk after cleanup ==="
+          df -h /
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
