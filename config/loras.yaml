@@ -1,0 +1,13 @@
+# User-managed LoRA catalog. Copied to /workspace/mmh3/config on first boot
+# and never overwritten by later image updates.
+loras: []
+
+# Example:
+# loras:
+#   - version_id: 3236596
+#     enabled: true
+#     nickname: My Friendly Name
+#     recommended_strength: 0.75
+#     notes:
+#       - Personal note here.
+#     tags: [realism]
