@@ -35,11 +35,32 @@ jobs:
             echo "=== roots ==="
             du -sh /opt/venv /ComfyUI
             echo
-            echo "=== largest site-packages entries ==="
-            du -sx /opt/venv/lib/python3.12/site-packages/* 2>/dev/null | sort -nr | head -60 | awk "{printf \"%.1f MiB\\t%s\\n\", \\$1/1024, \\$2}"
+            echo "=== largest remaining site-packages entries ==="
+            python - <<'PY'
+from pathlib import Path
+import os
+root=Path("/opt/venv/lib/python3.12/site-packages")
+rows=[]
+for p in root.iterdir():
+    try:
+        total=0
+        if p.is_file() or p.is_symlink():
+            total=p.lstat().st_size
+        else:
+            for base,dirs,files in os.walk(p, followlinks=False):
+                for name in files:
+                    q=Path(base)/name
+                    try: total += q.lstat().st_size
+                    except OSError: pass
+        rows.append((total,p.name))
+    except OSError:
+        pass
+for size,name in sorted(rows, reverse=True)[:100]:
+    print(f"{size/2**20:8.1f} MiB  {name}")
+PY
             echo
-            echo "=== nvidia package directories ==="
-            du -sx /opt/venv/lib/python3.12/site-packages/nvidia/* 2>/dev/null | sort -nr | awk "{printf \"%.1f MiB\\t%s\\n\", \\$1/1024, \\$2}" || true
+            echo "=== remaining venv top-level ==="
+            du -sh /opt/venv/bin /opt/venv/lib/python3.12/site-packages 2>/dev/null || true
             echo
             echo "=== pip freeze ==="
             /opt/venv/bin/pip freeze
