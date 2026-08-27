@@ -23,7 +23,8 @@ jobs:
       - run: pip install pytest PyYAML requests psutil huggingface_hub
       - run: PYTHONPATH=runtime pytest -q
       - run: python -m py_compile services/phone-ui/server.py runtime/mmh3/*.py
-      - run: python - <<'PY'
+      - run: |
+          python - <<'PY'
           import json, pathlib
           files=list(pathlib.Path("workflows/api").glob("*.json"))
           assert len(files) == 6, f"expected 6 workflows, found {len(files)}"
