@@ -115,15 +115,20 @@ def main() -> int:
     mem_cfg.update(profile.get("memory") or {})
     threading.Thread(target=run_memory_guard, args=(mem_cfg,), daemon=True).start()
 
-    # Bring the control plane up immediately, while model/LoRA provisioning
-    # proceeds independently in the background on a fresh volume.
-    provision_proc = start_provisioner()
+    # Prioritize interactive readiness over background provisioning. On a fresh
+    # volume the provisioner can immediately start writing tens of gigabytes,
+    # which competes with Comfy startup for disk/network/CPU. Bring the control
+    # plane up first, then start background downloads as soon as Comfy is ready
+    # (or after the readiness timeout so provisioning is never blocked forever).
     comfy_proc = start_comfy()
     phone_proc = start_phone()
     jupyter_proc = start_jupyter()
 
-    if not comfy.wait_ready(240):
-        print("[mmh3] ComfyUI did not become healthy within 240s; supervisor remains alive.", flush=True)
+    comfy_ready = comfy.wait_ready(180)
+    if not comfy_ready:
+        print("[mmh3] ComfyUI did not become healthy within 180s; starting provisioner anyway.", flush=True)
+
+    provision_proc = start_provisioner()
 
     def _signal(_sig, _frame):
         STOP.set()
