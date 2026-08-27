@@ -47,6 +47,13 @@ PY
     pgrep -f '[p]ython.*services/phone-ui/server.py' | xargs -r kill
     echo "Phone UI stop requested; MMH3 supervisor will restart it."
     ;;
+  provision)
+    if pgrep -f '[p]ython.*-m [m]mh3.provisioner' >/dev/null 2>&1; then
+      echo "MMH3 provisioner is already running."
+    else
+      python -m mmh3.provisioner
+    fi
+    ;;
   sync-loras)
     python - <<'PY'
 from pathlib import Path
@@ -67,12 +74,27 @@ PY
   provision-status)
     cat /workspace/mmh3/state/provisioning.json 2>/dev/null || echo "No provisioning state yet."
     ;;
+  jupyter-url)
+    python - <<'PY'
+import os
+from urllib.parse import quote
+pod=os.environ.get("RUNPOD_POD_ID","").strip()
+port=os.environ.get("MMH3_JUPYTER_PORT","8888").strip() or "8888"
+token=os.environ.get("JUPYTER_TOKEN","")
+if not pod:
+    raise SystemExit("RUNPOD_POD_ID is not set; use the RunPod HTTP service URL for port "+port)
+url=f"https://{pod}-{port}.proxy.runpod.net/lab"
+if token:
+    url += "?token=" + quote(token, safe="")
+print(url)
+PY
+    ;;
   logs-comfy) tail -n 200 -f /workspace/mmh3/logs/comfyui.log ;;
   logs-phone) tail -n 200 -f /workspace/mmh3/logs/phone-ui.log ;;
   logs-memory) tail -n 200 -f /workspace/mmh3/logs/memory-guard.log ;;
   logs-provisioning) tail -n 200 -f /workspace/mmh3/logs/provisioning.log ;;
   *)
-    echo "Usage: mmh3 {status|free|interrupt|restart-comfy|restart-phone|sync-models|sync-loras|provision-status|logs-comfy|logs-phone|logs-memory|logs-provisioning}"
+    echo "Usage: mmh3 {status|free|interrupt|restart-comfy|restart-phone|provision|sync-models|sync-loras|provision-status|jupyter-url|logs-comfy|logs-phone|logs-memory|logs-provisioning}"
     exit 2
     ;;
 esac
