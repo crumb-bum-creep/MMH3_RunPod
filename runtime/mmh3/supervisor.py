@@ -37,9 +37,9 @@ def start_comfy() -> subprocess.Popen:
     if cfg.get("disable_dynamic_vram", True):
         args.append("--disable-dynamic-vram")
 
-    # reserve_vram_gb is intentionally not applied yet: the known-good pod did
-    # not use --reserve-vram. The detected profile records it for later tuning.
-    _reserve = ((profile.get("comfy") or {}).get("reserve_vram_gb"))
+    reserve = float(((profile.get("comfy") or {}).get("reserve_vram_gb")) or 0)
+    if reserve > 0:
+        args += ["--reserve-vram", str(reserve)]
 
     env = os.environ.copy()
     tcmalloc = subprocess.run(
