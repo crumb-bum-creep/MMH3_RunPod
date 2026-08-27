@@ -261,7 +261,7 @@ def patch_workflow(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
                 key_node.setdefault("inputs", {})["value"] = api_key
         else:
             inp["prompt_provider"] = "none"
-            inp["job_type"] = "custom"
+            inp["job_type"] = "standard"
             inp["system_prompt"] = ""
             inp["openrouter_api_key"] = ""
 
