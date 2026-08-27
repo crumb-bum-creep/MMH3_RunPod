@@ -767,6 +767,11 @@ async def api_inputs(request: web.Request) -> web.Response:
 
 
 def _has_audio(path: Path) -> bool:
+    # H3/VHS output filenames conventionally include "audio" once video+audio
+    # have been muxed. Use that as the zero-cost fast path; only probe ambiguous
+    # legacy/foreign MP4s.
+    if "audio" in path.name.lower():
+        return True
     try:
         p = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
@@ -774,7 +779,7 @@ def _has_audio(path: Path) -> bool:
         )
         return bool(p.stdout.strip())
     except Exception:
-        return "audio" in path.name.lower()
+        return False
 
 
 async def api_outputs(request: web.Request) -> web.Response:
