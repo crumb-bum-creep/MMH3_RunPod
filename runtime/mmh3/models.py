@@ -41,6 +41,14 @@ def sync_models(config_path: Path) -> list[dict[str, Any]]:
                     token=token,
                 )
             )
+            # Some upstream repositories keep a model at repository root while
+            # Comfy expects it under a model-type subdirectory (e.g. loras/).
+            # The manifest's destination is authoritative.
+            if got.resolve() != dest.resolve():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if dest.exists():
+                    dest.unlink()
+                got.replace(dest)
             if not _usable(dest, minimum):
                 raise RuntimeError(f"download returned {got}, expected usable {dest}")
             results.append({"name": name, "status": "downloaded", "path": str(dest)})
