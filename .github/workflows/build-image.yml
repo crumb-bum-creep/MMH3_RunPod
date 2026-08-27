@@ -75,6 +75,33 @@ jobs:
           } > /tmp/build-comment.md
           gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body-file /tmp/build-comment.md
 
+      - name: Smoke test built image
+        if: steps.docker_build.outcome == 'success'
+        shell: bash
+        run: |
+          docker run --rm --entrypoint bash "$IMAGE:sha-${GITHUB_SHA::12}" -lc '
+            set -Eeuo pipefail
+            export PATH=/opt/venv/bin:$PATH
+            export PYTHONPATH=/opt/mmh3/runtime
+            test -f /ComfyUI/main.py
+            test -x /opt/mmh3/runtime/entrypoint.sh
+            test -f /opt/mmh3/services/phone-ui/server.py
+            test "$(find /opt/mmh3/workflows/api -maxdepth 1 -name "*.json" | wc -l)" -eq 6
+            ACTUAL="$(git -C /ComfyUI rev-parse HEAD)"
+            test "$ACTUAL" = "c2bcbecd82ec5ae66594340b395c24ef0217b238"
+            python - <<"PY"
+import torch, yaml, requests, aiohttp, huggingface_hub
+from mmh3.hardware import detect
+from mmh3.common import IMAGE_ROOT
+assert torch.__version__.startswith("2.11.0"), torch.__version__
+assert torch.version.cuda == "13.0", torch.version.cuda
+assert str(IMAGE_ROOT) == "/opt/mmh3"
+print("torch", torch.__version__, "cuda", torch.version.cuda)
+print("runtime imports OK")
+PY
+            python /opt/mmh3/services/phone-ui/server.py --help >/dev/null
+          '
+
       - name: Save build log
         if: always()
         uses: actions/upload-artifact@v4
