@@ -2,7 +2,7 @@
 
 This is the first-deployment procedure for the MMH3 image.
 
-> Do not deploy until the GitHub `Build MMH3 image` workflow is green and a tested image tag is recorded in this document.
+> **First RunPod deployment candidate is ready.** GitHub build, runtime tests, Comfy custom-node initialization smoke test, and GHCR push are green for the immutable image below.
 
 ## 1. RunPod Secrets
 
@@ -52,7 +52,7 @@ If the GHCR package is intentionally made public later, registry credentials are
 The production image will be:
 
 ```text
-ghcr.io/crumb-bum-creep/mmh3-runpod:<PINNED_TAG>
+ghcr.io/crumb-bum-creep/mmh3-runpod:sha-b9574e4d98aa
 ```
 
 Prefer the pinned `sha-...` tag for normal deployments after validation. Do not rely on
@@ -208,7 +208,13 @@ Normal day-to-day use should happen primarily through 7860.
 
 ## 9. First health checks
 
-In the web terminal:
+In the web terminal, run the complete first-boot validator:
+
+```bash
+bash /opt/mmh3/scripts/first_boot_check.sh
+```
+
+Then use the compact status command whenever needed:
 
 ```bash
 mmh3 status
