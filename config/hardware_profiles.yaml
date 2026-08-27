@@ -1,0 +1,31 @@
+profiles:
+  rtx_5090:
+    match:
+      gpu_name_contains:
+        - "RTX 5090"
+    comfy:
+      reserve_vram_gb: 2
+      dynamic_vram: true
+    memory:
+      ram_warn_percent: 85
+      ram_critical_percent: 92
+
+  rtx_6000_pro:
+    match:
+      gpu_name_contains:
+        - "RTX 6000"
+        - "RTX PRO 6000"
+    comfy:
+      reserve_vram_gb: 4
+      dynamic_vram: true
+    memory:
+      ram_warn_percent: 85
+      ram_critical_percent: 92
+
+  fallback:
+    comfy:
+      reserve_vram_gb: 3
+      dynamic_vram: true
+    memory:
+      ram_warn_percent: 82
+      ram_critical_percent: 90
