@@ -8,21 +8,28 @@ profiles:
       cleanup_fraction: 0.82
       resume_fraction: 0.74
       critical_fraction: 0.91
+      min_free_headroom_gb: 44
+      resume_free_headroom_gb: 50
 
   rtx_pro_6000_blackwell:
     match:
       gpu_name_contains: ["RTX PRO 6000", "RTX 6000"]
     comfy:
-      reserve_vram_gb: 4
+      # The known-good 96 GB capture did not reserve VRAM explicitly.
+      reserve_vram_gb: 0
     memory:
       cleanup_fraction: 0.86
       resume_fraction: 0.78
       critical_fraction: 0.93
+      min_free_headroom_gb: 32
+      resume_free_headroom_gb: 38
 
   fallback:
     comfy:
-      reserve_vram_gb: 3
+      reserve_vram_gb: 2
     memory:
       cleanup_fraction: 0.82
       resume_fraction: 0.74
       critical_fraction: 0.90
+      min_free_headroom_gb: 40
+      resume_free_headroom_gb: 46
