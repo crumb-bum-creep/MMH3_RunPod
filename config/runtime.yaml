@@ -22,6 +22,8 @@ memory:
   cleanup_fraction: 0.84
   resume_fraction: 0.76
   critical_fraction: 0.92
+  min_free_headroom_gb: 40
+  resume_free_headroom_gb: 46
   poll_seconds: 5
   cleanup_only_when_queue_idle: true
   interrupt_running_on_critical: false
@@ -31,4 +33,5 @@ provisioning:
   download_models: true
   download_loras: true
   continue_on_download_error: true
+  run_in_background: true
   workflow_install_mode: overwrite
