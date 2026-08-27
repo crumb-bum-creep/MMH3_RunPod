@@ -1,0 +1,22 @@
+custom_nodes:
+  ComfyUI-KJNodes:
+    repo: https://github.com/kijai/ComfyUI-KJNodes.git
+    commit: 3f20054214fec9f9234fd3841ae6f1e4287948f6
+  ComfyUI-MiniMaxRefPack:
+    repo: https://github.com/Hearmeman24/ComfyUI-MiniMaxRefPack.git
+    commit: 7012734eabf6f98063d6eaf8ce1f9264ee803664
+  ComfyUI-OpenRouter-Simple:
+    repo: https://github.com/Hearmeman24/ComfyUI-OpenRouter-Simple.git
+    commit: 404b67229dd0f88373d35824ba624cb563e734b3
+  ComfyUI-Openrouter_node:
+    repo: https://github.com/gabe-init/ComfyUI-Openrouter_node.git
+    commit: 45c67f94e335b978577773f05752e17ffe63a09e
+  ComfyUI-Spectrum-MiniMax-H3:
+    repo: https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git
+    commit: ac247efcc2c9b6324fa106b3bd8e148a583db4a9
+  ComfyUI-VideoHelperSuite:
+    repo: https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
+    commit: 4ee72c065db22c9d96c2427954dc69e7b908444b
+  rgthree-comfy:
+    repo: https://github.com/rgthree/rgthree-comfy.git
+    commit: 6b76ee6f2c5a007710b5a16f97c94330d6ecc871
