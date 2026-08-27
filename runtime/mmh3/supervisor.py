@@ -72,6 +72,16 @@ def start_jupyter() -> subprocess.Popen | None:
         print("[mmh3] WARNING: JUPYTER_TOKEN is not set; Jupyter will be unauthenticated.", flush=True)
     return subprocess.Popen(args, stdout=log_file("jupyter.log"), stderr=subprocess.STDOUT)
 
+def start_provisioner() -> subprocess.Popen:
+    env = os.environ.copy()
+    return subprocess.Popen(
+        [sys.executable, "-m", "mmh3.provisioner"],
+        cwd=IMAGE_ROOT / "runtime",
+        env=env,
+        stdout=log_file("provisioning.log"),
+        stderr=subprocess.STDOUT,
+    )
+
 def start_phone() -> subprocess.Popen | None:
     runtime = load_yaml(CONFIG_ROOT / "runtime.yaml", {}) or {}
     if not (runtime.get("services") or {}).get("start_phone_ui", True):
@@ -105,11 +115,15 @@ def main() -> int:
     mem_cfg.update(profile.get("memory") or {})
     threading.Thread(target=run_memory_guard, args=(mem_cfg,), daemon=True).start()
 
+    # Bring the control plane up immediately, while model/LoRA provisioning
+    # proceeds independently in the background on a fresh volume.
+    provision_proc = start_provisioner()
     comfy_proc = start_comfy()
-    if not comfy.wait_ready(240):
-        print("[mmh3] ComfyUI did not become healthy within 240s; supervisor remains alive.", flush=True)
     phone_proc = start_phone()
     jupyter_proc = start_jupyter()
+
+    if not comfy.wait_ready(240):
+        print("[mmh3] ComfyUI did not become healthy within 240s; supervisor remains alive.", flush=True)
 
     def _signal(_sig, _frame):
         STOP.set()
@@ -127,6 +141,12 @@ def main() -> int:
             if not STOP.is_set():
                 comfy_proc = start_comfy()
                 comfy.wait_ready(240)
+        if provision_proc is not None and provision_proc.poll() is not None:
+            # Provisioning is a one-shot task. Successful completion stays stopped;
+            # failures are visible in the UI/log and can be retried with mmh3 sync-*.
+            if provision_proc.returncode != 0:
+                print(f"[mmh3] background provisioner exited rc={provision_proc.returncode}; see provisioning.log", flush=True)
+            provision_proc = None
         if phone_proc is not None and phone_proc.poll() is not None:
             print(f"[mmh3] Phone UI exited rc={phone_proc.returncode}; restarting", flush=True)
             phone_proc = start_phone()
@@ -135,6 +155,7 @@ def main() -> int:
             jupyter_proc = start_jupyter()
         STOP.wait(2)
 
+    terminate(provision_proc)
     terminate(phone_proc)
     terminate(jupyter_proc)
     terminate(comfy_proc)
