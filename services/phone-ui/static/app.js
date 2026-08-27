@@ -318,13 +318,21 @@ async function refreshOutputs(){
 async function refreshInfo(){
   try{
     const d=await api("/api/info"); state.info=d;
-    const h=d.hardware||{}, m=d.memory||{}, lim=Number(m.limit_bytes||h.cgroup_memory_limit_bytes||0), cur=Number(m.current_bytes||h.cgroup_memory_current_bytes||0);
-    $("#subtitle").textContent=(h.gpu_name||"MMH3")+" · "+d.version;
-    $("#healthDot").classList.add("ok");
+    const h=d.hardware||{}, m=d.memory||{}, p=d.provisioning||{}, lim=Number(m.limit_bytes||h.cgroup_memory_limit_bytes||0), cur=Number(m.current_bytes||h.cgroup_memory_current_bytes||0);
+    const coreReady=!!p.core_ready;
+    $("#subtitle").textContent=(h.gpu_name||"MMH3")+" · "+d.version+(coreReady?"":" · provisioning");
+    $("#healthDot").classList.toggle("ok",coreReady);
+    $("#healthDot").classList.toggle("warn",!coreReady);
+    const gen=$("#generate");
+    if(gen){
+      gen.disabled=!coreReady;
+      gen.textContent=coreReady?"Queue Generation":"Core models provisioning…";
+    }
     $("#systemStats").innerHTML=`
       <div class="stat"><span class="muted">GPU</span><strong>${esc(h.gpu_name||"unknown")}</strong><span class="muted">${h.vram_mib?Math.round(h.vram_mib/1024)+" GB VRAM":""}</span></div>
       <div class="stat"><span class="muted">Container RAM</span><strong>${lim?(cur/2**30).toFixed(1)+" / "+(lim/2**30).toFixed(1)+" GB":"detecting…"}</strong><span class="muted">${lim?pct(cur/lim*100):""}</span></div>
-      <div class="stat"><span class="muted">Memory guard</span><strong>${m.memory_hold?"Cleaning / hold":"Ready"}</strong><span class="muted">${m.cleanup_fraction?"cleanup at "+pct(m.cleanup_fraction*100):""}</span></div>
+      <div class="stat"><span class="muted">Provisioning</span><strong>${coreReady?"Core ready":esc(p.status||"starting")}</strong><span class="muted">${esc(p.message||p.stage||"")}</span></div>
+      <div class="stat"><span class="muted">Memory guard</span><strong>${m.memory_hold?"Cleaning / hold":"Ready"}</strong><span class="muted">${m.free_bytes!=null?(Number(m.free_bytes)/2**30).toFixed(1)+" GB free":""}</span></div>
       <div class="stat"><span class="muted">Driver</span><strong>${esc(h.driver_version||"unknown")}</strong><span class="muted">cgroup-aware</span></div>`;
     const secrets=[
       ["OpenRouter",d.openrouter_configured],["Hugging Face",d.hf_configured],["CivitAI",d.civitai_configured]
