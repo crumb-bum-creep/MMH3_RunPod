@@ -43,7 +43,14 @@ models:
 
   ref2v_turbo_4step:
     source: huggingface
-    repo_id: Comfy-Org/MiniMax-H3
-    source_path: loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
+    repo_id: lightx2v/Minimax-h3-Turbo
+    source_path: minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
     destination: loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
     min_size_mb: 500
+
+  taeh3_preview:
+    source: huggingface
+    repo_id: Hearmeman/comfyui-template-assets
+    source_path: vae_approx/taeh3.safetensors
+    destination: vae_approx/taeh3.safetensors
+    min_size_mb: 5
