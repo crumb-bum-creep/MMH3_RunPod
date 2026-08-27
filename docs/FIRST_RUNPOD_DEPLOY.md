@@ -12,18 +12,18 @@ Recommended RunPod secret names:
 
 | RunPod secret | Value |
 |---|---|
-| `mmh3_openrouter` | OpenRouter API key |
-| `mmh3_huggingface` | Hugging Face access token |
-| `mmh3_civitai` | CivitAI API token |
-| `mmh3_jupyter` | A long random token/password you choose for Jupyter |
+| `OPENROUTER_API_KEY` | OpenRouter API key |
+| `HF_TOKEN` | Hugging Face access token |
+| `CIVITAI_TOKEN` | CivitAI API token |
+| `JUPYTER_PASSWORD` | A long random token/password you choose for Jupyter |
 
 The Pod template maps them to these container variables:
 
 ```text
-OPENROUTER_API_KEY={{ RUNPOD_SECRET_mmh3_openrouter }}
-HF_TOKEN={{ RUNPOD_SECRET_mmh3_huggingface }}
-CIVITAI_TOKEN={{ RUNPOD_SECRET_mmh3_civitai }}
-JUPYTER_TOKEN={{ RUNPOD_SECRET_mmh3_jupyter }}
+OPENROUTER_API_KEY={{ RUNPOD_SECRET_OPENROUTER_API_KEY }}
+HF_TOKEN={{ RUNPOD_SECRET_HF_TOKEN }}
+CIVITAI_TOKEN={{ RUNPOD_SECRET_CIVITAI_TOKEN }}
+JUPYTER_TOKEN={{ RUNPOD_SECRET_JUPYTER_PASSWORD }}
 ```
 
 RunPod supports secret references in template environment variables with
