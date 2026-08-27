@@ -90,6 +90,7 @@ jobs:
             ACTUAL="$(git -C /ComfyUI rev-parse HEAD)"
             test "$ACTUAL" = "c2bcbecd82ec5ae66594340b395c24ef0217b238"
             python -c "import torch,yaml,requests,aiohttp,huggingface_hub; from mmh3.common import IMAGE_ROOT; assert torch.__version__.startswith(\"2.11.0\"), torch.__version__; assert torch.version.cuda == \"13.0\", torch.version.cuda; assert str(IMAGE_ROOT) == \"/opt/mmh3\"; print(\"torch\",torch.__version__,\"cuda\",torch.version.cuda); print(\"runtime imports OK\")"
+            python /ComfyUI/main.py --cpu --quick-test-for-ci --disable-auto-launch
             python /opt/mmh3/services/phone-ui/server.py --help >/dev/null
           '
 
