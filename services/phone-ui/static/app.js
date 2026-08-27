@@ -171,6 +171,15 @@ function renderLoras(){
       </div>
       ${triggers?'<div class="triggers"><strong>Triggers:</strong> '+esc(triggers)+'</div>':""}
       ${(x.notes||[]).length?'<div class="triggers"><strong>Notes:</strong> '+esc((x.notes||[]).join(" · "))+'</div>':""}
+      ${x.managed?`<details class="meta-editor">
+        <summary>Edit metadata</summary>
+        <label>Nickname</label><input class="meta-nickname" value="${esc(x.nickname||"")}">
+        <label>Recommended strength</label><input class="meta-strength" type="number" step=".05" value="${esc(x.recommended_strength??1)}">
+        <label>Trigger words <span class="muted">(comma-separated)</span></label><input class="meta-triggers" value="${esc((x.trigger_words||[]).join(", "))}">
+        <label>Tags <span class="muted">(comma-separated)</span></label><input class="meta-tags" value="${esc((x.tags||[]).join(", "))}">
+        <label>Personal notes <span class="muted">(one per line)</span></label><textarea class="meta-notes" rows="3">${esc((x.notes||[]).join("\n"))}</textarea>
+        <button class="secondary save-meta">Save metadata</button>
+      </details>`:""}
     </div>`;
   }).join("");
   $$(".lora-card",host).forEach(card=>{
@@ -185,6 +194,23 @@ function renderLoras(){
     };
     pick.onchange=sync;
     strength.onchange=()=>{if(pick.checked)sync();};
+    const save=$(".save-meta",card);
+    if(save) save.onclick=async()=>{
+      save.disabled=true; save.textContent="Saving…";
+      try{
+        await api("/api/loras/config",{method:"POST",body:{
+          version_id:item.version_id,
+          nickname:$(".meta-nickname",card).value,
+          recommended_strength:Number($(".meta-strength",card).value||1),
+          trigger_words:$(".meta-triggers",card).value,
+          tags:$(".meta-tags",card).value,
+          notes:$(".meta-notes",card).value
+        }});
+        await syncLoraCatalog(false);
+        toast("LoRA metadata saved");
+      }catch(e){toast(e.message);}
+      finally{save.disabled=false;save.textContent="Save metadata";}
+    };
   });
 }
 async function loadLoras(){
@@ -192,6 +218,18 @@ async function loadLoras(){
     const d=await api("/api/loras");
     state.loraCatalog=d.items||[]; renderLoras(); renderSelectedLoras();
   }catch(e){$("#loraLibrary").innerHTML='<div class="message error">'+esc(e.message)+'</div>';}
+}
+
+async function syncLoraCatalog(showToast=true){
+  const b=$("#syncLoras");
+  if(b){b.disabled=true;b.textContent="Syncing…";}
+  try{
+    await api("/api/loras/sync",{method:"POST"});
+    await loadLoras();
+    if(showToast)toast("LoRA catalog synced");
+  }finally{
+    if(b){b.disabled=false;b.textContent="Sync";}
+  }
 }
 
 function formSnapshot(){
@@ -410,9 +448,20 @@ function wire(){
   };
 
   $("#syncLoras").onclick=async()=>{
-    const b=$("#syncLoras");b.disabled=true;b.textContent="Syncing…";
-    try{await api("/api/loras/sync",{method:"POST"});await loadLoras();toast("LoRA catalog synced");}catch(e){toast(e.message);}
-    finally{b.disabled=false;b.textContent="Sync";}
+    try{await syncLoraCatalog(true);}catch(e){toast(e.message);}
+  };
+  $("#addLoraVersion").onclick=async()=>{
+    const input=$("#newLoraVersion"), source=input.value.trim();
+    if(!source){toast("Enter a CivitAI version ID or URL");return;}
+    const b=$("#addLoraVersion");b.disabled=true;b.textContent="Adding…";
+    try{
+      await api("/api/loras/config",{method:"POST",body:{source,enabled:true}});
+      b.textContent="Downloading…";
+      await syncLoraCatalog(false);
+      input.value="";
+      toast("LoRA added to managed catalog");
+    }catch(e){toast(e.message);}
+    finally{b.disabled=false;b.textContent="Add + Sync";}
   };
 
   $("#freeMemory").onclick=async()=>{try{await api("/api/system/free",{method:"POST"});toast("Memory release requested");}catch(e){toast(e.message);}};
