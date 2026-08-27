@@ -65,4 +65,4 @@ ENV PYTHONUNBUFFERED=1 \
     MMH3_AUTO_DOWNLOAD_LORAS=true
 
 EXPOSE 7860 8188 8888
-ENTRYPOINT ["/usr/bin/tini", "--", "/opt/mmh3/runtime/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/opt/mmh3/runtime/entrypoint.sh"]
