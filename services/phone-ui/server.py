@@ -251,6 +251,11 @@ def patch_workflow(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
             inp["prompt_provider"] = "openrouter"
             inp["job_type"] = "auto"
             inp["system_prompt"] = prompts.get("r2v_auto", "")
+            # MiniMaxH3ReferencePack's IS_CHANGED cache key includes
+            # local_model_slug even when OpenRouter is selected, while its OpenRouter
+            # execution path ignores that field. Use it as a per-job cache nonce so
+            # identical R2V ideas/references still make a fresh prompt request.
+            inp["local_model_slug"] = f"mmh3-cache-{random_openrouter_seed()}"
             _, key_node = find_title(graph, "OpenRouter API Key")
             if key_node is not None:
                 key_node.setdefault("inputs", {})["value"] = api_key
