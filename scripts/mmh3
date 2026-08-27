@@ -27,6 +27,45 @@ for name in ("hardware.json","memory.json","provisioning.json"):
         print(f"{name}: {p}")
 PY
     ;;
+  doctor)
+    phone="$(curl -sS --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:7860/api/info 2>/dev/null || echo FAIL)"
+    comfy="$(curl -sS --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:8188/system_stats 2>/dev/null || echo FAIL)"
+    jupyter="$(curl -sS --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:8888/ 2>/dev/null || echo FAIL)"
+    echo "=== MMH3 DOCTOR ==="
+    echo "Phone 7860:   $phone"
+    echo "Comfy 8188:  $comfy"
+    echo "Jupyter 8888:$jupyter"
+    echo
+    echo "--- processes ---"
+    ps -eo pid,etime,%cpu,%mem,cmd | grep -E '[C]omfyUI/main.py|[s]ervices/phone-ui/server.py|[j]upyter-lab|[m]mh3.supervisor|[m]mh3.provisioner' || true
+    echo
+    echo "--- GPU ---"
+    nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader 2>/dev/null || echo "nvidia-smi unavailable"
+    echo
+    echo "--- RAM ---"
+    python - <<'PY'
+from pathlib import Path
+try:
+    cur=int(Path("/sys/fs/cgroup/memory.current").read_text())
+    raw=Path("/sys/fs/cgroup/memory.max").read_text().strip()
+    lim=int(raw) if raw!="max" else 0
+    if lim:
+        print(f"{cur/2**30:.1f} / {lim/2**30:.1f} GiB ({cur/lim:.0%})")
+    else:
+        print(f"{cur/2**30:.1f} GiB used; no finite cgroup limit")
+except Exception as e:
+    print("cgroup memory unavailable:",e)
+PY
+    echo
+    echo "--- provisioning ---"
+    cat /workspace/mmh3/state/provisioning.json 2>/dev/null || echo "No provisioning state."
+    echo
+    if [[ "$phone" == "200" && "$comfy" == "200" && ( "$jupyter" == "200" || "$jupyter" == "302" || "$jupyter" == "403" ) ]]; then
+      echo "VERDICT: local container services are healthy. If RunPod links are unavailable, suspect RunPod proxy/host state."
+    else
+      echo "VERDICT: one or more local services are unhealthy; inspect mmh3 logs-* before blaming the RunPod proxy."
+    fi
+    ;;
   free)
     python - <<'PY'
 from mmh3.comfy import free_memory
@@ -94,7 +133,7 @@ PY
   logs-memory) tail -n 200 -f /workspace/mmh3/logs/memory-guard.log ;;
   logs-provisioning) tail -n 200 -f /workspace/mmh3/logs/provisioning.log ;;
   *)
-    echo "Usage: mmh3 {status|free|interrupt|restart-comfy|restart-phone|provision|sync-models|sync-loras|provision-status|jupyter-url|logs-comfy|logs-phone|logs-memory|logs-provisioning}"
+    echo "Usage: mmh3 {status|doctor|free|interrupt|restart-comfy|restart-phone|provision|sync-models|sync-loras|provision-status|jupyter-url|logs-comfy|logs-phone|logs-memory|logs-provisioning}"
     exit 2
     ;;
 esac
