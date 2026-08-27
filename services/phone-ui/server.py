@@ -267,6 +267,7 @@ def patch_workflow(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
 
     record = {
         "mode": mode,
+        "model_family": "ref2v" if mode == "r2v" else "fl2v",
         "prompt_mode": prompt_mode,
         "prompt": str(payload.get("prompt") or ""),
         "prompt_idea": str(payload.get("prompt_idea") or ""),
@@ -538,6 +539,36 @@ async def api_info(request: web.Request) -> web.Response:
 async def api_generate(request: web.Request) -> web.Response:
     app = request.app
     payload = await request.json()
+
+    requested_mode = str(payload.get("mode") or "t2v").lower()
+    requested_family = "ref2v" if requested_mode == "r2v" else "fl2v"
+
+    # The telemetry showed the dangerous RAM jump when Ref2V and FL2V families
+    # accumulate in the same warm Comfy process. Same-family queueing stays fully
+    # supported, but do not stack the other family behind it with no cleanup window.
+    try:
+        async with app["session"].get(f"{app['comfy']}/queue") as r:
+            active_queue = await r.json()
+    except Exception:
+        active_queue = {"queue_running": [], "queue_pending": []}
+
+    active_families = set()
+    for key in ("queue_running", "queue_pending"):
+        for row in active_queue.get(key) or []:
+            pid = str(row[1]) if isinstance(row, list) and len(row) > 1 else ""
+            rec = app["records"].get(pid) or {}
+            family = rec.get("model_family")
+            if not family and rec.get("mode"):
+                family = "ref2v" if rec.get("mode") == "r2v" else "fl2v"
+            if family:
+                active_families.add(str(family))
+
+    if active_families and requested_family not in active_families:
+        names = ", ".join(sorted(active_families))
+        raise web.HTTPConflict(
+            text=f"A {names} generation family is already running/queued. "
+                 f"Finish that family first so MMH3 gets a memory-cleanup window before switching to {requested_family}."
+        )
 
     provisioning = _load_json(STATE_ROOT / "provisioning.json", {})
     if provisioning and not bool(provisioning.get("core_ready", False)):
