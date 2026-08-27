@@ -28,11 +28,15 @@ MMH3 is designed so normal maintenance does not require remembering long ComfyUI
 mmh3 status
 mmh3 free
 mmh3 interrupt
+mmh3 restart-comfy
+mmh3 restart-phone
 mmh3 sync-models
 mmh3 sync-loras
+mmh3 provision-status
 mmh3 logs-comfy
 mmh3 logs-phone
 mmh3 logs-memory
+mmh3 logs-provisioning
 ```
 
 ### `mmh3 status`
@@ -54,6 +58,17 @@ Use this instead of killing Comfy when the goal is simply to reclaim memory.
 ### `mmh3 interrupt`
 
 Interrupts the current Comfy execution.
+
+### `mmh3 restart-comfy`
+
+Stops the supervised ComfyUI child process. The MMH3 supervisor starts a fresh Comfy process automatically,
+using the hardware/profile-aware launch configuration.
+
+This is the replacement for the long Pod-specific restart commands used during development.
+
+### `mmh3 restart-phone`
+
+Restarts only the 7860 control plane without touching ComfyUI or Jupyter.
 
 ### `mmh3 sync-models`
 
