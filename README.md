@@ -30,11 +30,34 @@ loras/         LoRA metadata catalog (not model weights)
 
 ## Current status
 
-**Phase 1 — environment capture and reproducible bootstrap.**
+**First RunPod deployment candidate ready.**
 
-The first step is to capture exact package, CUDA, ComfyUI, custom-node, and model-path details from a known-good H3 Pod before pinning the production image. This avoids guessing at versions that are already known to work.
+Immutable candidate image:
 
-Run `scripts/capture_known_good.sh` on a functioning H3 Pod and save the generated archive. The resulting manifest is used to pin the MMH3 image.
+```text
+ghcr.io/crumb-bum-creep/mmh3-runpod:sha-b9574e4d98aa
+```
+
+Validated in GitHub CI:
+
+- runtime/unit/workflow-contract tests
+- phone UI JavaScript syntax
+- CUDA 13 / PyTorch 2.11 image build
+- pinned ComfyUI commit
+- six canonical H3 API workflows
+- MMH3 runtime imports
+- ONNX Runtime CUDA provider
+- ComfyUI custom-node initialization via `--quick-test-for-ci`
+- GHCR push
+
+The remaining validation is the **first real GPU RunPod smoke test**, because CI cannot execute MiniMax H3 inference without an NVIDIA GPU.
+
+See:
+
+- `docs/FIRST_RUNPOD_DEPLOY.md` — exact RunPod setup
+- `docs/OPERATIONS.md` — daily commands/recovery
+- `scripts/first_boot_check.sh` — one-command first-pod health check
+
 
 ## Security
 
