@@ -23,6 +23,7 @@ RUN set -eux; \
       git -C "$dst" fetch --depth=1 origin "$rev"; \
       git -C "$dst" checkout --detach "$rev"; \
       if [[ -f "$dst/requirements.txt" ]]; then /opt/venv/bin/pip install --no-cache-dir -r "$dst/requirements.txt"; fi; \
+      if [[ -f "$dst/install.py" ]]; then /opt/venv/bin/python "$dst/install.py"; fi; \
     }; \
     install_node ComfyUI-KJNodes https://github.com/kijai/ComfyUI-KJNodes.git 3f20054214fec9f9234fd3841ae6f1e4287948f6; \
     install_node ComfyUI-MiniMaxRefPack https://github.com/Hearmeman24/ComfyUI-MiniMaxRefPack.git 7012734eabf6f98063d6eaf8ce1f9264ee803664; \
@@ -35,6 +36,14 @@ RUN set -eux; \
 RUN /opt/venv/bin/pip install --no-cache-dir \
       'PyYAML==6.0.3' 'requests==2.34.2' 'psutil==7.2.2' \
       'huggingface_hub==1.27.0'
+
+# A custom-node requirements/install step can pull CPU-only onnxruntime, which
+# shadows onnxruntime-gpu because both expose the same Python module. Reassert
+# the CUDA build last, mirroring the known-good community image. ORT_INDEX_ARGS
+# is supplied by the captured base image for its CUDA variant.
+RUN /opt/venv/bin/pip uninstall -y onnxruntime onnxruntime-gpu 2>/dev/null || true; \
+    /opt/venv/bin/pip install --no-cache-dir onnxruntime-gpu $ORT_INDEX_ARGS; \
+    /opt/venv/bin/python -c "import onnxruntime as o; p=o.get_available_providers(); assert 'CUDAExecutionProvider' in p, p; print('onnxruntime providers OK:', p)"
 
 COPY runtime /opt/mmh3/runtime
 COPY config /opt/mmh3/config
