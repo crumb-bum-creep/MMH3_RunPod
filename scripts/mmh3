@@ -69,6 +69,31 @@ PY
       echo "VERDICT: one or more local services are unhealthy; inspect mmh3 logs-* before blaming the RunPod proxy."
     fi
     ;;
+  gpu-smoke)
+    python - <<'PY'
+import torch
+print("torch:", torch.__version__, "cuda build:", torch.version.cuda)
+if not torch.cuda.is_available():
+    raise SystemExit("CUDA is not available inside the container")
+dev=torch.device("cuda")
+print("GPU:", torch.cuda.get_device_name(0))
+a=torch.randn((1024,1024),device=dev,dtype=torch.float16)
+b=torch.randn((1024,1024),device=dev,dtype=torch.float16)
+c=a@b
+torch.cuda.synchronize()
+print("CUDA matmul OK:", tuple(c.shape), c.dtype)
+import triton
+print("triton:", triton.__version__)
+import sageattention
+print("sageattention import: OK")
+import onnxruntime as ort
+providers=ort.get_available_providers()
+print("onnxruntime:", providers)
+if "CUDAExecutionProvider" not in providers:
+    raise SystemExit("ONNX Runtime CUDAExecutionProvider missing")
+print("GPU smoke: PASS")
+PY
+    ;;
   free)
     python - <<'PY'
 from mmh3.comfy import free_memory
@@ -136,7 +161,7 @@ PY
   logs-memory) tail -n 200 -f /workspace/mmh3/logs/memory-guard.log ;;
   logs-provisioning) tail -n 200 -f /workspace/mmh3/logs/provisioning.log ;;
   *)
-    echo "Usage: mmh3 {status|doctor|free|interrupt|restart-comfy|restart-phone|provision|sync-models|sync-loras|provision-status|jupyter-url|logs-comfy|logs-phone|logs-memory|logs-provisioning}"
+    echo "Usage: mmh3 {status|doctor|gpu-smoke|free|interrupt|restart-comfy|restart-phone|provision|sync-models|sync-loras|provision-status|jupyter-url|logs-comfy|logs-phone|logs-memory|logs-provisioning}"
     exit 2
     ;;
 esac
