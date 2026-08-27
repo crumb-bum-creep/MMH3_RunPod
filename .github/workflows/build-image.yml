@@ -20,6 +20,7 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  issues: write
 
 jobs:
   build:
@@ -42,6 +43,20 @@ jobs:
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mmh3-runpod"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           docker build --progress=plain -t "$IMAGE:latest" -t "$IMAGE:sha-${GITHUB_SHA::12}" . 2>&1 | tee docker-build.log
+
+      - name: Publish failed build tail
+        if: failure() && steps.docker_build.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### Build failure · run ${GITHUB_RUN_ID}"
+            echo
+            echo '~~~text'
+            tail -n 180 docker-build.log
+            echo '~~~'
+          } > /tmp/build-comment.md
+          gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body-file /tmp/build-comment.md
 
       - name: Save build log
         if: always()
