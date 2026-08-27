@@ -30,7 +30,7 @@ from mmh3.common import (
 from mmh3.hardware import detect
 from mmh3.loras import sync_loras
 
-APP_VERSION = "0.5.0-mmH3-integrated"
+APP_VERSION = "0.5.1-mmH3-postdeploy"
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 WORKFLOW_DIR = Path(os.environ.get("MMH3_WORKFLOW_DIR", IMAGE_ROOT / "workflows" / "api"))

@@ -14,6 +14,7 @@ const state = {
   outputs: [],
   info: null,
   openOutputs: new Set(),
+  outputsSignature: "",
   refKind: "image",
 };
 
@@ -41,8 +42,12 @@ async function api(path, options={}){
     opts.headers["Content-Type"]="application/json";
     opts.body=JSON.stringify(opts.body);
   }
-  const r=await fetch(path,opts);
+  const r=await fetch(path,{cache:"no-store",...opts});
   const text=await r.text();
+  const contentType=(r.headers.get("content-type")||"").toLowerCase();
+  if(contentType.includes("text/html") || /^\s*<!doctype html/i.test(text)){
+    throw new Error("RunPod proxy could not reach the MMH3 service. Retry in a few seconds; if it persists, check the Phone UI and Comfy logs.");
+  }
   let data=null;
   try{ data=text?JSON.parse(text):{}; }catch{ data={message:text}; }
   if(!r.ok){
@@ -56,7 +61,7 @@ function switchTab(name){
   state.tab=name;
   $$("#tabs button").forEach(b=>b.classList.toggle("active",b.dataset.tab===name));
   $$(".tab").forEach(s=>s.classList.toggle("active",s.id==="tab-"+name));
-  if(name==="outputs") refreshOutputs();
+  if(name==="outputs") refreshOutputs(true);
   if(name==="loras") loadLoras();
   if(name==="system"){ refreshInfo(); loadPrompts(); }
 }
@@ -311,13 +316,34 @@ function copyText(text){
   if(navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(()=>toast("Copied")).catch(()=>toast("Copy failed"));
   else toast("Clipboard unavailable");
 }
-async function refreshOutputs(){
+async function refreshOutputs(force=false){
+  const host=$("#outputs");
+  // Never replace a live <video> element underneath active playback. The old
+  // 15-second poll rebuilt the entire output DOM and reset mobile playback.
+  const playing=$$("video",host).some(v=>!v.paused&&!v.ended);
+  if(!force && playing) return;
+
   try{
-    state.openOutputs=new Set($$("details.output[open]").map(x=>x.dataset.file));
-    const d=await api("/api/outputs"); state.outputs=d.items||[];
-    const host=$("#outputs");
-    if(!state.outputs.length){host.innerHTML='<div class="muted">No completed videos with audio yet.</div>';return;}
-    host.innerHTML=state.outputs.map((x,i)=>{
+    state.openOutputs=new Set($$("details.output[open]",host).map(x=>x.dataset.file));
+    const d=await api("/api/outputs");
+    const next=d.items||[];
+    state.outputs=next;
+
+    // Polling is cheap, DOM replacement is not. If nothing user-visible changed,
+    // leave the existing video elements untouched so currentTime/buffer/state survive.
+    const signature=JSON.stringify(next.map(x=>[
+      x.file, Number(x.size||0), Number(x.mtime||0),
+      x.metadata?.prompt_id||"", Number(x.metadata?.completed_at||0)
+    ]));
+    if(signature===state.outputsSignature) return;
+    state.outputsSignature=signature;
+
+    if(!next.length){
+      host.innerHTML='<div class="muted">No completed videos with audio yet.</div>';
+      return;
+    }
+
+    host.innerHTML=next.map(x=>{
       const m=x.metadata||{}, open=state.openOutputs.has(x.file)?" open":"";
       return `<details class="output" data-file="${esc(x.file)}"${open}>
         <summary><strong>${esc(x.file.split("/").pop())}</strong><div class="muted">${esc((m.mode||"").toUpperCase())} ${esc((m.prompt_mode||"").toUpperCase())} · ${bytes(x.size)}</div></summary>
@@ -333,6 +359,7 @@ async function refreshOutputs(){
         <div class="meta">${esc((m.prompt_idea||m.prompt||"").slice(0,600))}</div>
       </details>`;
     }).join("");
+
     $$(".output",host).forEach(el=>{
       const item=state.outputs.find(x=>x.file===el.dataset.file), m=item.metadata||{};
       $(".copy-prompt",el).onclick=()=>copyText(m.actual_prompt||m.prompt||m.prompt_idea||"");
@@ -347,10 +374,14 @@ async function refreshOutputs(){
       };
       $(".delete",el).onclick=async()=>{
         if(!confirm("Delete this video?"))return;
-        try{await api("/api/outputs/"+item.file.split("/").map(encodeURIComponent).join("/"),{method:"DELETE"});refreshOutputs();}catch(e){toast(e.message);}
+        try{
+          await api("/api/outputs/"+item.file.split("/").map(encodeURIComponent).join("/"),{method:"DELETE"});
+          state.outputsSignature="";
+          await refreshOutputs(true);
+        }catch(e){toast(e.message);}
       };
     });
-  }catch(e){$("#outputs").innerHTML='<div class="message error">'+esc(e.message)+'</div>';}
+  }catch(e){host.innerHTML='<div class="message error">'+esc(e.message)+'</div>';}
 }
 
 async function refreshInfo(){
@@ -395,7 +426,7 @@ function wire(){
   $$("#promptModeSeg button").forEach(b=>b.onclick=()=>setPromptMode(b.dataset.value));
   $("#generate").onclick=generate;
   $("#refreshQueue").onclick=()=>{refreshQueue();refreshProgress();};
-  $("#refreshOutputs").onclick=refreshOutputs;
+  $("#refreshOutputs").onclick=()=>refreshOutputs(true);
   $("#goLoras").onclick=()=>switchTab("loras");
   $("#loraSearch").oninput=renderLoras;
 
@@ -476,10 +507,10 @@ function wire(){
 
 async function init(){
   wire(); setMode("t2v");setPromptMode("auto");renderRefs();renderSelectedLoras();
-  await Promise.allSettled([refreshInfo(),refreshInputOptions(),loadLoras(),loadTemplates(),refreshQueue(),refreshProgress(),refreshOutputs()]);
+  await Promise.allSettled([refreshInfo(),refreshInputOptions(),loadLoras(),loadTemplates(),refreshQueue(),refreshProgress(),refreshOutputs(true)]);
   setInterval(refreshProgress,700);
   setInterval(refreshQueue,2500);
   setInterval(refreshInfo,5000);
-  setInterval(()=>{if(state.tab==="outputs")refreshOutputs();},15000);
+  setInterval(()=>{if(state.tab==="outputs")refreshOutputs(false);},15000);
 }
 init();

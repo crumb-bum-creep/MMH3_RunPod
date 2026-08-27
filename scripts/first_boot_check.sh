@@ -72,7 +72,15 @@ print("stage:",d.get("stage"))
 print("core_ready:",d.get("core_ready"))
 print("message:",d.get("message"))
 PY
-  if grep -q '"core_ready": true' "$STATE"; then ok "core H3 models report ready"; else warn "core H3 models are still provisioning or degraded"; fi
+  if grep -q '"core_ready": true' "$STATE"; then
+    ok "core H3 models report ready"
+  elif pgrep -f '[p]ython.*-m [m]mh3.provisioner' >/dev/null 2>&1; then
+    warn "core H3 models are still provisioning"
+  elif grep -q '"status": "error"\|"status": "degraded"' "$STATE"; then
+    bad "core H3 provisioning failed/degraded; run: mmh3 provision"
+  else
+    bad "core models are not ready and the background provisioner is not running; run: mmh3 provision"
+  fi
 else
   warn "provisioning state file not created yet"
 fi

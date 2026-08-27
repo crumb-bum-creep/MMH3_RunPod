@@ -21,7 +21,7 @@ def _state(**values):
     dump_json(path, current)
 
 
-def run() -> None:
+def run() -> int:
     runtime = load_yaml(CONFIG_ROOT / "runtime.yaml", {}) or {}
     cfg = runtime.get("provisioning") or {}
     do_models = env_bool("MMH3_AUTO_DOWNLOAD_MODELS", bool(cfg.get("download_models", True)))
@@ -73,10 +73,12 @@ def run() -> None:
             "loras": lora_results,
             "completed_at": time.time(),
         })
+        return 0 if core_ready else 2
     except Exception as exc:
         _state(status="error", stage="failed", core_ready=False, error=repr(exc), message="Provisioning failed")
         print("[mmh3] provisioner failed:", repr(exc), flush=True)
+        return 1
 
 
 if __name__ == "__main__":
-    run()
+    raise SystemExit(run())

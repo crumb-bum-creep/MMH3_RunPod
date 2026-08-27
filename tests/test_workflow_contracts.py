@@ -84,7 +84,14 @@ def test_custom_r2v_has_no_openrouter_api_key_node():
     pack = nodes_of(graph, "MiniMaxH3ReferencePack")[0]["inputs"]
     assert pack["prompt_provider"] == "none"
     assert pack["openrouter_api_key"] == ""
-    assert pack["job_type"] == "custom"
+    assert pack["job_type"] == "standard"
+
+
+def test_phone_ui_custom_r2v_uses_valid_referencepack_enum():
+    source = (ROOT / "services" / "phone-ui" / "server.py").read_text()
+    assert 'inp["prompt_provider"] = "none"' in source
+    assert 'inp["job_type"] = "standard"' in source
+    assert 'inp["job_type"] = "custom"' not in source
 
 
 def test_r2v_auto_uses_referencepack_openrouter():
