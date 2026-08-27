@@ -267,6 +267,7 @@ def patch_workflow(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
 
     record = {
         "mode": mode,
+        "model_family": "ref2v" if mode == "r2v" else "fl2v",
         "prompt_mode": prompt_mode,
         "prompt": str(payload.get("prompt") or ""),
         "prompt_idea": str(payload.get("prompt_idea") or ""),
@@ -539,6 +540,36 @@ async def api_generate(request: web.Request) -> web.Response:
     app = request.app
     payload = await request.json()
 
+    requested_mode = str(payload.get("mode") or "t2v").lower()
+    requested_family = "ref2v" if requested_mode == "r2v" else "fl2v"
+
+    # The telemetry showed the dangerous RAM jump when Ref2V and FL2V families
+    # accumulate in the same warm Comfy process. Same-family queueing stays fully
+    # supported, but do not stack the other family behind it with no cleanup window.
+    try:
+        async with app["session"].get(f"{app['comfy']}/queue") as r:
+            active_queue = await r.json()
+    except Exception:
+        active_queue = {"queue_running": [], "queue_pending": []}
+
+    active_families = set()
+    for key in ("queue_running", "queue_pending"):
+        for row in active_queue.get(key) or []:
+            pid = str(row[1]) if isinstance(row, list) and len(row) > 1 else ""
+            rec = app["records"].get(pid) or {}
+            family = rec.get("model_family")
+            if not family and rec.get("mode"):
+                family = "ref2v" if rec.get("mode") == "r2v" else "fl2v"
+            if family:
+                active_families.add(str(family))
+
+    if active_families and requested_family not in active_families:
+        names = ", ".join(sorted(active_families))
+        raise web.HTTPConflict(
+            text=f"A {names} generation family is already running/queued. "
+                 f"Finish that family first so MMH3 gets a memory-cleanup window before switching to {requested_family}."
+        )
+
     provisioning = _load_json(STATE_ROOT / "provisioning.json", {})
     if provisioning and not bool(provisioning.get("core_ready", False)):
         status = str(provisioning.get("status") or "pending")
@@ -763,6 +794,86 @@ async def api_output_to_input(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "file": dest.name})
 
 
+def _write_lora_config(cfg: dict[str, Any]) -> None:
+    CONFIG_ROOT.mkdir(parents=True, exist_ok=True)
+    (CONFIG_ROOT / "loras.yaml").write_text(
+        yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+
+def _parse_civitai_version_id(value: Any) -> int:
+    raw = str(value or "").strip()
+    if raw.isdigit():
+        return int(raw)
+    # Accept common CivitAI URLs when the selected model version is present.
+    match = re.search(r"(?:modelVersionId=|/model-versions/|/api/download/models/)(\d+)", raw, re.I)
+    if match:
+        return int(match.group(1))
+    raise web.HTTPBadRequest(
+        text="Enter a CivitAI model VERSION ID, or paste a CivitAI URL containing modelVersionId."
+    )
+
+
+async def api_lora_config_get(request: web.Request) -> web.Response:
+    cfg = load_yaml(CONFIG_ROOT / "loras.yaml", {}) or {"loras": []}
+    return web.json_response({"loras": cfg.get("loras") or []})
+
+
+async def api_lora_config_upsert(request: web.Request) -> web.Response:
+    body = await request.json()
+    vid = _parse_civitai_version_id(body.get("version_id") or body.get("source"))
+    cfg = load_yaml(CONFIG_ROOT / "loras.yaml", {}) or {}
+    items = list(cfg.get("loras") or [])
+    target = next((x for x in items if int((x or {}).get("version_id") or 0) == vid), None)
+    if target is None:
+        target = {"version_id": vid, "enabled": True}
+        items.append(target)
+
+    allowed = {
+        "enabled", "nickname", "filename", "recommended_strength",
+        "trigger_words", "notes", "tags",
+    }
+    for key in allowed:
+        if key in body:
+            value = body[key]
+            if key in {"trigger_words", "notes", "tags"}:
+                if isinstance(value, str):
+                    # Trigger words/tags are comma-delimited; notes are line-delimited.
+                    if key == "notes":
+                        value = [x.strip() for x in value.splitlines() if x.strip()]
+                    else:
+                        value = [x.strip() for x in value.split(",") if x.strip()]
+                elif not isinstance(value, list):
+                    value = []
+            if key == "recommended_strength" and value not in (None, ""):
+                try:
+                    value = float(value)
+                except (TypeError, ValueError):
+                    raise web.HTTPBadRequest(text="recommended_strength must be numeric")
+            target[key] = value
+
+    target["version_id"] = vid
+    cfg["loras"] = items
+    _write_lora_config(cfg)
+    return web.json_response({"ok": True, "lora": target})
+
+
+async def api_lora_config_disable(request: web.Request) -> web.Response:
+    vid = int(request.match_info["vid"])
+    cfg = load_yaml(CONFIG_ROOT / "loras.yaml", {}) or {}
+    items = list(cfg.get("loras") or [])
+    found = False
+    for item in items:
+        if int((item or {}).get("version_id") or 0) == vid:
+            item["enabled"] = False
+            found = True
+            break
+    cfg["loras"] = items
+    _write_lora_config(cfg)
+    return web.json_response({"ok": True, "found": found})
+
+
 async def api_loras(request: web.Request) -> web.Response:
     catalog = _load_json(DATA_ROOT / "lora_catalog.json", {"managed": [], "unmanaged": []})
     items = []
@@ -879,6 +990,9 @@ def make_app(comfy_url: str) -> web.Application:
         web.post("/api/output-to-input", api_output_to_input),
         web.get("/api/loras", api_loras),
         web.post("/api/loras/sync", api_sync_loras),
+        web.get("/api/loras/config", api_lora_config_get),
+        web.post("/api/loras/config", api_lora_config_upsert),
+        web.delete("/api/loras/config/{vid}", api_lora_config_disable),
         web.get("/api/system-prompts", api_prompts_get),
         web.put("/api/system-prompts", api_prompts_put),
         web.get("/api/templates", api_templates_get),

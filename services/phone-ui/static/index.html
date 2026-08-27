@@ -134,6 +134,11 @@
 <section id="tab-loras" class="tab">
   <div class="card">
     <div class="labelrow"><div><strong>LoRA Library</strong><div class="muted">Friendly metadata + actual Comfy filename</div></div><button id="syncLoras" class="secondary small">Sync</button></div>
+    <div class="media-row">
+      <input id="newLoraVersion" inputmode="numeric" placeholder="CivitAI version ID or URL">
+      <button id="addLoraVersion" class="primary">Add + Sync</button>
+    </div>
+    <div class="muted">Use the model-version ID (or a CivitAI URL containing modelVersionId). Metadata and your notes persist under /workspace.</div>
     <input id="loraSearch" type="search" placeholder="Search LoRAs…">
     <div id="loraLibrary" class="stack padded-top"></div>
   </div>

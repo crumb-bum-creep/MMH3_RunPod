@@ -12,3 +12,35 @@ def test_6000_profile(tmp_path: Path):
     p.write_text('profiles:\n  pro:\n    match:\n      gpu_name_contains: ["RTX PRO 6000"]\n  fallback: {}\n')
     name,_=select_profile(HardwareInfo(gpu_name='NVIDIA RTX PRO 6000 Blackwell Server Edition'),p)
     assert name=='pro'
+
+
+def test_vram_bound_rejects_48gb_6000(tmp_path: Path):
+    p=tmp_path/'p.yaml'
+    p.write_text(
+        'profiles:\n'
+        '  pro:\n'
+        '    match:\n'
+        '      gpu_name_contains: ["RTX 6000"]\n'
+        '      min_vram_gb: 80\n'
+        '  fallback: {}\n'
+    )
+    name,_=select_profile(
+        HardwareInfo(gpu_name='NVIDIA RTX 6000 Ada Generation', vram_mib=48*1024), p
+    )
+    assert name=='fallback'
+
+
+def test_vram_bound_accepts_96gb_blackwell(tmp_path: Path):
+    p=tmp_path/'p.yaml'
+    p.write_text(
+        'profiles:\n'
+        '  pro:\n'
+        '    match:\n'
+        '      gpu_name_contains: ["RTX PRO 6000"]\n'
+        '      min_vram_gb: 80\n'
+        '  fallback: {}\n'
+    )
+    name,_=select_profile(
+        HardwareInfo(gpu_name='NVIDIA RTX PRO 6000 Blackwell Server Edition', vram_mib=96*1024), p
+    )
+    assert name=='pro'

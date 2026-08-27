@@ -95,7 +95,17 @@ def select_profile(hardware: HardwareInfo, profiles_path: Path) -> tuple[str, di
     for profile_name, profile in profiles.items():
         if profile_name == "fallback":
             continue
-        needles = (((profile or {}).get("match") or {}).get("gpu_name_contains") or [])
-        if any(str(n).lower() in name_lower for n in needles):
+        match = ((profile or {}).get("match") or {})
+        needles = match.get("gpu_name_contains") or []
+        if needles and not any(str(n).lower() in name_lower for n in needles):
+            continue
+        vram_gb = hardware.vram_mib / 1024 if hardware.vram_mib else 0.0
+        min_vram = float(match.get("min_vram_gb", 0) or 0)
+        max_vram = float(match.get("max_vram_gb", 0) or 0)
+        if min_vram and vram_gb and vram_gb < min_vram:
+            continue
+        if max_vram and vram_gb and vram_gb > max_vram:
+            continue
+        if needles or min_vram or max_vram:
             return profile_name, profile or {}
     return "fallback", profiles.get("fallback", {}) or {}

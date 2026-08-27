@@ -8,15 +8,23 @@ case "$cmd" in
   status)
     python - <<'PY'
 from pathlib import Path
+import json
 from mmh3.hardware import detect
 from mmh3 import comfy
 h=detect(); print("=== MMH3 STATUS ===")
 print(f"GPU: {h.gpu_name} | VRAM: {h.vram_mib} MiB")
 print(f"RAM cgroup: {h.cgroup_memory_current_bytes/2**30:.1f} / {h.cgroup_memory_limit_bytes/2**30:.1f} GiB")
 print("Comfy:", "ready" if comfy.wait_ready(1) else "down")
-for name in ("hardware.json","memory.json"):
- p=Path("/workspace/mmh3/state")/name
- if p.exists(): print(f"{name}: {p}")
+for name in ("hardware.json","memory.json","provisioning.json"):
+    p=Path("/workspace/mmh3/state")/name
+    if p.exists():
+        try:
+            d=json.loads(p.read_text())
+            if name=="provisioning.json":
+                print("Provisioning:", d.get("status"), "-", d.get("message") or d.get("stage"))
+        except Exception:
+            pass
+        print(f"{name}: {p}")
 PY
     ;;
   free)
@@ -31,11 +39,22 @@ from mmh3.comfy import interrupt
 print("interrupt requested" if interrupt() else "interrupt request failed")
 PY
     ;;
+  restart-comfy)
+    pgrep -f '[p]ython.*[/]ComfyUI/main.py' | xargs -r kill
+    echo "ComfyUI stop requested; MMH3 supervisor will restart it."
+    ;;
+  restart-phone)
+    pgrep -f '[p]ython.*services/phone-ui/server.py' | xargs -r kill
+    echo "Phone UI stop requested; MMH3 supervisor will restart it."
+    ;;
   sync-loras)
     python - <<'PY'
 from pathlib import Path
 from mmh3.loras import sync_loras
-print(sync_loras(Path('/workspace/mmh3/config/loras.yaml')))
+result=sync_loras(Path('/workspace/mmh3/config/loras.yaml'))
+print("managed:", len(result.get("managed",[])), "local:", len(result.get("unmanaged",[])))
+for x in result.get("managed",[]):
+    print(x.get("status"), x.get("version_id"), x.get("nickname") or x.get("filename") or x.get("error"))
 PY
     ;;
   sync-models)
@@ -45,8 +64,15 @@ from mmh3.models import sync_models
 for x in sync_models(Path('/opt/mmh3/config/models.yaml')): print(x)
 PY
     ;;
+  provision-status)
+    cat /workspace/mmh3/state/provisioning.json 2>/dev/null || echo "No provisioning state yet."
+    ;;
   logs-comfy) tail -n 200 -f /workspace/mmh3/logs/comfyui.log ;;
   logs-phone) tail -n 200 -f /workspace/mmh3/logs/phone-ui.log ;;
   logs-memory) tail -n 200 -f /workspace/mmh3/logs/memory-guard.log ;;
-  *) echo "Usage: mmh3 {status|free|interrupt|sync-models|sync-loras|logs-comfy|logs-phone|logs-memory}"; exit 2 ;;
+  logs-provisioning) tail -n 200 -f /workspace/mmh3/logs/provisioning.log ;;
+  *)
+    echo "Usage: mmh3 {status|free|interrupt|restart-comfy|restart-phone|sync-models|sync-loras|provision-status|logs-comfy|logs-phone|logs-memory|logs-provisioning}"
+    exit 2
+    ;;
 esac
