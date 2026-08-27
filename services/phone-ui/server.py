@@ -528,6 +528,35 @@ async def api_info(request: web.Request) -> web.Response:
 
 async def api_generate(request: web.Request) -> web.Response:
     app = request.app
+    memory = _load_json(STATE_ROOT / "memory.json", {})
+    try:
+        fraction = float(memory.get("fraction") or 0.0)
+        cleanup_fraction = float(memory.get("cleanup_fraction") or 0.84)
+        resume_fraction = float(memory.get("resume_fraction") or 0.76)
+    except (TypeError, ValueError):
+        fraction, cleanup_fraction, resume_fraction = 0.0, 0.84, 0.76
+    if fraction >= cleanup_fraction:
+        # Do not blindly pile another H3 model family on top of a high resident
+        # baseline. Ask Comfy to release idle models, then wait briefly for the
+        # measured cgroup usage to actually fall.
+        if comfy.queue_idle():
+            comfy.free_memory(True, True)
+            deadline = time.time() + 45
+            while time.time() < deadline:
+                await asyncio.sleep(1)
+                memory = _load_json(STATE_ROOT / "memory.json", {})
+                try:
+                    fraction = float(memory.get("fraction") or 0.0)
+                except (TypeError, ValueError):
+                    fraction = 0.0
+                if fraction <= resume_fraction:
+                    break
+        if fraction >= cleanup_fraction:
+            raise web.HTTPServiceUnavailable(
+                text=f"MMH3 is protecting pod memory ({fraction:.0%} used). "
+                     "Wait for cleanup to finish, then queue again."
+            )
+
     payload = await request.json()
     graph, record = patch_workflow(payload)
     plan = _make_plan(graph)
@@ -586,15 +615,20 @@ async def api_progress(request: web.Request) -> web.Response:
 async def api_cancel(request: web.Request) -> web.Response:
     app = request.app
     pid = str(request.match_info["pid"])
+    running = False
     try:
+        async with app["session"].get(f"{app['comfy']}/queue") as r:
+            q = await r.json()
+        running = any(isinstance(row, list) and len(row) > 1 and str(row[1]) == pid for row in (q.get("queue_running") or []))
         async with app["session"].post(f"{app['comfy']}/queue", json={"delete": [pid]}) as r:
             await r.read()
-        async with app["session"].post(f"{app['comfy']}/interrupt") as r:
-            await r.read()
+        if running:
+            async with app["session"].post(f"{app['comfy']}/interrupt") as r:
+                await r.read()
     except Exception:
         pass
     _touch(app, pid, status="cancelled", process_name="Cancelled")
-    return web.json_response({"ok": True})
+    return web.json_response({"ok": True, "interrupted_running_job": running})
 
 
 async def api_upload(request: web.Request) -> web.Response:
@@ -683,6 +717,23 @@ async def serve_output(request: web.Request) -> web.StreamResponse:
     if not p.is_file():
         raise web.HTTPNotFound()
     return web.FileResponse(p)
+
+
+async def api_output_to_input(request: web.Request) -> web.Response:
+    body = await request.json()
+    rel = str(body.get("file") or "").strip()
+    if not rel:
+        raise web.HTTPBadRequest(text="output file required")
+    src = _inside(OUTPUT_DIR, rel)
+    if not src.is_file():
+        raise web.HTTPNotFound(text="output not found")
+    INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    name = _safe_name(src.name)
+    dest = INPUT_DIR / name
+    if dest.exists():
+        dest = INPUT_DIR / f"{dest.stem}_{uuid.uuid4().hex[:8]}{dest.suffix}"
+    shutil.copy2(src, dest)
+    return web.json_response({"ok": True, "file": dest.name})
 
 
 async def api_loras(request: web.Request) -> web.Response:
@@ -798,6 +849,7 @@ def make_app(comfy_url: str) -> web.Application:
         web.get("/api/outputs", api_outputs),
         web.delete("/api/outputs/{path:.*}", api_delete_output),
         web.get("/media/output/{path:.*}", serve_output),
+        web.post("/api/output-to-input", api_output_to_input),
         web.get("/api/loras", api_loras),
         web.post("/api/loras/sync", api_sync_loras),
         web.get("/api/system-prompts", api_prompts_get),
