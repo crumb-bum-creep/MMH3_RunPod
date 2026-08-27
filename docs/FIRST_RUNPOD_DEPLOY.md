@@ -2,7 +2,7 @@
 
 This is the first-deployment procedure for the MMH3 image.
 
-> **First RunPod deployment candidate is ready.** GitHub build, runtime tests, Comfy custom-node initialization smoke test, and GHCR push are green for the immutable image below.
+> **Validated post-deploy image.** Runtime tests, Docker build, Comfy custom-node initialization smoke test, GHCR push, and the first real RTX PRO 6000 Blackwell deployment are complete. The immutable image below includes the fixes discovered during that deployment.
 
 ## 1. RunPod Secrets
 
@@ -52,7 +52,7 @@ If the GHCR package is intentionally made public later, registry credentials are
 The production image will be:
 
 ```text
-ghcr.io/crumb-bum-creep/mmh3-runpod:sha-b9574e4d98aa
+ghcr.io/crumb-bum-creep/mmh3-runpod:sha-7200522bcf6e
 ```
 
 Prefer the pinned `sha-...` tag for normal deployments after validation. Do not rely on
