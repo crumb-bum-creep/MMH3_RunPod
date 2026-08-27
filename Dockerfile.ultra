@@ -47,9 +47,16 @@ RUN /opt/venv/bin/pip uninstall -y onnxruntime onnxruntime-gpu 2>/dev/null || tr
 
 # Prune build/cache artifacts before COPY --from so they never become final
 # runtime bytes. Keep git metadata for the existing pin/drift diagnostics.
-RUN rm -rf /root/.cache /tmp/* /var/tmp/* \
-    && find /opt/venv -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true \
-    && find /ComfyUI -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true
+RUN set -eux; \
+    git -C /ComfyUI rev-parse HEAD > /ComfyUI/.mmh3_commit; \
+    for d in /ComfyUI/custom_nodes/*; do \
+      if [[ -d "$d/.git" ]]; then git -C "$d" rev-parse HEAD > "$d/.mmh3_commit"; fi; \
+    done; \
+    rm -rf /ComfyUI/custom_nodes/comfyui-manager; \
+    rm -rf /ComfyUI/.git /ComfyUI/custom_nodes/*/.git; \
+    rm -rf /root/.cache /tmp/* /var/tmp/*; \
+    find /opt/venv -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true; \
+    find /ComfyUI -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true
 
 
 # Stage the heaviest Python payloads separately. The final image restores them
