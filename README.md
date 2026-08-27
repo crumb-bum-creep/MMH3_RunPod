@@ -30,12 +30,12 @@ loras/         LoRA metadata catalog (not model weights)
 
 ## Current status
 
-**First RunPod deployment candidate ready.**
+**First real RunPod deployment validated; post-deploy fixes are baked into the current image.**
 
 Immutable candidate image:
 
 ```text
-ghcr.io/crumb-bum-creep/mmh3-runpod:sha-b9574e4d98aa
+ghcr.io/crumb-bum-creep/mmh3-runpod:sha-7200522bcf6e
 ```
 
 Validated in GitHub CI:
@@ -50,13 +50,14 @@ Validated in GitHub CI:
 - ComfyUI custom-node initialization via `--quick-test-for-ci`
 - GHCR push
 
-The remaining validation is the **first real GPU RunPod smoke test**, because CI cannot execute MiniMax H3 inference without an NVIDIA GPU.
+The first real RTX PRO 6000 Blackwell deployment booted successfully with the expected GPU/RAM profile, required custom nodes, model provisioning path, Auto R2V, and Custom R2V. Post-deploy issues found during that smoke test are covered by regression tests and the current image.
 
 See:
 
 - `docs/FIRST_RUNPOD_DEPLOY.md` — exact RunPod setup
 - `docs/OPERATIONS.md` — daily commands/recovery
 - `scripts/first_boot_check.sh` — one-command first-pod health check
+- `docs/PERSISTENCE.md` — persistent state and LoRA seed behavior
 
 
 ## Security
