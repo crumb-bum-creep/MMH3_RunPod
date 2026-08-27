@@ -516,10 +516,14 @@ async def _ws_loop(app: web.Application) -> None:
 async def api_info(request: web.Request) -> web.Response:
     h = detect()
     mem = _load_json(STATE_ROOT / "memory.json", {})
+    provisioning = _load_json(STATE_ROOT / "provisioning.json", {
+        "status": "unknown", "stage": "unknown", "core_ready": False
+    })
     return web.json_response({
         "version": APP_VERSION,
         "hardware": h.to_dict(),
         "memory": mem,
+        "provisioning": provisioning,
         "openrouter_configured": bool(os.environ.get("OPENROUTER_API_KEY")),
         "hf_configured": bool(os.environ.get("HF_TOKEN")),
         "civitai_configured": bool(os.environ.get("CIVITAI_TOKEN")),
@@ -528,17 +532,32 @@ async def api_info(request: web.Request) -> web.Response:
 
 async def api_generate(request: web.Request) -> web.Response:
     app = request.app
+    payload = await request.json()
+
+    provisioning = _load_json(STATE_ROOT / "provisioning.json", {})
+    if provisioning and not bool(provisioning.get("core_ready", False)):
+        status = str(provisioning.get("status") or "pending")
+        stage = str(provisioning.get("stage") or "models")
+        message = str(provisioning.get("message") or "Core MiniMax H3 models are still provisioning")
+        raise web.HTTPServiceUnavailable(
+            text=f"{message} (status={status}, stage={stage}). "
+                 "You can keep using the UI; generation will unlock automatically when core models are ready."
+        )
+
     memory = _load_json(STATE_ROOT / "memory.json", {})
     try:
         fraction = float(memory.get("fraction") or 0.0)
         cleanup_fraction = float(memory.get("cleanup_fraction") or 0.84)
         resume_fraction = float(memory.get("resume_fraction") or 0.76)
+        free_bytes = float(memory.get("free_bytes") or 0.0)
+        min_free = float(memory.get("min_free_headroom_bytes") or 0.0)
+        resume_free = float(memory.get("resume_free_headroom_bytes") or min_free)
     except (TypeError, ValueError):
         fraction, cleanup_fraction, resume_fraction = 0.0, 0.84, 0.76
-    if fraction >= cleanup_fraction:
-        # Do not blindly pile another H3 model family on top of a high resident
-        # baseline. Ask Comfy to release idle models, then wait briefly for the
-        # measured cgroup usage to actually fall.
+        free_bytes = min_free = resume_free = 0.0
+
+    pressure = fraction >= cleanup_fraction or (min_free > 0 and free_bytes < min_free)
+    if pressure:
         if comfy.queue_idle():
             comfy.free_memory(True, True)
             deadline = time.time() + 45
@@ -547,17 +566,20 @@ async def api_generate(request: web.Request) -> web.Response:
                 memory = _load_json(STATE_ROOT / "memory.json", {})
                 try:
                     fraction = float(memory.get("fraction") or 0.0)
+                    free_bytes = float(memory.get("free_bytes") or 0.0)
                 except (TypeError, ValueError):
-                    fraction = 0.0
-                if fraction <= resume_fraction:
+                    fraction, free_bytes = 0.0, 0.0
+                if fraction <= resume_fraction and (resume_free <= 0 or free_bytes >= resume_free):
                     break
-        if fraction >= cleanup_fraction:
+
+        pressure = fraction >= cleanup_fraction or (min_free > 0 and free_bytes < min_free)
+        if pressure:
+            free_gib = free_bytes / (1024 ** 3)
             raise web.HTTPServiceUnavailable(
-                text=f"MMH3 is protecting pod memory ({fraction:.0%} used). "
-                     "Wait for cleanup to finish, then queue again."
+                text=f"MMH3 is protecting pod memory ({fraction:.0%} used, {free_gib:.1f} GiB free). "
+                     "Wait for model/cache cleanup to finish, then queue again."
             )
 
-    payload = await request.json()
     graph, record = patch_workflow(payload)
     plan = _make_plan(graph)
     async with app["session"].post(
