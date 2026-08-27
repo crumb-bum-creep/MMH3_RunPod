@@ -100,6 +100,16 @@ MMH3_LORA_VERSION_IDS=3236596,ANOTHER_CIVITAI_VERSION_ID,...
 
 Those are **CivitAI model-version IDs**, not model-page IDs.
 
+You do not have to maintain this environment-variable list permanently. In the 7860 **LoRAs** tab you can:
+
+- paste a CivitAI model-version ID or a CivitAI URL containing `modelVersionId`
+- download/sync it using the RunPod CivitAI secret
+- give it a friendly nickname
+- record your preferred/recommended strength
+- override/add trigger words
+- add tags and personal usage notes
+- select the LoRA by friendly metadata while Comfy still receives the real filename
+
 The LoRA list itself is not sensitive and does not need to be a RunPod Secret. Long-term LoRA metadata lives persistently at:
 
 ```text
