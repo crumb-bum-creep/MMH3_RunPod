@@ -411,6 +411,41 @@ def _mark(app: web.Application, pid: str, nid: Any, state: str | None = None, va
         plan["current_node"] = str(nid)
 
 
+def _extract_generated_prompt(outputs: Any) -> str:
+    candidates: list[str] = []
+
+    def walk(x: Any) -> None:
+        if isinstance(x, str):
+            text = x.strip()
+            if text:
+                candidates.append(text)
+        elif isinstance(x, dict):
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(outputs)
+
+    markers = (
+        "integrated_multimodal_description:",
+        "subject_definitions:",
+        "detailed_description:",
+        "overall_soundscape:",
+    )
+    scored: list[tuple[int, int, str]] = []
+    for text in candidates:
+        score = sum(1 for m in markers if m in text)
+        if score:
+            scored.append((score, len(text), text))
+
+    if not scored:
+        return ""
+    scored.sort(reverse=True)
+    return scored[0][2]
+
+
 async def _finalize(app: web.Application, pid: str) -> None:
     await asyncio.sleep(1)
     try:
@@ -437,7 +472,14 @@ async def _finalize(app: web.Application, pid: str) -> None:
 
     walk(item.get("outputs") if isinstance(item, dict) else item)
     output_meta = _load_json(OUTPUT_META_FILE, {})
-    record = app["records"].get(pid, {})
+    record = dict(app["records"].get(pid, {}))
+    if record.get("prompt_mode") == "auto":
+        actual = _extract_generated_prompt(item.get("outputs") if isinstance(item, dict) else item)
+        if actual:
+            record["actual_prompt"] = actual
+    elif record.get("prompt"):
+        record["actual_prompt"] = record.get("prompt")
+
     for rel in dict.fromkeys(files):
         output_meta[rel] = {**record, "prompt_id": pid, "completed_at": time.time()}
         p = _inside(OUTPUT_DIR, rel)
@@ -725,6 +767,11 @@ async def api_inputs(request: web.Request) -> web.Response:
 
 
 def _has_audio(path: Path) -> bool:
+    # H3/VHS output filenames conventionally include "audio" once video+audio
+    # have been muxed. Use that as the zero-cost fast path; only probe ambiguous
+    # legacy/foreign MP4s.
+    if "audio" in path.name.lower():
+        return True
     try:
         p = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
@@ -732,7 +779,7 @@ def _has_audio(path: Path) -> bool:
         )
         return bool(p.stdout.strip())
     except Exception:
-        return "audio" in path.name.lower()
+        return False
 
 
 async def api_outputs(request: web.Request) -> web.Response:
