@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -64,8 +65,47 @@ def sync_loras(config_path: Path) -> dict[str, Any]:
     root = COMFY_PERSIST / "models" / "loras"
     root.mkdir(parents=True, exist_ok=True)
 
+    existing_by_id: dict[int, dict[str, Any]] = {}
+    try:
+        existing = json.loads((DATA_ROOT / "lora_catalog.json").read_text(encoding="utf-8"))
+        for item in existing.get("managed") or []:
+            if (item or {}).get("version_id"):
+                existing_by_id[int(item["version_id"])] = item
+    except Exception:
+        pass
+
     def sync_one(vid: int) -> dict[str, Any]:
         override = overrides.get(vid, {})
+
+        # Warm-volume fast path: if the managed weight is already present, do
+        # not make a CivitAI API request just to rediscover metadata we already
+        # persisted. Merge the editable YAML fields over the prior catalog so
+        # UI edits take effect immediately and startup remains network-free.
+        configured_name = str(override.get("filename") or "").strip()
+        if configured_name:
+            filename = _safe_filename(configured_name)
+            dest = root / filename
+            if dest.is_file() and dest.stat().st_size >= 1024 * 1024:
+                prior = existing_by_id.get(vid, {})
+                def chosen(key: str, fallback: Any) -> Any:
+                    return override[key] if key in override else prior.get(key, fallback)
+                return {
+                    "version_id": vid,
+                    "model_id": prior.get("model_id"),
+                    "model_name": prior.get("model_name"),
+                    "version_name": prior.get("version_name"),
+                    "nickname": chosen("nickname", prior.get("model_name") or prior.get("version_name") or filename),
+                    "filename": filename,
+                    "path": str(dest),
+                    "trigger_words": chosen("trigger_words", []),
+                    "recommended_strength": chosen("recommended_strength", 1.0),
+                    "notes": chosen("notes", []),
+                    "tags": chosen("tags", []),
+                    "managed": True,
+                    "status": "ready",
+                    "metadata_source": "persistent",
+                }
+
         session = requests.Session()
         if token:
             session.headers["Authorization"] = f"Bearer {token}"
@@ -102,10 +142,10 @@ def sync_loras(config_path: Path) -> dict[str, Any]:
                 "nickname": override.get("nickname") or model.get("name") or meta.get("name") or filename,
                 "filename": filename,
                 "path": str(dest),
-                "trigger_words": override.get("trigger_words") or meta.get("trainedWords") or [],
+                "trigger_words": override["trigger_words"] if "trigger_words" in override else (meta.get("trainedWords") or []),
                 "recommended_strength": override.get("recommended_strength", 1.0),
-                "notes": override.get("notes") or [],
-                "tags": override.get("tags") or [],
+                "notes": override["notes"] if "notes" in override else [],
+                "tags": override["tags"] if "tags" in override else [],
                 "managed": True,
                 "status": "ready",
             }
