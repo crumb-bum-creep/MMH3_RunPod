@@ -83,10 +83,10 @@ Leaving Docker entrypoint/start command blank is intentional: the image owns sta
 Add:
 
 ```text
-OPENROUTER_API_KEY={{ RUNPOD_SECRET_mmh3_openrouter }}
-HF_TOKEN={{ RUNPOD_SECRET_mmh3_huggingface }}
-CIVITAI_TOKEN={{ RUNPOD_SECRET_mmh3_civitai }}
-JUPYTER_TOKEN={{ RUNPOD_SECRET_mmh3_jupyter }}
+OPENROUTER_API_KEY={{ RUNPOD_SECRET_OPENROUTER_API_KEY }}
+HF_TOKEN={{ RUNPOD_SECRET_HF_TOKEN }}
+CIVITAI_TOKEN={{ RUNPOD_SECRET_CIVITAI_TOKEN }}
+JUPYTER_TOKEN={{ RUNPOD_SECRET_JUPYTER_PASSWORD }}
 
 MMH3_AUTO_DOWNLOAD_MODELS=true
 MMH3_AUTO_DOWNLOAD_LORAS=true
@@ -205,6 +205,14 @@ This prevents a fresh Pod from appearing dead during very large model downloads.
 - **8888** — JupyterLab
 
 Normal day-to-day use should happen primarily through 7860.
+
+Jupyter remains token-protected. Because RunPod's unauthenticated HTTP-service health probe can receive a 403 from Jupyter even while Jupyter itself is healthy, the console may transiently show the 8888 service as not ready. Use:
+
+```bash
+mmh3 jupyter-url
+```
+
+to print the correctly URL-encoded RunPod Jupyter URL. Do not share that URL because it contains the Jupyter token.
 
 ## 9. First health checks
 
