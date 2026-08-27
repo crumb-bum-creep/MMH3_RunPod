@@ -10,7 +10,6 @@ from .common import (
     IMAGE_ROOT,
     STATE_ROOT,
     ensure_dirs,
-    env_bool,
     load_yaml,
     dump_json,
     COMFY_DIR,
@@ -18,12 +17,10 @@ from .common import (
 )
 from .hardware import detect, select_profile
 from .comfy import configure_persistent_paths
-from .models import sync_models
-from .loras import sync_loras
+
 
 def copy_default_configs() -> None:
-    # Only user-editable configuration persists across image upgrades. Model
-    # manifests, custom-node pins and hardware profiles stay image-owned.
+    # User-editable configuration is initialized once and then survives image upgrades.
     src = IMAGE_ROOT / "config"
     CONFIG_ROOT.mkdir(parents=True, exist_ok=True)
     for name in ("runtime.yaml", "loras.yaml", "system_prompts.yaml"):
@@ -31,6 +28,7 @@ def copy_default_configs() -> None:
         dst = CONFIG_ROOT / name
         if p.exists() and not dst.exists():
             shutil.copy2(p, dst)
+
 
 def install_workflows() -> list[str]:
     src = IMAGE_ROOT / "workflows" / "api"
@@ -43,6 +41,7 @@ def install_workflows() -> list[str]:
             installed.append(p.name)
     return installed
 
+
 def custom_node_report() -> list[dict]:
     cfg = load_yaml(IMAGE_ROOT / "config" / "custom_nodes.yaml", {}) or {}
     out = []
@@ -50,7 +49,9 @@ def custom_node_report() -> list[dict]:
         path = COMFY_DIR / "custom_nodes" / name
         expected = str((item or {}).get("commit", ""))
         try:
-            actual = subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
+            actual = subprocess.check_output(
+                ["git", "-C", str(path), "rev-parse", "HEAD"], text=True
+            ).strip()
             status = "ok" if actual == expected else "drift"
         except Exception:
             actual = ""
@@ -58,35 +59,40 @@ def custom_node_report() -> list[dict]:
         out.append({"name": name, "expected": expected, "actual": actual, "status": status})
     return out
 
+
 def main() -> int:
     ensure_dirs()
     copy_default_configs()
     configure_persistent_paths()
+
     hardware = detect()
-    profile_name, profile = select_profile(hardware, IMAGE_ROOT / "config" / "hardware_profiles.yaml")
+    profile_name, profile = select_profile(
+        hardware, IMAGE_ROOT / "config" / "hardware_profiles.yaml"
+    )
     runtime = load_yaml(CONFIG_ROOT / "runtime.yaml", {}) or {}
     memory_cfg = dict(runtime.get("memory") or {})
     memory_cfg.update((profile.get("memory") or {}))
+
     dump_json(STATE_ROOT / "hardware.json", {**hardware.to_dict(), "profile": profile_name})
     dump_json(STATE_ROOT / "effective_memory_policy.json", memory_cfg)
+    dump_json(STATE_ROOT / "provisioning.json", {
+        "status": "pending",
+        "stage": "waiting_for_background_provisioner",
+        "core_ready": False,
+    })
 
     results = {
         "hardware": {**hardware.to_dict(), "profile": profile_name},
         "custom_nodes": custom_node_report(),
         "workflows": install_workflows(),
-        "models": [],
-        "loras": {},
+        "provisioning": "deferred_to_background",
     }
-
-    if env_bool("MMH3_AUTO_DOWNLOAD_MODELS", bool((runtime.get("provisioning") or {}).get("download_models", True))):
-        results["models"] = sync_models(IMAGE_ROOT / "config" / "models.yaml")
-    if env_bool("MMH3_AUTO_DOWNLOAD_LORAS", bool((runtime.get("provisioning") or {}).get("download_loras", True))):
-        results["loras"] = sync_loras(CONFIG_ROOT / "loras.yaml")
-
     dump_json(DATA_ROOT / "boot_report.json", results)
-    print("=== MMH3 BOOTSTRAP REPORT ===")
+
+    print("=== MMH3 FAST BOOTSTRAP REPORT ===")
     print(json.dumps(results, indent=2))
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
