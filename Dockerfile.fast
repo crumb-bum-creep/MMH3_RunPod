@@ -1,0 +1,72 @@
+# Startup-optimized MMH3 image.
+#
+# Strategy:
+#   1. Treat the already GPU-validated MMH3 image as the dependency builder.
+#   2. Copy only the validated Python environment + ComfyUI tree into a much
+#      smaller NVIDIA CUDA runtime image.
+#   3. Do not inherit the community template's unrelated OS/tooling layers.
+#
+# This preserves the exact Torch/Comfy/custom-node Python stack that passed the
+# RTX PRO 6000 smoke test while drastically reducing the filesystem inherited
+# by the final runtime image.
+ARG KNOWN_GOOD_IMAGE=ghcr.io/crumb-bum-creep/mmh3-runpod:sha-7200522bcf6e
+
+FROM ${KNOWN_GOOD_IMAGE} AS known_good
+
+# These caches are safe to drop before COPY --from. Removing them in the source
+# stage means they never enter the final image layer.
+RUN set -eux; \
+    rm -rf /root/.cache /tmp/*; \
+    find /opt/venv -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true; \
+    find /ComfyUI -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true
+
+FROM nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04
+
+USER root
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Runtime-only OS dependencies. Build toolchains stay behind in known_good.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl ffmpeg git iproute2 jq libtcmalloc-minimal4 \
+      procps python3.12 python3.12-venv tini \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
+
+# One large validated Python layer, one Comfy layer. This intentionally avoids
+# reinstalling PyTorch/custom-node dependencies and avoids inheriting the
+# community image's many unrelated lower layers.
+COPY --from=known_good /opt/venv /opt/venv
+COPY --from=known_good /ComfyUI /ComfyUI
+
+# The source image's venv was created with its own system Python path. Point the
+# copied venv at Ubuntu 24.04's Python 3.12 without changing site-packages.
+RUN set -eux; \
+    sed -i -E 's#^home = .*#home = /usr/bin#; s#^executable = .*#executable = /usr/bin/python3.12#' /opt/venv/pyvenv.cfg; \
+    rm -f /opt/venv/bin/python /opt/venv/bin/python3 /opt/venv/bin/python3.12; \
+    ln -s /usr/bin/python3.12 /opt/venv/bin/python; \
+    ln -s /usr/bin/python3.12 /opt/venv/bin/python3; \
+    ln -s /usr/bin/python3.12 /opt/venv/bin/python3.12; \
+    /opt/venv/bin/python -c 'import sys, torch; print(sys.version); print(torch.__version__, torch.version.cuda)'
+
+COPY runtime /opt/mmh3/runtime
+COPY config /opt/mmh3/config
+COPY workflows /opt/mmh3/workflows
+COPY services /opt/mmh3/services
+COPY scripts /opt/mmh3/scripts
+
+RUN chmod +x /opt/mmh3/runtime/entrypoint.sh /opt/mmh3/scripts/mmh3 \
+    && ln -sfn /opt/mmh3/scripts/mmh3 /usr/local/bin/mmh3
+
+ENV PATH=/opt/venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PYTHONUNBUFFERED=1 \
+    MMH3_IMAGE_ROOT=/opt/mmh3 \
+    MMH3_WORKSPACE=/workspace \
+    MMH3_COMFY_DIR=/ComfyUI \
+    MMH3_COMFY_PORT=8188 \
+    MMH3_PHONE_UI_PORT=7860 \
+    MMH3_JUPYTER_PORT=8888 \
+    MMH3_AUTO_DOWNLOAD_MODELS=true \
+    MMH3_AUTO_DOWNLOAD_LORAS=true
+
+EXPOSE 7860 8188 8888
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/opt/mmh3/runtime/entrypoint.sh"]
