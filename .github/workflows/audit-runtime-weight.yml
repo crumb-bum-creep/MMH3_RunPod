@@ -30,45 +30,7 @@ jobs:
       - name: Audit installed runtime
         shell: bash
         run: |
-          docker run --rm --entrypoint bash mmh3-dependency-audit -lc '
-            set -Eeuo pipefail
-            echo "=== roots ==="
-            du -sh /opt/venv /ComfyUI
-            echo
-            echo "=== largest remaining site-packages entries ==="
-            python - <<'PY'
-from pathlib import Path
-import os
-root=Path("/opt/venv/lib/python3.12/site-packages")
-rows=[]
-for p in root.iterdir():
-    try:
-        total=0
-        if p.is_file() or p.is_symlink():
-            total=p.lstat().st_size
-        else:
-            for base,dirs,files in os.walk(p, followlinks=False):
-                for name in files:
-                    q=Path(base)/name
-                    try: total += q.lstat().st_size
-                    except OSError: pass
-        rows.append((total,p.name))
-    except OSError:
-        pass
-for size,name in sorted(rows, reverse=True)[:100]:
-    print(f"{size/2**20:8.1f} MiB  {name}")
-PY
-            echo
-            echo "=== remaining venv top-level ==="
-            du -sh /opt/venv/bin /opt/venv/lib/python3.12/site-packages 2>/dev/null || true
-            echo
-            echo "=== staged nvidia/cu13 contents ==="
-            find /opt/mmh3-layer/nvidia-c -type d -path '*/nvidia/cu13/*' -maxdepth 12 -mindepth 1 -print 2>/dev/null | head -80 || true
-            du -sh /opt/mmh3-layer/nvidia-c/opt/venv/lib/python3.12/site-packages/nvidia/cu13/* 2>/dev/null | sort -h || true
-            echo
-            echo "=== pip freeze ==="
-            /opt/venv/bin/pip freeze
-          ' | tee runtime-weight.txt
+          docker run --rm --entrypoint bash -v "$PWD:/audit:ro" mmh3-dependency-audit -lc '/opt/venv/bin/python /audit/scripts/audit_runtime_weight.py' | tee runtime-weight.txt
 
       - uses: actions/upload-artifact@v4
         with:
