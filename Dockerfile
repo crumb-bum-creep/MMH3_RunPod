@@ -1,15 +1,19 @@
-# MMH3 v1 intentionally inherits the exact software family captured from the
-# known-good community pod. Everything above CUDA/PyTorch/Comfy is owned here.
-FROM hearmeman/comfyui-base:cu130-comfy0.32.0-torch2.11.0
+# Startup-optimized MMH3 image.
+#
+# The builder recreates the exact validated Python/Comfy/custom-node stack from
+# the known-good image family. The FINAL image does not inherit the community
+# template filesystem or its layer history: it carries only CUDA runtime,
+# runtime OS libraries, /opt/venv, /ComfyUI, and MMH3 itself.
+
+FROM hearmeman/comfyui-base:cu130-comfy0.32.0-torch2.11.0 AS builder
 
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
 ARG DEBIAN_FRONTEND=noninteractive
 ARG COMFYUI_COMMIT=c2bcbecd82ec5ae66594340b395c24ef0217b238
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl ffmpeg git jq libtcmalloc-minimal4 procps tini \
+      ca-certificates curl ffmpeg git jq libtcmalloc-minimal4 procps \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git -C /ComfyUI fetch --depth=1 origin "${COMFYUI_COMMIT}" \
@@ -37,13 +41,69 @@ RUN /opt/venv/bin/pip install --no-cache-dir \
       'PyYAML==6.0.3' 'requests==2.34.2' 'psutil==7.2.2' \
       'huggingface_hub==1.27.0'
 
-# A custom-node requirements/install step can pull CPU-only onnxruntime, which
-# shadows onnxruntime-gpu because both expose the same Python module. Reassert
-# the CUDA build last, mirroring the known-good community image. ORT_INDEX_ARGS
-# is supplied by the captured base image for its CUDA variant.
 RUN /opt/venv/bin/pip uninstall -y onnxruntime onnxruntime-gpu 2>/dev/null || true; \
     /opt/venv/bin/pip install --no-cache-dir onnxruntime-gpu $ORT_INDEX_ARGS; \
-    /opt/venv/bin/python -c "import onnxruntime as o; p=o.get_available_providers(); assert 'CUDAExecutionProvider' in p, p; print('onnxruntime providers OK:', p)"
+    /opt/venv/bin/python -c "import onnxruntime as o; p=o.get_available_providers(); assert 'CUDAExecutionProvider' in p, p"
+
+# Prune build/cache artifacts before COPY --from so they never become final
+# runtime bytes. Keep git metadata for the existing pin/drift diagnostics.
+RUN set -eux; \
+    git -C /ComfyUI rev-parse HEAD > /ComfyUI/.mmh3_commit; \
+    for d in /ComfyUI/custom_nodes/*; do \
+      if [[ -d "$d/.git" ]]; then git -C "$d" rev-parse HEAD > "$d/.mmh3_commit"; fi; \
+    done; \
+    rm -rf /ComfyUI/custom_nodes/comfyui-manager; \
+    rm -rf /ComfyUI/.git /ComfyUI/custom_nodes/*/.git; \
+    rm -rf /root/.cache /tmp/* /var/tmp/*; \
+    find /opt/venv -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true; \
+    find /ComfyUI -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true
+
+
+# Repack the validated Python environment into balanced registry blobs. This
+# does not change a single final filesystem path; it only gives Docker's
+# concurrent layer downloader several similarly-sized units of work instead of
+# one 1.6+ GB compressed bottleneck.
+COPY scripts/split_runtime_layers.py /tmp/split_runtime_layers.py
+RUN /opt/venv/bin/python /tmp/split_runtime_layers.py \
+    && rm -f /tmp/split_runtime_layers.py \
+    && echo "=== venv skeleton after split ===" \
+    && du -sh /opt/venv /opt/mmh3-layer/*
+
+
+FROM ubuntu:24.04 AS runtime
+
+USER root
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Host NVIDIA drivers are injected by the NVIDIA container runtime. PyTorch's
+# cu130 wheel environment carries the CUDA userspace libraries it was built
+# against, so the image does not need a second copy from nvidia/cuda.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl ffmpeg git iproute2 jq libgl1 libglib2.0-0 \
+      libgomp1 libtcmalloc-minimal4 procps python3.12 python3.12-venv tini \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /opt/mmh3-layer/venv-1/ /
+COPY --from=builder /opt/mmh3-layer/venv-2/ /
+COPY --from=builder /opt/mmh3-layer/venv-3/ /
+COPY --from=builder /opt/mmh3-layer/torch/ /
+COPY --from=builder /opt/mmh3-layer/triton/ /
+COPY --from=builder /opt/mmh3-layer/onnxruntime/ /
+COPY --from=builder /opt/mmh3-layer/cudnn/ /
+COPY --from=builder /opt/mmh3-layer/nvidia-1/ /
+COPY --from=builder /opt/mmh3-layer/nvidia-2/ /
+COPY --from=builder /opt/mmh3-layer/nvidia-3/ /
+COPY --from=builder /ComfyUI /ComfyUI
+
+RUN set -eux; \
+    sed -i -E 's#^home = .*#home = /usr/bin#; s#^executable = .*#executable = /usr/bin/python3.12#' /opt/venv/pyvenv.cfg; \
+    rm -f /opt/venv/bin/python /opt/venv/bin/python3 /opt/venv/bin/python3.12; \
+    ln -s /usr/bin/python3.12 /opt/venv/bin/python; \
+    ln -s /usr/bin/python3.12 /opt/venv/bin/python3; \
+    ln -s /usr/bin/python3.12 /opt/venv/bin/python3.12; \
+    /opt/venv/bin/python -c 'import sys, torch; print(sys.version); print(torch.__version__, torch.version.cuda)'
 
 COPY runtime /opt/mmh3/runtime
 COPY config /opt/mmh3/config
@@ -54,13 +114,16 @@ COPY scripts /opt/mmh3/scripts
 RUN chmod +x /opt/mmh3/runtime/entrypoint.sh /opt/mmh3/scripts/mmh3 \
     && ln -sfn /opt/mmh3/scripts/mmh3 /usr/local/bin/mmh3
 
-ENV PYTHONUNBUFFERED=1 \
+ENV PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PYTHONUNBUFFERED=1 \
     MMH3_IMAGE_ROOT=/opt/mmh3 \
     MMH3_WORKSPACE=/workspace \
     MMH3_COMFY_DIR=/ComfyUI \
     MMH3_COMFY_PORT=8188 \
     MMH3_PHONE_UI_PORT=7860 \
     MMH3_JUPYTER_PORT=8888 \
+    MMH3_MODEL_DOWNLOAD_WORKERS=3 \
+    MMH3_LORA_DOWNLOAD_WORKERS=3 \
     MMH3_AUTO_DOWNLOAD_MODELS=true \
     MMH3_AUTO_DOWNLOAD_LORAS=true
 
