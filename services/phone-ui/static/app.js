@@ -284,8 +284,12 @@ async function addUploadedReference(kind,file){
   }catch(e){toast("Upload failed: "+e.message);}
 }
 
+function isCoreWorkflowLora(item){
+  const file=String(item?.filename||"").toLowerCase();
+  return file.includes("minimax_h3_fl2v_lightx2v_turbo_4step")||file.includes("minimax_h3_ref2v_turbo_4step");
+}
 function sortedLoraCatalog(){
-  return [...state.loraCatalog].sort((a,b)=>
+  return state.loraCatalog.filter(x=>!isCoreWorkflowLora(x)).sort((a,b)=>
     String(a.nickname||a.model_name||a.version_name||a.filename).localeCompare(
       String(b.nickname||b.model_name||b.version_name||b.filename),undefined,{sensitivity:"base"}
     )
@@ -299,7 +303,10 @@ function selectedLoraArray(){
   }));
 }
 function loraOptions(current){
-  return sortedLoraCatalog().map(x=>{
+  const items=sortedLoraCatalog();
+  const missing=current&&!items.some(x=>x.filename===current)
+    ?`<option value="${esc(current)}" selected>Missing · ${esc(current)}</option>`:"";
+  return missing+items.map(x=>{
     const name=x.nickname||x.model_name||x.version_name||x.filename;
     return `<option value="${esc(x.filename)}" ${x.filename===current?"selected":""}>${esc(name)}</option>`;
   }).join("");
@@ -326,7 +333,7 @@ function renderSelectedLoras(){
       const old=state.selectedLoras.get(oldFile)||{};
       const item=state.loraCatalog.find(x=>x.filename===newFile)||old;
       state.selectedLoras.delete(oldFile);
-      state.selectedLoras.set(newFile,{...item,strength:Number($(".gen-lora-strength",row).value||item.recommended_strength||1)});
+      state.selectedLoras.set(newFile,{...item,strength:Number(item.recommended_strength??1)});
       renderSelectedLoras(); stashCurrentDraft();
     };
     $(".gen-lora-strength",row).onchange=e=>{
@@ -402,6 +409,10 @@ async function loadLoras(){
   try{
     const d=await api("/api/loras");
     state.loraCatalog=d.items||[];
+    for(const [file,selected] of state.selectedLoras.entries()){
+      const current=state.loraCatalog.find(x=>x.filename===file);
+      if(current)state.selectedLoras.set(file,{...current,strength:selected.strength});
+    }
     renderLoras(); renderSelectedLoras();
   }catch(e){
     const host=$("#loraLibrary");
