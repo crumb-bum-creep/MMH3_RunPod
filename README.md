@@ -30,12 +30,12 @@ loras/         LoRA metadata catalog (not model weights)
 
 ## Current status
 
-**First real RunPod deployment validated; post-deploy fixes are baked into the current image.**
+**MMH3 v0.6 production runtime validated and published.**
 
-Immutable candidate image:
+Immutable production image:
 
 ```text
-ghcr.io/crumb-bum-creep/mmh3-runpod:sha-7200522bcf6e
+ghcr.io/crumb-bum-creep/mmh3-runpod:sha-d2103b98e602
 ```
 
 Validated in GitHub CI:
@@ -50,7 +50,7 @@ Validated in GitHub CI:
 - ComfyUI custom-node initialization via `--quick-test-for-ci`
 - GHCR push
 
-The first real RTX PRO 6000 Blackwell deployment booted successfully with the expected GPU/RAM profile, required custom nodes, model provisioning path, Auto R2V, and Custom R2V. Post-deploy issues found during that smoke test are covered by regression tests and the current image.
+The runtime architecture was also validated on a real RTX 5090 with CUDA availability, FP16 CUDA matmul, required H3 nodes, automatic provisioning, and a successful H3 generation. v0.6 additionally includes the optimized startup image, persistent per-mode phone-UI drafts, the asset library, compact LoRA management, separated generation-side LoRA selection, and explicit queue ordering.
 
 See:
 
