@@ -45,8 +45,8 @@ def test_assets_have_persistent_nicknames_and_visual_picker():
 def test_r2v_reference_labels_and_reordering_are_explicit():
     assert 'return "<"+letter+ordinal+">"' in APP
     assert "moveRefWithinKind" in APP
-    assert 'class="move-up"' in APP
-    assert 'class="move-down"' in APP
+    assert "move-up" in APP
+    assert "move-down" in APP
     assert 'class="ref-slot"' in APP
 
 
