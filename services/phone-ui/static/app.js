@@ -159,6 +159,8 @@ async function loadUiState(){
   applyDraft(state.uiProfiles[profileKey()]||{});
   state.restoringDraft=false;
   updateDraftLabel();
+  mirrorUiState();
+  scheduleDraftSave();
 }
 
 async function api(path, options={}){
@@ -479,7 +481,7 @@ function renderAssetLibrary(){
       button.disabled=true;
       try{
         await api("/api/assets/meta",{method:"PUT",body:{file,nickname:input.value}});
-        await loadAssets(false);
+        await loadAssets(true);
         toast("Asset nickname saved");
       }catch(e){toast(e.message);}
       finally{button.disabled=false;}
