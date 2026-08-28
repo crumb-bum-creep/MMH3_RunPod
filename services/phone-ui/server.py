@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import mimetypes
 import os
@@ -30,7 +31,7 @@ from mmh3.common import (
 from mmh3.hardware import detect
 from mmh3.loras import sync_loras
 
-APP_VERSION = "0.5.1-mmH3-postdeploy"
+APP_VERSION = "0.6.0-mmH3-library-ux"
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 WORKFLOW_DIR = Path(os.environ.get("MMH3_WORKFLOW_DIR", IMAGE_ROOT / "workflows" / "api"))
@@ -39,6 +40,9 @@ OUTPUT_DIR = COMFY_PERSIST / "output"
 TEMPLATE_FILE = DATA_ROOT / "templates.json"
 RECORD_FILE = DATA_ROOT / "generation_records.json"
 OUTPUT_META_FILE = DATA_ROOT / "output_meta.json"
+ASSET_META_FILE = DATA_ROOT / "assets.json"
+UI_STATE_FILE = DATA_ROOT / "ui_state.json"
+THUMB_DIR = DATA_ROOT / "input_thumbs"
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
@@ -120,6 +124,40 @@ def _inside(root: Path, rel: str) -> Path:
     if p != root and root not in p.parents:
         raise web.HTTPBadRequest(text="invalid path")
     return p
+
+
+def _media_kind(path: Path | str) -> str:
+    suffix = Path(path).suffix.lower()
+    if suffix in IMAGE_EXT:
+        return "image"
+    if suffix in VIDEO_EXT:
+        return "video"
+    if suffix in AUDIO_EXT:
+        return "audio"
+    return "other"
+
+
+def _asset_meta() -> dict[str, Any]:
+    value = _load_json(ASSET_META_FILE, {})
+    return value if isinstance(value, dict) else {}
+
+
+def _asset_item(path: Path, meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    rel = path.relative_to(INPUT_DIR).as_posix()
+    st = path.stat()
+    entry = ((meta or {}).get(rel) or {}) if isinstance(meta, dict) else {}
+    nickname = str(entry.get("nickname") or "").strip()
+    kind = _media_kind(path)
+    return {
+        "file": rel,
+        "size": st.st_size,
+        "mtime": st.st_mtime,
+        "kind": kind,
+        "nickname": nickname,
+        "display_name": nickname or path.name,
+        "has_nickname": bool(nickname),
+        "thumb": f"/media/input-thumb/{rel}" if kind == "image" else None,
+    }
 
 
 def _set_power_loras(graph: dict[str, Any], loras: list[dict[str, Any]]) -> None:
@@ -684,10 +722,25 @@ async def api_queue(request: web.Request) -> web.Response:
     except Exception:
         q = {"queue_running": [], "queue_pending": []}
     items = []
-    for status, key in (("running", "queue_running"), ("queued", "queue_pending")):
-        for row in q.get(key) or []:
-            pid = str(row[1]) if isinstance(row, list) and len(row) > 1 else ""
-            items.append({"prompt_id": pid, "status": status, "record": app["records"].get(pid, {})})
+    running_rows = q.get("queue_running") or []
+    for running_index, row in enumerate(running_rows, start=1):
+        pid = str(row[1]) if isinstance(row, list) and len(row) > 1 else ""
+        items.append({
+            "prompt_id": pid,
+            "status": "running",
+            "position": 0,
+            "label": "RUNNING" if len(running_rows) == 1 else f"RUNNING {running_index}",
+            "record": app["records"].get(pid, {}),
+        })
+    for position, row in enumerate(q.get("queue_pending") or [], start=1):
+        pid = str(row[1]) if isinstance(row, list) and len(row) > 1 else ""
+        items.append({
+            "prompt_id": pid,
+            "status": "queued",
+            "position": position,
+            "label": f"NEXT #{position}",
+            "record": app["records"].get(pid, {}),
+        })
     return web.json_response({"items": items})
 
 
@@ -742,28 +795,123 @@ async def api_upload(request: web.Request) -> web.Response:
     name = f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
     dest = INPUT_DIR / name
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
-    size = 0
-    with dest.open("wb") as f:
+    with dest.open("wb") as out:
         while True:
             chunk = await part.read_chunk(1024 * 1024)
             if not chunk:
                 break
-            size += len(chunk)
-            f.write(chunk)
-    return web.json_response({"file": name, "size": size})
+            out.write(chunk)
+    return web.json_response(_asset_item(dest, _asset_meta()))
 
 
 async def api_inputs(request: web.Request) -> web.Response:
-    kind = str(request.query.get("kind") or "all")
+    kind = str(request.query.get("kind") or "all").lower()
     exts = IMAGE_EXT if kind == "image" else VIDEO_EXT if kind == "video" else AUDIO_EXT if kind == "audio" else MEDIA_EXT
+    meta = _asset_meta()
     items = []
     if INPUT_DIR.exists():
-        for p in INPUT_DIR.rglob("*"):
-            if p.is_file() and p.suffix.lower() in exts:
-                st = p.stat()
-                items.append({"file": p.relative_to(INPUT_DIR).as_posix(), "size": st.st_size, "mtime": st.st_mtime})
-    items.sort(key=lambda x: x["mtime"], reverse=True)
+        for path in INPUT_DIR.rglob("*"):
+            if path.is_file() and path.suffix.lower() in exts:
+                items.append(_asset_item(path, meta))
+    sort = str(request.query.get("sort") or "recent").lower()
+    if sort == "alpha":
+        items.sort(key=lambda item: (str(item.get("display_name") or "").casefold(), str(item["file"]).casefold()))
+    else:
+        items.sort(key=lambda item: item["mtime"], reverse=True)
     return web.json_response({"items": items[:500]})
+
+
+async def api_asset_meta_put(request: web.Request) -> web.Response:
+    body = await request.json()
+    rel = str(body.get("file") or "").strip()
+    if not rel:
+        raise web.HTTPBadRequest(text="asset file required")
+    path = _inside(INPUT_DIR, rel)
+    if not path.is_file() or path.suffix.lower() not in MEDIA_EXT:
+        raise web.HTTPNotFound(text="asset not found")
+    nickname = str(body.get("nickname") or "").strip()[:120]
+    meta = _asset_meta()
+    safe_rel = _safe_rel(rel)
+    entry = dict(meta.get(safe_rel) or {})
+    if nickname:
+        entry["nickname"] = nickname
+        meta[safe_rel] = entry
+    else:
+        entry.pop("nickname", None)
+        if entry:
+            meta[safe_rel] = entry
+        else:
+            meta.pop(safe_rel, None)
+    _save_json(ASSET_META_FILE, meta)
+    return web.json_response({"ok": True, "asset": _asset_item(path, meta)})
+
+
+async def serve_input(request: web.Request) -> web.StreamResponse:
+    path = _inside(INPUT_DIR, request.match_info["path"])
+    if not path.is_file() or path.suffix.lower() not in MEDIA_EXT:
+        raise web.HTTPNotFound()
+    return web.FileResponse(path)
+
+
+async def serve_input_thumb(request: web.Request) -> web.StreamResponse:
+    path = _inside(INPUT_DIR, request.match_info["path"])
+    if not path.is_file() or path.suffix.lower() not in IMAGE_EXT:
+        raise web.HTTPNotFound()
+    st = path.stat()
+    rel = path.relative_to(INPUT_DIR).as_posix()
+    key = hashlib.sha1(f"{rel}:{st.st_mtime_ns}:{st.st_size}".encode("utf-8")).hexdigest()
+    THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    thumb = THUMB_DIR / f"{key}.jpg"
+    if not thumb.exists():
+        try:
+            from PIL import Image, ImageOps
+            with Image.open(path) as image:
+                image = ImageOps.exif_transpose(image)
+                image.thumbnail((180, 180), Image.Resampling.LANCZOS)
+                if image.mode != "RGB":
+                    if "A" in image.getbands():
+                        bg = Image.new("RGB", image.size, (14, 18, 27))
+                        bg.paste(image, mask=image.getchannel("A"))
+                        image = bg
+                    else:
+                        image = image.convert("RGB")
+                image.save(thumb, "JPEG", quality=82, optimize=True)
+        except Exception as exc:
+            raise web.HTTPUnsupportedMediaType(text=f"thumbnail failed: {exc}")
+    response = web.FileResponse(thumb)
+    response.headers["Cache-Control"] = "private, max-age=300"
+    return response
+
+
+async def api_ui_state_get(request: web.Request) -> web.Response:
+    value = _load_json(UI_STATE_FILE, {"active": {"mode": "t2v", "prompt_mode": "auto"}, "profiles": {}})
+    if not isinstance(value, dict):
+        value = {"active": {"mode": "t2v", "prompt_mode": "auto"}, "profiles": {}}
+    return web.json_response(value)
+
+
+async def api_ui_state_put(request: web.Request) -> web.Response:
+    body = await request.json()
+    profiles = body.get("profiles")
+    active = body.get("active")
+    if not isinstance(profiles, dict) or not isinstance(active, dict):
+        raise web.HTTPBadRequest(text="ui state requires active + profiles objects")
+    allowed_modes = {"t2v", "i2v", "r2v"}
+    allowed_prompt_modes = {"auto", "custom"}
+    mode = str(active.get("mode") or "t2v").lower()
+    prompt_mode = str(active.get("prompt_mode") or "auto").lower()
+    if mode not in allowed_modes or prompt_mode not in allowed_prompt_modes:
+        raise web.HTTPBadRequest(text="invalid active UI profile")
+    clean_profiles = {}
+    for key, value in profiles.items():
+        if key not in {f"{m}:{p}" for m in allowed_modes for p in allowed_prompt_modes}:
+            continue
+        if isinstance(value, dict):
+            clean_profiles[key] = value
+    value = {"active": {"mode": mode, "prompt_mode": prompt_mode}, "profiles": clean_profiles}
+    _save_json(UI_STATE_FILE, value)
+    return web.json_response({"ok": True, **value})
+
 
 
 def _has_audio(path: Path) -> bool:
@@ -1031,6 +1179,11 @@ def make_app(comfy_url: str) -> web.Application:
         web.post("/api/cancel/{pid}", api_cancel),
         web.post("/api/upload", api_upload),
         web.get("/api/inputs", api_inputs),
+        web.put("/api/assets/meta", api_asset_meta_put),
+        web.get("/media/input/{path:.*}", serve_input),
+        web.get("/media/input-thumb/{path:.*}", serve_input_thumb),
+        web.get("/api/ui-state", api_ui_state_get),
+        web.put("/api/ui-state", api_ui_state_put),
         web.get("/api/outputs", api_outputs),
         web.delete("/api/outputs/{path:.*}", api_delete_output),
         web.get("/media/output/{path:.*}", serve_output),
