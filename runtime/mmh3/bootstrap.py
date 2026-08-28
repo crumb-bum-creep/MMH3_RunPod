@@ -49,9 +49,13 @@ def custom_node_report() -> list[dict]:
         path = COMFY_DIR / "custom_nodes" / name
         expected = str((item or {}).get("commit", ""))
         try:
-            actual = subprocess.check_output(
-                ["git", "-C", str(path), "rev-parse", "HEAD"], text=True
-            ).strip()
+            marker = path / ".mmh3_commit"
+            if marker.is_file():
+                actual = marker.read_text(encoding="utf-8").strip()
+            else:
+                actual = subprocess.check_output(
+                    ["git", "-C", str(path), "rev-parse", "HEAD"], text=True
+                ).strip()
             status = "ok" if actual == expected else "drift"
         except Exception:
             actual = ""

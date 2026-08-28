@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
@@ -12,9 +14,11 @@ from .common import COMFY_PERSIST, DATA_ROOT, dump_json, load_yaml
 
 _SAFE = re.compile(r"[^A-Za-z0-9._ ()\-+]+")
 
+
 def _safe_filename(name: str) -> str:
     name = Path(name).name.strip() or "lora.safetensors"
     return _SAFE.sub("_", name)[:240]
+
 
 def _with_token(url: str, token: str | None) -> str:
     if not token:
@@ -23,6 +27,7 @@ def _with_token(url: str, token: str | None) -> str:
     q = dict(parse_qsl(p.query, keep_blank_values=True))
     q["token"] = token
     return urlunsplit((p.scheme, p.netloc, p.path, urlencode(q), p.fragment))
+
 
 def _version_ids(cfg: dict[str, Any]) -> list[int]:
     ids: list[int] = []
@@ -36,12 +41,21 @@ def _version_ids(cfg: dict[str, Any]) -> list[int]:
                 ids.append(int(part))
     return list(dict.fromkeys(ids))
 
+
 def _overrides(cfg: dict[str, Any]) -> dict[int, dict[str, Any]]:
     out = {}
     for item in cfg.get("loras", []) or []:
         if item and item.get("version_id"):
             out[int(item["version_id"])] = item
     return out
+
+
+def _workers() -> int:
+    try:
+        return max(1, min(8, int(os.environ.get("MMH3_LORA_DOWNLOAD_WORKERS", "3"))))
+    except ValueError:
+        return 3
+
 
 def sync_loras(config_path: Path) -> dict[str, Any]:
     cfg = load_yaml(config_path, {}) or {}
@@ -50,13 +64,51 @@ def sync_loras(config_path: Path) -> dict[str, Any]:
     token = os.environ.get("CIVITAI_TOKEN") or os.environ.get("civitai_token") or None
     root = COMFY_PERSIST / "models" / "loras"
     root.mkdir(parents=True, exist_ok=True)
-    session = requests.Session()
-    if token:
-        session.headers["Authorization"] = f"Bearer {token}"
 
-    managed: list[dict[str, Any]] = []
-    for vid in version_ids:
+    existing_by_id: dict[int, dict[str, Any]] = {}
+    try:
+        existing = json.loads((DATA_ROOT / "lora_catalog.json").read_text(encoding="utf-8"))
+        for item in existing.get("managed") or []:
+            if (item or {}).get("version_id"):
+                existing_by_id[int(item["version_id"])] = item
+    except Exception:
+        pass
+
+    def sync_one(vid: int) -> dict[str, Any]:
         override = overrides.get(vid, {})
+
+        # Warm-volume fast path: if the managed weight is already present, do
+        # not make a CivitAI API request just to rediscover metadata we already
+        # persisted. Merge the editable YAML fields over the prior catalog so
+        # UI edits take effect immediately and startup remains network-free.
+        configured_name = str(override.get("filename") or "").strip()
+        if configured_name:
+            filename = _safe_filename(configured_name)
+            dest = root / filename
+            if dest.is_file() and dest.stat().st_size >= 1024 * 1024:
+                prior = existing_by_id.get(vid, {})
+                def chosen(key: str, fallback: Any) -> Any:
+                    return override[key] if key in override else prior.get(key, fallback)
+                return {
+                    "version_id": vid,
+                    "model_id": prior.get("model_id"),
+                    "model_name": prior.get("model_name"),
+                    "version_name": prior.get("version_name"),
+                    "nickname": chosen("nickname", prior.get("model_name") or prior.get("version_name") or filename),
+                    "filename": filename,
+                    "path": str(dest),
+                    "trigger_words": chosen("trigger_words", []),
+                    "recommended_strength": chosen("recommended_strength", 1.0),
+                    "notes": chosen("notes", []),
+                    "tags": chosen("tags", []),
+                    "managed": True,
+                    "status": "ready",
+                    "metadata_source": "persistent",
+                }
+
+        session = requests.Session()
+        if token:
+            session.headers["Authorization"] = f"Bearer {token}"
         try:
             meta_r = session.get(f"https://civitai.com/api/v1/model-versions/{vid}", timeout=30)
             meta_r.raise_for_status()
@@ -74,15 +126,15 @@ def sync_loras(config_path: Path) -> dict[str, Any]:
                 download = file_meta.get("downloadUrl") or f"https://civitai.com/api/download/models/{vid}"
                 download = _with_token(download, token)
                 tmp = dest.with_suffix(dest.suffix + ".part")
-                with requests.get(download, stream=True, timeout=(30, 600)) as r:
+                with session.get(download, stream=True, timeout=(30, 600)) as r:
                     r.raise_for_status()
-                    with tmp.open("wb") as f:
+                    with tmp.open("wb") as out:
                         for chunk in r.iter_content(chunk_size=8 * 1024 * 1024):
                             if chunk:
-                                f.write(chunk)
+                                out.write(chunk)
                 os.replace(tmp, dest)
             model = meta.get("model") or {}
-            managed.append({
+            return {
                 "version_id": vid,
                 "model_id": model.get("id"),
                 "model_name": model.get("name"),
@@ -90,15 +142,30 @@ def sync_loras(config_path: Path) -> dict[str, Any]:
                 "nickname": override.get("nickname") or model.get("name") or meta.get("name") or filename,
                 "filename": filename,
                 "path": str(dest),
-                "trigger_words": override.get("trigger_words") or meta.get("trainedWords") or [],
+                "trigger_words": override["trigger_words"] if "trigger_words" in override else (meta.get("trainedWords") or []),
                 "recommended_strength": override.get("recommended_strength", 1.0),
-                "notes": override.get("notes") or [],
-                "tags": override.get("tags") or [],
+                "notes": override["notes"] if "notes" in override else [],
+                "tags": override["tags"] if "tags" in override else [],
                 "managed": True,
                 "status": "ready",
-            })
+            }
         except Exception as exc:
-            managed.append({"version_id": vid, "managed": True, "status": "error", "error": repr(exc)})
+            return {"version_id": vid, "managed": True, "status": "error", "error": repr(exc)}
+        finally:
+            session.close()
+
+    managed: list[dict[str, Any]]
+    workers = _workers()
+    if workers == 1 or len(version_ids) <= 1:
+        managed = [sync_one(vid) for vid in version_ids]
+    else:
+        by_id: dict[int, dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=min(workers, len(version_ids)), thread_name_prefix="mmh3-lora") as pool:
+            future_to_id = {pool.submit(sync_one, vid): vid for vid in version_ids}
+            for future in as_completed(future_to_id):
+                vid = future_to_id[future]
+                by_id[vid] = future.result()
+        managed = [by_id[vid] for vid in version_ids]
 
     known = {x.get("filename") for x in managed if x.get("filename")}
     unmanaged = []

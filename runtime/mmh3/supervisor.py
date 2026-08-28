@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -8,11 +9,29 @@ import threading
 import time
 
 from . import comfy
-from .common import CONFIG_ROOT, IMAGE_ROOT, LOG_ROOT, COMFY_DIR, load_yaml
+from .common import CONFIG_ROOT, IMAGE_ROOT, LOG_ROOT, STATE_ROOT, COMFY_DIR, dump_json, load_yaml
 from .hardware import detect, select_profile
 from .memory_guard import run as run_memory_guard
 
 STOP = threading.Event()
+
+try:
+    START_EPOCH = float(os.environ.get("MMH3_CONTAINER_START_EPOCH") or time.time())
+except ValueError:
+    START_EPOCH = time.time()
+
+
+def startup_mark(**values) -> None:
+    path = STATE_ROOT / "startup.json"
+    current = {}
+    try:
+        current = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    current.update(values)
+    current["elapsed_seconds"] = round(time.time() - START_EPOCH, 3)
+    current["updated_at"] = time.time()
+    dump_json(path, current)
 
 def log_file(name: str):
     LOG_ROOT.mkdir(parents=True, exist_ok=True)
@@ -108,6 +127,7 @@ def terminate(proc: subprocess.Popen | None) -> None:
         proc.kill()
 
 def main() -> int:
+    startup_mark(supervisor_started=True)
     runtime = load_yaml(CONFIG_ROOT / "runtime.yaml", {}) or {}
     hw = detect()
     _, profile = select_profile(hw, IMAGE_ROOT / "config" / "hardware_profiles.yaml")
@@ -115,15 +135,29 @@ def main() -> int:
     mem_cfg.update(profile.get("memory") or {})
     threading.Thread(target=run_memory_guard, args=(mem_cfg,), daemon=True).start()
 
-    # Bring the control plane up immediately, while model/LoRA provisioning
-    # proceeds independently in the background on a fresh volume.
-    provision_proc = start_provisioner()
-    comfy_proc = start_comfy()
+    # Optimize for two separate milestones:
+    #   * interactive shell/UI availability as fast as possible;
+    #   * first-generation readiness on an empty volume.
+    #
+    # Phone UI and Comfy start first. Give them a very short uncontested grace
+    # period, then start large model downloads while Comfy finishes importing.
+    # Jupyter is intentionally deferred until Comfy is healthy so notebook
+    # startup cannot steal CPU/I/O from the latency-critical service.
     phone_proc = start_phone()
-    jupyter_proc = start_jupyter()
+    comfy_proc = start_comfy()
+    startup_mark(phone_spawned=True, comfy_spawned=True)
 
-    if not comfy.wait_ready(240):
-        print("[mmh3] ComfyUI did not become healthy within 240s; supervisor remains alive.", flush=True)
+    STOP.wait(3)
+    provision_proc = start_provisioner()
+    startup_mark(provisioner_started=True)
+
+    comfy_ready = comfy.wait_ready(180)
+    startup_mark(comfy_ready=comfy_ready, comfy_ready_seconds=round(time.time() - START_EPOCH, 3))
+    if not comfy_ready:
+        print("[mmh3] ComfyUI did not become healthy within 180s; supervisor remains alive.", flush=True)
+
+    jupyter_proc = start_jupyter()
+    startup_mark(jupyter_spawned=bool(jupyter_proc))
 
     def _signal(_sig, _frame):
         STOP.set()

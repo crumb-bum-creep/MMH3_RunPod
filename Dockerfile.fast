@@ -59,44 +59,24 @@ RUN set -eux; \
     find /ComfyUI -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true
 
 
-# Repack the validated Python environment into balanced registry blobs. This
-# does not change a single final filesystem path; it only gives Docker's
-# concurrent layer downloader several similarly-sized units of work instead of
-# one 1.6+ GB compressed bottleneck.
-COPY scripts/split_runtime_layers.py /tmp/split_runtime_layers.py
-RUN /opt/venv/bin/python /tmp/split_runtime_layers.py \
-    && rm -f /tmp/split_runtime_layers.py \
-    && echo "=== venv skeleton after split ===" \
-    && du -sh /opt/venv /opt/mmh3-layer/*
-
-
-FROM ubuntu:24.04 AS runtime
+FROM nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04
 
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Host NVIDIA drivers are injected by the NVIDIA container runtime. PyTorch's
-# cu130 wheel environment carries the CUDA userspace libraries it was built
-# against, so the image does not need a second copy from nvidia/cuda.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl ffmpeg git iproute2 jq libgl1 libglib2.0-0 \
-      libgomp1 libtcmalloc-minimal4 procps python3.12 python3.12-venv tini \
+      ca-certificates curl ffmpeg git iproute2 jq libtcmalloc-minimal4 \
+      procps python3.12 python3.12-venv tini \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
 
+# Two intentional application layers. The huge community base remains in the
+# discarded builder stage and therefore is never pulled by a RunPod worker.
 COPY --from=builder /opt/venv /opt/venv
-COPY --from=builder /opt/mmh3-layer/venv-1/ /
-COPY --from=builder /opt/mmh3-layer/venv-2/ /
-COPY --from=builder /opt/mmh3-layer/venv-3/ /
-COPY --from=builder /opt/mmh3-layer/torch/ /
-COPY --from=builder /opt/mmh3-layer/triton/ /
-COPY --from=builder /opt/mmh3-layer/onnxruntime/ /
-COPY --from=builder /opt/mmh3-layer/cudnn/ /
-COPY --from=builder /opt/mmh3-layer/nvidia-1/ /
-COPY --from=builder /opt/mmh3-layer/nvidia-2/ /
-COPY --from=builder /opt/mmh3-layer/nvidia-3/ /
 COPY --from=builder /ComfyUI /ComfyUI
 
+# Retarget the copied venv to Ubuntu 24.04's system Python 3.12. Site-packages
+# remain byte-for-byte from the validated builder environment.
 RUN set -eux; \
     sed -i -E 's#^home = .*#home = /usr/bin#; s#^executable = .*#executable = /usr/bin/python3.12#' /opt/venv/pyvenv.cfg; \
     rm -f /opt/venv/bin/python /opt/venv/bin/python3 /opt/venv/bin/python3.12; \
@@ -114,7 +94,7 @@ COPY scripts /opt/mmh3/scripts
 RUN chmod +x /opt/mmh3/runtime/entrypoint.sh /opt/mmh3/scripts/mmh3 \
     && ln -sfn /opt/mmh3/scripts/mmh3 /usr/local/bin/mmh3
 
-ENV PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+ENV PATH=/opt/venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     PYTHONUNBUFFERED=1 \
     MMH3_IMAGE_ROOT=/opt/mmh3 \
     MMH3_WORKSPACE=/workspace \

@@ -8,14 +8,22 @@ const state = {
   mode: "t2v",
   promptMode: "auto",
   refs: [],
+  startingImage: null,
   selectedLoras: new Map(),
   loraCatalog: [],
+  assetCatalog: [],
   templates: {},
   outputs: [],
   info: null,
   openOutputs: new Set(),
   outputsSignature: "",
   refKind: "image",
+  uiProfiles: {},
+  uiUpdatedAt: 0,
+  draftTimer: null,
+  restoringDraft: false,
+  assetPickerMode: null,
+  assetPickerKind: "all",
 };
 
 function esc(v=""){
@@ -35,6 +43,125 @@ function toast(msg){
   clearTimeout(toast.t); toast.t=setTimeout(()=>el.classList.remove("show"),2200);
 }
 function msg(el,text,type=""){ el.textContent=text||""; el.className="message"+(type?" "+type:""); }
+
+function profileKey(mode=state.mode,promptMode=state.promptMode){ return mode+":"+promptMode; }
+function assetByFile(file){ return state.assetCatalog.find(x=>x.file===file)||null; }
+function assetName(file){
+  const a=assetByFile(file);
+  return a?.display_name||a?.nickname||file?.split("/").pop()||file||"";
+}
+function assetThumb(file){
+  const a=assetByFile(file);
+  return a?.thumb||null;
+}
+function assetKind(file){
+  const a=assetByFile(file);
+  if(a?.kind)return a.kind;
+  const ext=String(file||"").split(".").pop().toLowerCase();
+  return ["png","jpg","jpeg","webp","bmp"].includes(ext)?"image":
+    ["mp4","mov","mkv","webm","avi"].includes(ext)?"video":"audio";
+}
+function refTag(index){
+  const ref=state.refs[index], letter={image:"P",video:"V",audio:"A"}[ref?.kind]||"?";
+  const ordinal=state.refs.slice(0,index+1).filter(x=>x.kind===ref.kind).length;
+  return "<"+letter+ordinal+">";
+}
+function captureDraft(){
+  return {
+    prompt:$("#prompt")?.value||"",
+    aspect_ratio:$("#aspect")?.value||"9:16 (Portrait Widescreen)",
+    megapixels:Number($("#mp")?.value||0.7),
+    duration:Number($("#duration")?.value||5),
+    seed:Number($("#seed")?.value||1),
+    randomize_seed:$("#randomSeed")?.checked!==false,
+    starting_image:state.startingImage||null,
+    refs:structuredClone(state.refs||[]),
+    loras:selectedLoraArray()
+  };
+}
+function mirrorUiState(){
+  const payload={
+    active:{mode:state.mode,prompt_mode:state.promptMode},
+    profiles:state.uiProfiles,
+    updated_at:Date.now()/1000
+  };
+  state.uiUpdatedAt=payload.updated_at;
+  try{localStorage.setItem("mmh3.uiState.v2",JSON.stringify(payload));}catch{}
+  return payload;
+}
+function stashCurrentDraft(){
+  if(state.restoringDraft)return;
+  state.uiProfiles[profileKey()]=captureDraft();
+  mirrorUiState();
+  scheduleDraftSave();
+}
+function scheduleDraftSave(){
+  clearTimeout(state.draftTimer);
+  state.draftTimer=setTimeout(async()=>{
+    try{
+      const payload=mirrorUiState();
+      const d=await api("/api/ui-state",{method:"PUT",body:payload});
+      state.uiUpdatedAt=Number(d.updated_at||state.uiUpdatedAt);
+    }catch{}
+  },450);
+}
+function applyDraft(v={}){
+  state.restoringDraft=true;
+  $("#prompt").value=v.prompt||v.prompt_idea||"";
+  $("#aspect").value=v.aspect_ratio||"9:16 (Portrait Widescreen)";
+  $("#mp").value=v.megapixels!=null?v.megapixels:0.7;
+  $("#duration").value=v.duration!=null?v.duration:5;
+  $("#seed").value=v.seed!=null?v.seed:1;
+  $("#randomSeed").checked=v.randomize_seed!==false;
+  state.startingImage=v.starting_image||null;
+  state.refs=Array.isArray(v.refs)?structuredClone(v.refs):[];
+  state.selectedLoras.clear();
+  (v.loras||[]).forEach(x=>{if(x.filename&&!isCoreWorkflowLora(x))state.selectedLoras.set(x.filename,{...x});});
+  renderStartingImage();
+  renderRefs();
+  renderSelectedLoras();
+  state.restoringDraft=false;
+}
+function updateDraftLabel(){
+  const el=$("#draftLabel");
+  if(el)el.textContent=state.mode.toUpperCase()+" "+(state.promptMode==="auto"?"Auto":"Custom")+" draft · autosaved";
+}
+function activateProfile(mode,promptMode){
+  if(!state.restoringDraft)stashCurrentDraft();
+  state.mode=mode;
+  state.promptMode=promptMode;
+  setSegment($("#modeSeg"),mode);
+  setSegment($("#promptModeSeg"),promptMode);
+  $("#i2vBlock").hidden=mode!=="i2v";
+  $("#r2vBlock").hidden=mode!=="r2v";
+  $("#promptLabel").textContent=promptMode==="auto"?"Prompt idea":"Custom prompt";
+  applyDraft(state.uiProfiles[profileKey()]||{});
+  updateDraftLabel();
+  refreshInputOptions();
+  mirrorUiState();
+  scheduleDraftSave();
+}
+async function loadUiState(){
+  let remote={active:{mode:"t2v",prompt_mode:"auto"},profiles:{},updated_at:0};
+  try{ remote=await api("/api/ui-state"); }catch{}
+  let local=null;
+  try{local=JSON.parse(localStorage.getItem("mmh3.uiState.v2")||"null");}catch{}
+  const source=local&&Number(local.updated_at||0)>Number(remote.updated_at||0)?local:remote;
+  state.uiProfiles=source.profiles&&typeof source.profiles==="object"?source.profiles:{};
+  state.uiUpdatedAt=Number(source.updated_at||0);
+  const mode=["t2v","i2v","r2v"].includes(source.active?.mode)?source.active.mode:"t2v";
+  const pm=["auto","custom"].includes(source.active?.prompt_mode)?source.active.prompt_mode:"auto";
+  state.restoringDraft=true;
+  state.mode=mode; state.promptMode=pm;
+  setSegment($("#modeSeg"),mode); setSegment($("#promptModeSeg"),pm);
+  $("#i2vBlock").hidden=mode!=="i2v"; $("#r2vBlock").hidden=mode!=="r2v";
+  $("#promptLabel").textContent=pm==="auto"?"Prompt idea":"Custom prompt";
+  applyDraft(state.uiProfiles[profileKey()]||{});
+  state.restoringDraft=false;
+  updateDraftLabel();
+  mirrorUiState();
+  scheduleDraftSave();
+}
 
 async function api(path, options={}){
   const opts={...options, headers:{...(options.headers||{})}};
@@ -63,22 +190,14 @@ function switchTab(name){
   $$(".tab").forEach(s=>s.classList.toggle("active",s.id==="tab-"+name));
   if(name==="outputs") refreshOutputs(true);
   if(name==="loras") loadLoras();
+  if(name==="assets") loadAssets();
   if(name==="system"){ refreshInfo(); loadPrompts(); }
 }
 function setSegment(host, value){
   $$("button",host).forEach(b=>b.classList.toggle("active",b.dataset.value===value));
 }
-function setMode(mode){
-  state.mode=mode; setSegment($("#modeSeg"),mode);
-  $("#i2vBlock").hidden=mode!=="i2v";
-  $("#r2vBlock").hidden=mode!=="r2v";
-  $("#promptLabel").textContent=state.promptMode==="auto"?"Prompt idea":"Custom prompt";
-  refreshInputOptions();
-}
-function setPromptMode(mode){
-  state.promptMode=mode; setSegment($("#promptModeSeg"),mode);
-  $("#promptLabel").textContent=mode==="auto"?"Prompt idea":"Custom prompt";
-}
+function setMode(mode){ activateProfile(mode,state.promptMode); }
+function setPromptMode(mode){ activateProfile(state.mode,mode); }
 
 async function uploadFile(file){
   const fd=new FormData(); fd.append("file",file,file.name||"upload.bin");
@@ -86,42 +205,88 @@ async function uploadFile(file){
 }
 
 async function refreshInputOptions(){
-  try{
-    const d=await api("/api/inputs?kind=image");
-    const start=$("#startImage"); const current=start.value;
-    start.innerHTML='<option value="">Select existing image…</option>'+
-      (d.items||[]).map(x=>'<option value="'+esc(x.file)+'">'+esc(x.file)+'</option>').join("");
-    if([...start.options].some(o=>o.value===current)) start.value=current;
-
-    const all=await api("/api/inputs?kind=all");
-    const ref=$("#refExisting"); const rc=ref.value;
-    ref.innerHTML='<option value="">Existing input…</option>'+
-      (all.items||[]).map(x=>{
-        const ext=x.file.split(".").pop().toLowerCase();
-        const kind=["png","jpg","jpeg","webp","bmp"].includes(ext)?"image":
-          ["mp4","mov","mkv","webm","avi"].includes(ext)?"video":"audio";
-        return '<option data-kind="'+kind+'" value="'+esc(x.file)+'">'+esc(kind.toUpperCase()+" · "+x.file)+'</option>';
-      }).join("");
-    if([...ref.options].some(o=>o.value===rc)) ref.value=rc;
-  }catch(e){}
+  return loadAssets(false);
 }
+
+async function renameAsset(file){
+  if(!file)return;
+  const current=assetByFile(file);
+  const next=prompt("Asset nickname",current?.nickname||"");
+  if(next===null)return;
+  try{
+    await api("/api/assets/meta",{method:"PUT",body:{file,nickname:next}});
+    await loadAssets(false);
+    toast(next.trim()?"Asset nickname saved":"Asset nickname cleared");
+  }catch(e){toast(e.message);}
+}
+
+function renderStartingImage(){
+  const host=$("#startSelected");
+  if(!host)return;
+  const file=state.startingImage;
+  if(!file){
+    host.className="selected-asset-slot muted";
+    host.innerHTML="No starting image selected.";
+    return;
+  }
+  const thumb=assetThumb(file);
+  host.className="selected-asset-slot";
+  host.innerHTML=`<div class="selected-asset-inner">
+    <div class="asset-mini">
+      ${thumb?`<img src="${esc(thumb)}" alt="">`:'<div class="asset-icon">IMG</div>'}
+      <div class="asset-mini-text"><strong>${esc(assetName(file))}</strong><div class="muted">${esc(file)}</div></div>
+    </div>
+    <button class="ghost small rename-start-asset" type="button">Name</button>
+  </div>`;
+  $(".rename-start-asset",host).onclick=()=>renameAsset(file);
+}
+
+function moveRefWithinKind(index,delta){
+  const ref=state.refs[index];
+  if(!ref)return;
+  const same=state.refs.map((x,i)=>x.kind===ref.kind?i:-1).filter(i=>i>=0);
+  const pos=same.indexOf(index), next=same[pos+delta];
+  if(next==null)return;
+  [state.refs[index],state.refs[next]]=[state.refs[next],state.refs[index]];
+  renderRefs(); stashCurrentDraft();
+}
+
 function renderRefs(){
   const host=$("#refs");
+  if(!host)return;
   if(!state.refs.length){host.innerHTML='<div class="muted">No references selected.</div>';return;}
-  host.innerHTML=state.refs.map((r,i)=>`
-    <div class="ref-card" data-i="${i}">
-      <div>
-        <strong>${esc(r.kind.toUpperCase())}</strong> · ${esc(r.file)}
-        ${r.kind==="video"?`<label class="check"><input class="soundtrack" type="checkbox" ${r.use_soundtrack!==false?"checked":""}> Use video soundtrack</label>`:""}
+  host.innerHTML=state.refs.map((r,i)=>{
+    const thumb=r.kind==="image"?assetThumb(r.file):null;
+    const same=state.refs.map((x,j)=>x.kind===r.kind?j:-1).filter(j=>j>=0);
+    const pos=same.indexOf(i);
+    return `<div class="ref-card ref-rich" data-i="${i}">
+      <div class="asset-mini">
+        ${thumb?`<img src="${esc(thumb)}" alt="">`:`<div class="asset-icon">${esc(({image:"IMG",video:"VID",audio:"AUD"}[r.kind]||"?"))}</div>`}
+        <div class="asset-mini-text">
+          <div class="ref-title"><span class="ref-slot">${esc(refTag(i))}</span><strong>${esc(assetName(r.file))}</strong></div>
+          <div class="muted filename-line">${esc(r.file)}</div>
+          ${r.kind==="video"?`<label class="check compact-check"><input class="soundtrack" type="checkbox" ${r.use_soundtrack!==false?"checked":""}> Use soundtrack</label>`:""}
+        </div>
       </div>
-      <button class="danger ghost remove-ref">×</button>
-    </div>`).join("");
+      <div class="ref-actions">
+        <button class="ghost small rename-ref" type="button" aria-label="Nickname asset">✎</button>
+        <button class="ghost small move-up" type="button" ${pos===0?"disabled":""} aria-label="Move up">↑</button>
+        <button class="ghost small move-down" type="button" ${pos===same.length-1?"disabled":""} aria-label="Move down">↓</button>
+        <button class="danger ghost small remove-ref" type="button" aria-label="Remove">×</button>
+      </div>
+    </div>`;
+  }).join("");
   $$(".ref-card",host).forEach(row=>{
     const i=Number(row.dataset.i);
-    $(".remove-ref",row).onclick=()=>{state.refs.splice(i,1);renderRefs();};
-    const cb=$(".soundtrack",row); if(cb) cb.onchange=()=>state.refs[i].use_soundtrack=cb.checked;
+    $(".remove-ref",row).onclick=()=>{state.refs.splice(i,1);renderRefs();stashCurrentDraft();};
+    $(".rename-ref",row).onclick=()=>renameAsset(state.refs[i].file);
+    $(".move-up",row).onclick=()=>moveRefWithinKind(i,-1);
+    $(".move-down",row).onclick=()=>moveRefWithinKind(i,1);
+    const cb=$(".soundtrack",row);
+    if(cb)cb.onchange=()=>{state.refs[i].use_soundtrack=cb.checked;stashCurrentDraft();};
   });
 }
+
 function canAddRef(kind){
   const cap={image:9,video:3,audio:3}[kind];
   return state.refs.filter(x=>x.kind===kind).length<cap;
@@ -129,78 +294,127 @@ function canAddRef(kind){
 function addRef(kind,file,useSoundtrack=true){
   if(!canAddRef(kind)){toast("Reference limit reached for "+kind);return false;}
   state.refs.push({kind,file,...(kind==="video"?{use_soundtrack:useSoundtrack}:{})});
-  renderRefs(); return true;
+  renderRefs(); stashCurrentDraft(); return true;
 }
-
 async function addUploadedReference(kind,file){
   try{
     const d=await uploadFile(file);
-    addRef(kind,d.file,true); refreshInputOptions();
+    await loadAssets(false);
+    addRef(kind,d.file,true);
   }catch(e){toast("Upload failed: "+e.message);}
 }
 
+function isCoreWorkflowLora(item){
+  const file=String(item?.filename||"").toLowerCase();
+  return file.includes("minimax_h3_fl2v_lightx2v_turbo_4step")||file.includes("minimax_h3_ref2v_turbo_4step");
+}
+function sortedLoraCatalog(){
+  return state.loraCatalog.filter(x=>!isCoreWorkflowLora(x)).sort((a,b)=>
+    String(a.nickname||a.model_name||a.version_name||a.filename).localeCompare(
+      String(b.nickname||b.model_name||b.version_name||b.filename),undefined,{sensitivity:"base"}
+    )
+  );
+}
 function selectedLoraArray(){
   return [...state.selectedLoras.values()].map(x=>({
     filename:x.filename,
     strength:Number(x.strength ?? x.recommended_strength ?? 1),
-    nickname:x.nickname||x.model_name||x.filename
+    nickname:x.nickname||x.model_name||x.version_name||x.filename
   }));
+}
+function loraOptions(current){
+  const items=sortedLoraCatalog();
+  const missing=current&&!items.some(x=>x.filename===current)
+    ?`<option value="${esc(current)}" selected>Missing · ${esc(current)}</option>`:"";
+  return missing+items.map(x=>{
+    const name=x.nickname||x.model_name||x.version_name||x.filename;
+    return `<option value="${esc(x.filename)}" ${x.filename===current?"selected":""}>${esc(name)}</option>`;
+  }).join("");
 }
 function renderSelectedLoras(){
   const host=$("#selectedLoras"), arr=selectedLoraArray();
+  if(!host)return;
   $("#loraCount").textContent=String(arr.length);
+  const add=$("#addGenerationLora");
+  if(add){
+    const available=sortedLoraCatalog().filter(x=>!state.selectedLoras.has(x.filename));
+    add.innerHTML='<option value="">+ Add LoRA…</option>'+available.map(x=>`<option value="${esc(x.filename)}">${esc(x.nickname||x.model_name||x.version_name||x.filename)}</option>`).join("");
+    add.value="";
+  }
   if(!arr.length){host.innerHTML='<div class="muted">No custom LoRAs selected.</div>';return;}
-  host.innerHTML=arr.map(x=>`<div class="ref-card"><div><strong>${esc(x.nickname)}</strong><div class="muted">${esc(x.filename)}</div></div><span class="pill">${Number(x.strength).toFixed(2)}</span></div>`).join("");
+  host.innerHTML=arr.map(x=>`<div class="gen-lora-row" data-file="${esc(x.filename)}">
+    <select class="gen-lora-select" aria-label="LoRA">${loraOptions(x.filename)}</select>
+    <input class="gen-lora-strength" aria-label="Strength" type="number" step=".05" min="-3" max="3" value="${esc(Number(x.strength).toFixed(2))}">
+    <button class="danger ghost remove-gen-lora" type="button" aria-label="Remove LoRA">×</button>
+  </div>`).join("");
+  $$(".gen-lora-row",host).forEach(row=>{
+    const oldFile=row.dataset.file;
+    $(".gen-lora-select",row).onchange=e=>{
+      const newFile=e.target.value;
+      if(newFile!==oldFile && state.selectedLoras.has(newFile)){
+        toast("That LoRA is already selected");
+        e.target.value=oldFile;
+        return;
+      }
+      const old=state.selectedLoras.get(oldFile)||{};
+      const item=state.loraCatalog.find(x=>x.filename===newFile)||old;
+      state.selectedLoras.delete(oldFile);
+      state.selectedLoras.set(newFile,{...item,strength:Number(item.recommended_strength??1)});
+      renderSelectedLoras(); stashCurrentDraft();
+    };
+    $(".gen-lora-strength",row).onchange=e=>{
+      const item=state.selectedLoras.get(oldFile);
+      if(item){item.strength=Number(e.target.value||item.recommended_strength||1);stashCurrentDraft();}
+    };
+    $(".remove-gen-lora",row).onclick=()=>{state.selectedLoras.delete(oldFile);renderSelectedLoras();stashCurrentDraft();};
+  });
 }
+function addGenerationLora(file){
+  const next=sortedLoraCatalog().find(x=>x.filename===file);
+  if(!next)return;
+  if(state.selectedLoras.has(file)){toast("That LoRA is already selected");return;}
+  state.selectedLoras.set(next.filename,{...next,strength:Number(next.recommended_strength??1)});
+  renderSelectedLoras(); stashCurrentDraft();
+}
+
 function renderLoras(){
-  const q=$("#loraSearch").value.trim().toLowerCase();
   const host=$("#loraLibrary");
-  const items=state.loraCatalog.filter(x=>!q||[x.nickname,x.model_name,x.version_name,x.filename,...(x.tags||[])].join(" ").toLowerCase().includes(q));
-  if(!items.length){host.innerHTML='<div class="muted">No matching LoRAs. Sync if you recently changed the catalog.</div>';return;}
-  host.innerHTML=items.map((x,i)=>{
-    const key=x.filename, selected=state.selectedLoras.get(key);
-    const strength=selected?.strength ?? x.recommended_strength ?? 1;
+  if(!host)return;
+  const q=($("#loraSearch")?.value||"").trim().toLowerCase();
+  const sort=$("#loraSort")?.value||"alpha";
+  let items=state.loraCatalog.filter(x=>!isCoreWorkflowLora(x)).filter(x=>!q||[
+    x.nickname,x.model_name,x.version_name,x.filename,...(x.tags||[]),...(x.trigger_words||[])
+  ].join(" ").toLowerCase().includes(q));
+  if(sort==="alpha")items=[...items].sort((a,b)=>String(a.nickname||a.model_name||a.version_name||a.filename).localeCompare(String(b.nickname||b.model_name||b.version_name||b.filename),undefined,{sensitivity:"base"}));
+  if(!items.length){host.innerHTML='<div class="muted">No matching LoRAs.</div>';return;}
+  host.innerHTML=items.map(x=>{
+    const name=x.nickname||x.model_name||x.version_name||x.filename;
+    const tags=(x.tags||[]).map(t=>`<span class="tag-chip">${esc(t)}</span>`).join("");
     const triggers=(x.trigger_words||[]).join(", ");
-    return `<div class="lora-card" data-file="${esc(key)}">
-      <div class="lora-head">
-        <input class="pick" type="checkbox" ${selected?"checked":""}>
-        <div class="lora-main">
-          <div class="lora-name">${esc(x.nickname||x.model_name||x.version_name||x.filename)}</div>
-          <div class="lora-file">${esc(x.filename)}</div>
-          <div>${x.managed?'<span class="pill">managed</span>':'<span class="pill">local</span>'}
-          ${x.version_id?'<span class="pill">v'+esc(x.version_id)+'</span>':""}</div>
-        </div>
-      </div>
-      <div class="lora-controls">
-        <label>Strength</label><input class="strength" type="number" step=".05" min="-3" max="3" value="${esc(strength)}">
-      </div>
-      ${triggers?'<div class="triggers"><strong>Triggers:</strong> '+esc(triggers)+'</div>':""}
-      ${(x.notes||[]).length?'<div class="triggers"><strong>Notes:</strong> '+esc((x.notes||[]).join(" · "))+'</div>':""}
-      ${x.managed?`<details class="meta-editor">
-        <summary>Edit metadata</summary>
+    return `<details class="lora-card compact-lora" data-file="${esc(x.filename)}">
+      <summary class="lora-summary">
+        <div class="lora-summary-name"><strong>${esc(name)}</strong><div class="lora-file">${esc(x.filename)}</div></div>
+        <div class="lora-summary-tags">${tags||'<span class="muted">No tags</span>'}</div>
+        <div class="lora-summary-strength"><span class="muted">Rec.</span><strong>${Number(x.recommended_strength??1).toFixed(2)}</strong></div>
+        <div class="lora-summary-trigger"><span class="muted">Triggers</span><span>${esc(triggers||"—")}</span></div>
+      </summary>
+      <div class="meta-editor">
+        ${x.managed?`
         <label>Nickname</label><input class="meta-nickname" value="${esc(x.nickname||"")}">
         <label>Recommended strength</label><input class="meta-strength" type="number" step=".05" value="${esc(x.recommended_strength??1)}">
         <label>Trigger words <span class="muted">(comma-separated)</span></label><input class="meta-triggers" value="${esc((x.trigger_words||[]).join(", "))}">
         <label>Tags <span class="muted">(comma-separated)</span></label><input class="meta-tags" value="${esc((x.tags||[]).join(", "))}">
         <label>Personal notes <span class="muted">(one per line)</span></label><textarea class="meta-notes" rows="3">${esc((x.notes||[]).join("\n"))}</textarea>
-        <button class="secondary save-meta">Save metadata</button>
-      </details>`:""}
-    </div>`;
+        <button class="secondary save-meta" type="button">Save metadata</button>
+        `:`<div class="muted">Local/core LoRA · metadata editing is available for managed CivitAI LoRAs.</div>`}
+      </div>
+    </details>`;
   }).join("");
   $$(".lora-card",host).forEach(card=>{
     const file=card.dataset.file;
     const item=state.loraCatalog.find(x=>x.filename===file);
-    const pick=$(".pick",card), strength=$(".strength",card);
-    const sync=()=>{
-      if(pick.checked){
-        state.selectedLoras.set(file,{...item,strength:Number(strength.value||item.recommended_strength||1)});
-      }else state.selectedLoras.delete(file);
-      renderSelectedLoras();
-    };
-    pick.onchange=sync;
-    strength.onchange=()=>{if(pick.checked)sync();};
     const save=$(".save-meta",card);
-    if(save) save.onclick=async()=>{
+    if(save)save.onclick=async()=>{
       save.disabled=true; save.textContent="Saving…";
       try{
         await api("/api/loras/config",{method:"POST",body:{
@@ -221,10 +435,17 @@ function renderLoras(){
 async function loadLoras(){
   try{
     const d=await api("/api/loras");
-    state.loraCatalog=d.items||[]; renderLoras(); renderSelectedLoras();
-  }catch(e){$("#loraLibrary").innerHTML='<div class="message error">'+esc(e.message)+'</div>';}
+    state.loraCatalog=d.items||[];
+    for(const [file,selected] of state.selectedLoras.entries()){
+      const current=state.loraCatalog.find(x=>x.filename===file);
+      if(current)state.selectedLoras.set(file,{...current,strength:selected.strength});
+    }
+    renderLoras(); renderSelectedLoras();
+  }catch(e){
+    const host=$("#loraLibrary");
+    if(host)host.innerHTML='<div class="message error">'+esc(e.message)+'</div>';
+  }
 }
-
 async function syncLoraCatalog(showToast=true){
   const b=$("#syncLoras");
   if(b){b.disabled=true;b.textContent="Syncing…";}
@@ -237,31 +458,108 @@ async function syncLoraCatalog(showToast=true){
   }
 }
 
+function assetCardMedia(item){
+  if(item.kind==="image"&&item.thumb)return `<img class="asset-thumb" src="${esc(item.thumb)}" alt="">`;
+  return `<div class="asset-icon asset-thumb">${esc(({video:"VID",audio:"AUD"}[item.kind]||"FILE"))}</div>`;
+}
+function renderAssetLibrary(){
+  const host=$("#assetLibrary");
+  if(!host)return;
+  const q=($("#assetSearch")?.value||"").trim().toLowerCase();
+  const sort=$("#assetSort")?.value||"alpha";
+  let items=state.assetCatalog.filter(x=>!q||[x.display_name,x.nickname,x.file,x.kind].join(" ").toLowerCase().includes(q));
+  if(sort==="alpha")items=[...items].sort((a,b)=>String(a.display_name).localeCompare(String(b.display_name),undefined,{sensitivity:"base"}));
+  else items=[...items].sort((a,b)=>Number(b.mtime||0)-Number(a.mtime||0));
+  if(!items.length){host.innerHTML='<div class="muted">No matching uploaded assets.</div>';return;}
+  host.innerHTML=items.map(x=>`<div class="asset-card" data-file="${esc(x.file)}">
+    ${assetCardMedia(x)}
+    <div class="asset-card-main">
+      <strong>${esc(x.display_name)}</strong>
+      <div class="muted">${esc(x.kind.toUpperCase())} · ${esc(x.file)} · ${bytes(x.size)}</div>
+      <div class="asset-nickname-row">
+        <input class="asset-nickname" value="${esc(x.nickname||"")}" placeholder="Nickname (optional)">
+        <button class="secondary small save-asset-name" type="button">Save</button>
+      </div>
+    </div>
+  </div>`).join("");
+  $$(".asset-card",host).forEach(card=>{
+    $(".save-asset-name",card).onclick=async()=>{
+      const file=card.dataset.file, input=$(".asset-nickname",card), button=$(".save-asset-name",card);
+      button.disabled=true;
+      try{
+        await api("/api/assets/meta",{method:"PUT",body:{file,nickname:input.value}});
+        await loadAssets(true);
+        toast("Asset nickname saved");
+      }catch(e){toast(e.message);}
+      finally{button.disabled=false;}
+    };
+  });
+}
+function renderAssetPicker(){
+  const host=$("#assetPickerList");
+  if(!host)return;
+  const q=($("#assetPickerSearch")?.value||"").trim().toLowerCase();
+  const kind=state.assetPickerKind;
+  let items=state.assetCatalog.filter(x=>(kind==="all"||x.kind===kind)&&(!q||[x.display_name,x.nickname,x.file,x.kind].join(" ").toLowerCase().includes(q)));
+  items=[...items].sort((a,b)=>String(a.display_name).localeCompare(String(b.display_name),undefined,{sensitivity:"base"}));
+  if(!items.length){host.innerHTML='<div class="muted">No matching assets.</div>';return;}
+  host.innerHTML=items.map(x=>`<button class="asset-pick-row" data-file="${esc(x.file)}" data-kind="${esc(x.kind)}" type="button">
+    ${assetCardMedia(x)}
+    <span><strong>${esc(x.display_name)}</strong><small>${esc(x.kind.toUpperCase()+" · "+x.file)}</small></span>
+  </button>`).join("");
+  $$(".asset-pick-row",host).forEach(row=>row.onclick=()=>{
+    const file=row.dataset.file, kind=row.dataset.kind;
+    if(state.assetPickerMode==="start"){
+      state.startingImage=file; renderStartingImage(); stashCurrentDraft();
+    }else{
+      addRef(kind,file,true);
+    }
+    closeAssetPicker();
+  });
+}
+function openAssetPicker(mode,kind="all"){
+  state.assetPickerMode=mode; state.assetPickerKind=kind;
+  $("#assetPickerTitle").textContent=mode==="start"?"Choose starting image":"Add R2V reference";
+  $("#assetPickerHint").textContent=mode==="start"?"Images only":"Images, videos, or audio";
+  $("#assetPickerSearch").value="";
+  renderAssetPicker();
+  const dialog=$("#assetPicker");
+  if(dialog.showModal)dialog.showModal(); else dialog.setAttribute("open","");
+}
+function closeAssetPicker(){
+  const dialog=$("#assetPicker");
+  if(dialog.close&&dialog.open)dialog.close(); else dialog.removeAttribute("open");
+}
+async function loadAssets(render=true){
+  try{
+    const d=await api("/api/inputs?kind=all&sort=recent");
+    state.assetCatalog=d.items||[];
+    renderStartingImage(); renderRefs();
+    if(render)renderAssetLibrary();
+    if($("#assetPicker")?.open)renderAssetPicker();
+  }catch(e){
+    const host=$("#assetLibrary");
+    if(host&&render)host.innerHTML='<div class="message error">'+esc(e.message)+'</div>';
+  }
+}
+
 function formSnapshot(){
-  return {
-    mode:state.mode,prompt_mode:state.promptMode,prompt:$("#prompt").value,
-    aspect_ratio:$("#aspect").value,megapixels:Number($("#mp").value),
-    duration:Number($("#duration").value),seed:Number($("#seed").value),
-    randomize_seed:$("#randomSeed").checked,starting_image:$("#startImage").value||null,
-    refs:state.refs,loras:selectedLoraArray()
-  };
+  const draft=captureDraft();
+  return {mode:state.mode,prompt_mode:state.promptMode,...draft};
 }
 function applySnapshot(v){
-  if(!v) return;
-  setMode(v.mode||"t2v"); setPromptMode(v.prompt_mode||"auto");
-  $("#prompt").value=v.prompt||v.prompt_idea||"";
-  if(v.aspect_ratio) $("#aspect").value=v.aspect_ratio;
-  if(v.megapixels!=null) $("#mp").value=v.megapixels;
-  if(v.duration!=null) $("#duration").value=v.duration;
-  if(v.seed!=null) $("#seed").value=v.seed;
-  $("#randomSeed").checked=v.randomize_seed!==false;
-  state.refs=Array.isArray(v.refs)?structuredClone(v.refs):[];
-  renderRefs();
-  state.selectedLoras.clear();
-  (v.loras||[]).forEach(x=>{if(x.filename)state.selectedLoras.set(x.filename,{...x});});
-  renderSelectedLoras(); renderLoras();
-  if(v.starting_image) $("#startImage").value=v.starting_image;
+  if(!v)return;
+  const mode=v.mode||"t2v", pm=v.prompt_mode||"auto";
+  if(!state.restoringDraft)stashCurrentDraft();
+  state.mode=mode; state.promptMode=pm;
+  setSegment($("#modeSeg"),mode); setSegment($("#promptModeSeg"),pm);
+  $("#i2vBlock").hidden=mode!=="i2v"; $("#r2vBlock").hidden=mode!=="r2v";
+  $("#promptLabel").textContent=pm==="auto"?"Prompt idea":"Custom prompt";
+  applyDraft(v);
+  state.uiProfiles[profileKey()]=captureDraft();
+  updateDraftLabel(); mirrorUiState(); scheduleDraftSave();
 }
+
 async function loadTemplates(){
   try{
     const d=await api("/api/templates"); state.templates=d.templates||{};
@@ -282,6 +580,7 @@ async function generate(){
     if(state.mode==="i2v"&&!payload.starting_image) throw new Error("Choose or upload a starting image.");
     const d=await api("/api/generate",{method:"POST",body:payload});
     $("#seed").value=d.seed;
+    stashCurrentDraft();
     msg($("#generateMsg"),"Queued · seed "+d.seed,"ok");
     switchTab("queue"); await refreshQueue(); await refreshProgress();
   }catch(e){msg($("#generateMsg"),e.message,"error");}
@@ -304,9 +603,23 @@ async function refreshProgress(){
 async function refreshQueue(){
   try{
     const d=await api("/api/queue"), host=$("#queueList");
-    if(!(d.items||[]).length){host.innerHTML='<div class="muted">Queue empty.</div>';return;}
-    host.innerHTML=d.items.map(x=>`<div class="qitem" data-pid="${esc(x.prompt_id)}"><div><strong>${esc((x.record.mode||"").toUpperCase())} · ${esc((x.record.prompt_mode||"").toUpperCase())}</strong><div class="muted">${esc((x.record.prompt_idea||x.record.prompt||"").slice(0,130))}</div></div><button class="danger cancel">Cancel</button></div>`).join("");
+    const items=d.items||[];
+    if(!items.length){host.innerHTML='<div class="muted">Queue empty.</div>';return;}
+    host.innerHTML=items.map(x=>{
+      const rec=x.record||{};
+      const label=x.label||(x.status==="running"?"RUNNING":"NEXT #"+(x.position||"?"));
+      return `<div class="qitem ${x.status==="running"?"running":""}" data-pid="${esc(x.prompt_id)}">
+        <div class="queue-badge ${x.status==="running"?"active":""}">${esc(label)}</div>
+        <div class="queue-main">
+          <strong>${esc((rec.mode||"").toUpperCase())} · ${esc((rec.prompt_mode||"").toUpperCase())}</strong>
+          <div class="muted">${esc((rec.prompt_idea||rec.prompt||"").slice(0,160))}</div>
+        </div>
+        <button class="danger cancel" type="button">${x.status==="running"?"Stop":"Cancel"}</button>
+      </div>`;
+    }).join("");
     $$(".qitem",host).forEach(row=>$(".cancel",row).onclick=async()=>{
+      const running=row.classList.contains("running");
+      if(running&&!confirm("Stop the currently running generation?"))return;
       try{await api("/api/cancel/"+encodeURIComponent(row.dataset.pid),{method:"POST"});await refreshQueue();}catch(e){toast(e.message);}
     });
   }catch(e){}
@@ -427,17 +740,38 @@ function wire(){
   $("#generate").onclick=generate;
   $("#refreshQueue").onclick=()=>{refreshQueue();refreshProgress();};
   $("#refreshOutputs").onclick=()=>refreshOutputs(true);
-  $("#goLoras").onclick=()=>switchTab("loras");
-  $("#loraSearch").oninput=renderLoras;
+
+  ["prompt","aspect","mp","duration","seed","randomSeed"].forEach(id=>{
+    const el=$("#"+id);
+    if(!el)return;
+    const event=(el.tagName==="SELECT"||el.type==="checkbox")?"change":"input";
+    el.addEventListener(event,()=>stashCurrentDraft());
+  });
+
+  $("#clearDraft").onclick=()=>{
+    const label=state.mode.toUpperCase()+" "+(state.promptMode==="auto"?"Auto":"Custom");
+    if(!confirm("Clear the "+label+" draft only?"))return;
+    delete state.uiProfiles[profileKey()];
+    applyDraft({});
+    stashCurrentDraft();
+    toast(label+" draft cleared");
+  };
 
   $("#uploadStart").onclick=()=>$("#startFile").click();
+  $("#chooseStartAsset").onclick=()=>openAssetPicker("start","image");
+  $("#clearStartImage").onclick=()=>{state.startingImage=null;renderStartingImage();stashCurrentDraft();};
   $("#startFile").onchange=async e=>{
     const file=e.target.files?.[0]; if(!file)return;
     try{
-      const d=await uploadFile(file); await refreshInputOptions(); $("#startImage").value=d.file; $("#startSelected").textContent=d.file; toast("Starting image uploaded");
-    }catch(err){toast(err.message);} finally{e.target.value="";}
+      const d=await uploadFile(file);
+      await loadAssets(false);
+      state.startingImage=d.file;
+      renderStartingImage();
+      stashCurrentDraft();
+      toast("Starting image uploaded");
+    }catch(err){toast(err.message);}
+    finally{e.target.value="";}
   };
-  $("#startImage").onchange=()=>$("#startSelected").textContent=$("#startImage").value;
 
   $$("[data-ref-kind]").forEach(b=>b.onclick=()=>{
     state.refKind=b.dataset.refKind;
@@ -448,11 +782,35 @@ function wire(){
     const file=e.target.files?.[0]; if(file)addUploadedReference(state.refKind,file);
     e.target.value="";
   };
-  $("#addExistingRef").onclick=()=>{
-    const sel=$("#refExisting"), opt=sel.selectedOptions[0];
-    if(!opt||!sel.value)return;
-    addRef(opt.dataset.kind||"image",sel.value,true);
+  $("#chooseExistingRef").onclick=()=>openAssetPicker("ref","all");
+  $("#clearRefs").onclick=()=>{if(state.refs.length&&confirm("Clear all R2V references?")){state.refs=[];renderRefs();stashCurrentDraft();}};
+
+  $("#closeAssetPicker").onclick=closeAssetPicker;
+  $("#assetPickerSearch").oninput=renderAssetPicker;
+  $("#assetPicker").addEventListener("click",e=>{if(e.target===$("#assetPicker"))closeAssetPicker();});
+
+  $("#addGenerationLora").onchange=e=>{if(e.target.value)addGenerationLora(e.target.value);};
+  $("#goLoras").onclick=()=>switchTab("loras");
+  $("#loraSearch").oninput=renderLoras;
+  $("#loraSort").onchange=renderLoras;
+  $("#syncLoras").onclick=async()=>{try{await syncLoraCatalog(true);}catch(e){toast(e.message);}};
+  $("#addLoraVersion").onclick=async()=>{
+    const input=$("#newLoraVersion"), source=input.value.trim();
+    if(!source){toast("Enter a CivitAI version ID or URL");return;}
+    const button=$("#addLoraVersion"); button.disabled=true; button.textContent="Adding…";
+    try{
+      await api("/api/loras/config",{method:"POST",body:{source,enabled:true}});
+      button.textContent="Downloading…";
+      await syncLoraCatalog(false);
+      input.value="";
+      toast("LoRA added to managed catalog");
+    }catch(e){toast(e.message);}
+    finally{button.disabled=false;button.textContent="Add + Sync";}
   };
+
+  $("#assetSearch").oninput=renderAssetLibrary;
+  $("#assetSort").onchange=renderAssetLibrary;
+  $("#refreshAssets").onclick=()=>loadAssets(true);
 
   document.addEventListener("paste",async e=>{
     if(state.tab!=="generate")return;
@@ -462,37 +820,33 @@ function wire(){
     const file=new File([blob],"pasted_"+Date.now()+".png",{type:blob.type||"image/png"});
     e.preventDefault();
     try{
-      const d=await uploadFile(file); await refreshInputOptions();
-      if(state.mode==="r2v"){addRef("image",d.file);toast("Pasted image added as R2V reference");}
-      else {setMode("i2v");$("#startImage").value=d.file;$("#startSelected").textContent=d.file;toast("Pasted image set as I2V start");}
+      const d=await uploadFile(file);
+      await loadAssets(false);
+      if(state.mode==="r2v"){
+        addRef("image",d.file);
+        toast("Pasted image added as R2V reference");
+      }else{
+        if(state.mode!=="i2v")setMode("i2v");
+        state.startingImage=d.file;
+        renderStartingImage();
+        stashCurrentDraft();
+        toast("Pasted image set as I2V start");
+      }
     }catch(err){toast(err.message);}
   });
 
   $("#saveTemplate").onclick=async()=>{
     const name=prompt("Template name"); if(!name)return;
-    try{await api("/api/templates",{method:"POST",body:{name,value:formSnapshot()}});await loadTemplates();$("#templateSelect").value=name;toast("Template saved");}catch(e){toast(e.message);}
+    try{
+      stashCurrentDraft();
+      await api("/api/templates",{method:"POST",body:{name,value:formSnapshot()}});
+      await loadTemplates(); $("#templateSelect").value=name; toast("Template saved");
+    }catch(e){toast(e.message);}
   };
   $("#templateSelect").onchange=e=>{if(e.target.value&&state.templates[e.target.value])applySnapshot(state.templates[e.target.value]);};
   $("#deleteTemplate").onclick=async()=>{
     const name=$("#templateSelect").value;if(!name)return;
     try{await api("/api/templates/"+encodeURIComponent(name),{method:"DELETE"});await loadTemplates();toast("Template deleted");}catch(e){toast(e.message);}
-  };
-
-  $("#syncLoras").onclick=async()=>{
-    try{await syncLoraCatalog(true);}catch(e){toast(e.message);}
-  };
-  $("#addLoraVersion").onclick=async()=>{
-    const input=$("#newLoraVersion"), source=input.value.trim();
-    if(!source){toast("Enter a CivitAI version ID or URL");return;}
-    const b=$("#addLoraVersion");b.disabled=true;b.textContent="Adding…";
-    try{
-      await api("/api/loras/config",{method:"POST",body:{source,enabled:true}});
-      b.textContent="Downloading…";
-      await syncLoraCatalog(false);
-      input.value="";
-      toast("LoRA added to managed catalog");
-    }catch(e){toast(e.message);}
-    finally{b.disabled=false;b.textContent="Add + Sync";}
   };
 
   $("#freeMemory").onclick=async()=>{try{await api("/api/system/free",{method:"POST"});toast("Memory release requested");}catch(e){toast(e.message);}};
@@ -503,11 +857,19 @@ function wire(){
       msg($("#systemMsg"),"System prompts saved. New Auto jobs use them immediately.","ok");
     }catch(e){msg($("#systemMsg"),e.message,"error");}
   };
+
+  window.addEventListener("pagehide",()=>{stashCurrentDraft();});
 }
 
 async function init(){
-  wire(); setMode("t2v");setPromptMode("auto");renderRefs();renderSelectedLoras();
-  await Promise.allSettled([refreshInfo(),refreshInputOptions(),loadLoras(),loadTemplates(),refreshQueue(),refreshProgress(),refreshOutputs(true)]);
+  wire();
+  renderRefs(); renderSelectedLoras(); renderStartingImage();
+  await Promise.allSettled([
+    refreshInfo(),loadLoras(),loadAssets(true),loadTemplates(),
+    refreshQueue(),refreshProgress(),refreshOutputs(true)
+  ]);
+  await loadUiState();
+  renderLoras(); renderAssetLibrary(); renderRefs(); renderStartingImage(); renderSelectedLoras();
   setInterval(refreshProgress,700);
   setInterval(refreshQueue,2500);
   setInterval(refreshInfo,5000);

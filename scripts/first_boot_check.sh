@@ -54,7 +54,7 @@ if [[ -f /ComfyUI/main.py ]]; then ok "/ComfyUI/main.py exists"; else bad "/Comf
 if [[ -x /opt/mmh3/runtime/entrypoint.sh ]]; then ok "MMH3 entrypoint installed"; else bad "MMH3 entrypoint missing"; fi
 if command -v mmh3 >/dev/null 2>&1; then ok "mmh3 helper command installed"; else bad "mmh3 helper missing"; fi
 
-COMFY_SHA="$(git -C /ComfyUI rev-parse HEAD 2>/dev/null || true)"
+COMFY_SHA="$(cat /ComfyUI/.mmh3_commit 2>/dev/null || git -C /ComfyUI rev-parse HEAD 2>/dev/null || true)"
 if [[ "$COMFY_SHA" == "c2bcbecd82ec5ae66594340b395c24ef0217b238" ]]; then ok "ComfyUI commit pinned correctly"; else warn "ComfyUI commit is $COMFY_SHA"; fi
 
 WF_COUNT="$(find /opt/mmh3/workflows/api -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')"

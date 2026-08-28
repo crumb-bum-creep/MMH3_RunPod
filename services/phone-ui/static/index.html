@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>MMH3</title>
-  <link rel="stylesheet" href="/static/styles.css?v=1">
+  <link rel="stylesheet" href="/static/styles.css?v=2">
 </head>
 <body>
 <header>
@@ -21,6 +21,7 @@
   <button data-tab="queue">Queue</button>
   <button data-tab="outputs">Outputs</button>
   <button data-tab="loras">LoRAs</button>
+  <button data-tab="assets">Assets</button>
   <button data-tab="system">System</button>
 </nav>
 
@@ -41,13 +42,13 @@
     <textarea id="prompt" rows="7" placeholder="Describe what you want…"></textarea>
 
     <div id="i2vBlock" hidden>
-      <label>Starting image</label>
+      <div class="labelrow"><label>Starting image</label><button id="clearStartImage" class="ghost small" type="button">Clear</button></div>
       <div class="media-row">
         <button id="uploadStart">Upload / Paste</button>
-        <select id="startImage"><option value="">Select existing image…</option></select>
+        <button id="chooseStartAsset" class="secondary">Choose existing</button>
       </div>
       <input id="startFile" type="file" accept="image/*" hidden>
-      <div id="startSelected" class="muted"></div>
+      <div id="startSelected" class="selected-asset-slot muted">No starting image selected.</div>
     </div>
 
     <div id="r2vBlock" hidden>
@@ -58,8 +59,8 @@
         <button data-ref-kind="audio">+ Audio</button>
       </div>
       <div class="media-row existing-row">
-        <select id="refExisting"><option value="">Existing input…</option></select>
-        <button id="addExistingRef" class="secondary">Add existing</button>
+        <button id="chooseExistingRef" class="secondary">Browse existing assets</button>
+        <button id="clearRefs" class="ghost">Clear references</button>
       </div>
       <input id="refFile" type="file" hidden>
       <div id="refs" class="stack"></div>
@@ -92,16 +93,25 @@
 
     <label class="check"><input id="randomSeed" type="checkbox" checked> Randomize video seed each job</label>
 
-    <details>
-      <summary>Selected LoRAs <span id="loraCount" class="pill">0</span></summary>
-      <div id="selectedLoras" class="stack padded-top"></div>
-      <button id="goLoras" class="secondary">Choose LoRAs</button>
-    </details>
+    <div class="generation-loras">
+      <div class="labelrow">
+        <label>LoRAs <span id="loraCount" class="pill">0</span></label>
+        <button id="goLoras" class="ghost small" type="button">Manage library</button>
+      </div>
+      <div id="selectedLoras" class="stack"></div>
+      <select id="addGenerationLora" class="secondary small" aria-label="Add LoRA">
+        <option value="">+ Add LoRA…</option>
+      </select>
+    </div>
 
     <div class="template-row">
       <select id="templateSelect"><option value="">Template…</option></select>
       <button id="saveTemplate" class="secondary">Save</button>
       <button id="deleteTemplate" class="danger ghost">Delete</button>
+    </div>
+    <div class="draft-row">
+      <span id="draftLabel" class="muted">T2V Auto draft · autosaved</span>
+      <button id="clearDraft" class="danger ghost small" type="button">Clear current draft</button>
     </div>
 
     <button id="generate" class="primary big">Queue Generation</button>
@@ -133,14 +143,39 @@
 
 <section id="tab-loras" class="tab">
   <div class="card">
-    <div class="labelrow"><div><strong>LoRA Library</strong><div class="muted">Friendly metadata + actual Comfy filename</div></div><button id="syncLoras" class="secondary small">Sync</button></div>
+    <div class="labelrow">
+      <div><strong>LoRA Library</strong><div class="muted">Install and maintain metadata here. Select LoRAs for jobs from Generate.</div></div>
+      <button id="syncLoras" class="secondary small">Sync</button>
+    </div>
     <div class="media-row">
       <input id="newLoraVersion" inputmode="numeric" placeholder="CivitAI version ID or URL">
       <button id="addLoraVersion" class="primary">Add + Sync</button>
     </div>
-    <div class="muted">Use the model-version ID (or a CivitAI URL containing modelVersionId). Metadata and your notes persist under /workspace.</div>
-    <input id="loraSearch" type="search" placeholder="Search LoRAs…">
-    <div id="loraLibrary" class="stack padded-top"></div>
+    <div class="library-toolbar">
+      <input id="loraSearch" type="search" placeholder="Search LoRAs…">
+      <select id="loraSort" aria-label="Sort LoRAs">
+        <option value="alpha">A → Z</option>
+        <option value="recent">Install order</option>
+      </select>
+    </div>
+    <div id="loraLibrary" class="stack compact-library padded-top"></div>
+  </div>
+</section>
+
+<section id="tab-assets" class="tab">
+  <div class="card">
+    <div class="labelrow">
+      <div><strong>Asset Library</strong><div class="muted">Persistent uploads used by I2V and R2V. Nicknames appear everywhere in the generation UI.</div></div>
+      <button id="refreshAssets" class="secondary small">Refresh</button>
+    </div>
+    <div class="library-toolbar">
+      <input id="assetSearch" type="search" placeholder="Search assets…">
+      <select id="assetSort" aria-label="Sort assets">
+        <option value="alpha">A → Z</option>
+        <option value="recent">Newest first</option>
+      </select>
+    </div>
+    <div id="assetLibrary" class="stack compact-library padded-top"></div>
   </div>
 </section>
 
@@ -169,7 +204,16 @@
 </section>
 </main>
 
+<dialog id="assetPicker">
+  <div class="picker-head">
+    <div><strong id="assetPickerTitle">Choose asset</strong><div id="assetPickerHint" class="muted"></div></div>
+    <button id="closeAssetPicker" class="ghost small" type="button">Close</button>
+  </div>
+  <input id="assetPickerSearch" type="search" placeholder="Search assets…">
+  <div id="assetPickerList" class="stack picker-list"></div>
+</dialog>
+
 <div id="toast" role="status"></div>
-<script src="/static/app.js?v=1"></script>
+<script src="/static/app.js?v=2"></script>
 </body>
 </html>

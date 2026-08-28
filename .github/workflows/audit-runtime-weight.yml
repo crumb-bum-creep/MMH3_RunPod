@@ -1,0 +1,39 @@
+name: Audit Python runtime weight
+
+on:
+  push:
+    branches: [startup-runtime-fastpath]
+    paths:
+      - Dockerfile.ultra
+      - .github/workflows/audit-runtime-weight.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim disk
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /swapfile || true
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache || true
+          docker system prune -af --volumes || true
+
+      - name: Build dependency stage
+        run: docker build --progress=plain -f Dockerfile.ultra --target builder -t mmh3-dependency-audit .
+
+      - name: Audit installed runtime
+        shell: bash
+        run: |
+          docker run --rm --entrypoint bash -v "$PWD:/audit:ro" mmh3-dependency-audit -lc '/opt/venv/bin/python /audit/scripts/audit_runtime_weight.py' | tee runtime-weight.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-weight-${{ github.run_id }}
+          path: runtime-weight.txt
+          retention-days: 7

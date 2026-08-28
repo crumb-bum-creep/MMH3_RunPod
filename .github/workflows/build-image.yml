@@ -87,9 +87,11 @@ jobs:
             test -x /opt/mmh3/runtime/entrypoint.sh
             test -f /opt/mmh3/services/phone-ui/server.py
             test "$(find /opt/mmh3/workflows/api -maxdepth 1 -name "*.json" | wc -l)" -eq 6
-            ACTUAL="$(git -C /ComfyUI rev-parse HEAD)"
+            ACTUAL="$(cat /ComfyUI/.mmh3_commit)"
             test "$ACTUAL" = "c2bcbecd82ec5ae66594340b395c24ef0217b238"
-            python -c "import torch,yaml,requests,aiohttp,huggingface_hub; from mmh3.common import IMAGE_ROOT; assert torch.__version__.startswith(\"2.11.0\"), torch.__version__; assert torch.version.cuda == \"13.0\", torch.version.cuda; assert str(IMAGE_ROOT) == \"/opt/mmh3\"; print(\"torch\",torch.__version__,\"cuda\",torch.version.cuda); print(\"runtime imports OK\")"
+            python -c "import torch,yaml,requests,aiohttp,huggingface_hub; from PIL import Image; from mmh3.common import IMAGE_ROOT; assert torch.__version__.startswith(\"2.11.0\"), torch.__version__; assert torch.version.cuda == \"13.0\", torch.version.cuda; assert str(IMAGE_ROOT) == \"/opt/mmh3\"; print(\"torch\",torch.__version__,\"cuda\",torch.version.cuda); print(\"runtime imports OK\")"
+            python -c "import onnxruntime as o; p=o.get_available_providers(); assert \"CUDAExecutionProvider\" in p, p; print(p)"
+            python -c "import triton, sageattention; print(\"triton\",triton.__version__); print(\"sageattention import OK\")"
             python /ComfyUI/main.py --cpu --quick-test-for-ci --disable-auto-launch
             python /opt/mmh3/services/phone-ui/server.py --help >/dev/null
           '

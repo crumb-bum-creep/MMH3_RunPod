@@ -1,0 +1,115 @@
+name: Build production candidate
+
+on:
+  push:
+    branches: [production-v06]
+  workflow_dispatch:
+
+concurrency:
+  group: mmh3-production-candidate
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim runner disk
+        shell: bash
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /swapfile || true
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache || true
+          sudo apt-get clean || true
+          docker system prune -af --volumes || true
+          df -h /
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build candidate
+        shell: bash
+        run: |
+          set -o pipefail
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mmh3-runpod"
+          CANDIDATE="$IMAGE:candidate-${GITHUB_SHA::12}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "CANDIDATE=$CANDIDATE" >> "$GITHUB_ENV"
+          docker build --progress=plain -t "$CANDIDATE" . 2>&1 | tee candidate-build.log
+
+      - name: Smoke test candidate
+        shell: bash
+        run: |
+          docker run --rm --entrypoint bash "$CANDIDATE" -lc '
+            set -Eeuo pipefail
+            export PYTHONPATH=/opt/mmh3/runtime
+            test -f /ComfyUI/main.py
+            test -x /opt/mmh3/runtime/entrypoint.sh
+            test "$(cat /ComfyUI/.mmh3_commit)" = "c2bcbecd82ec5ae66594340b395c24ef0217b238"
+            test "$(find /opt/mmh3/workflows/api -maxdepth 1 -name "*.json" | wc -l)" -eq 6
+            python -c "import torch,yaml,requests,aiohttp,huggingface_hub; from PIL import Image; print(torch.__version__,torch.version.cuda); assert torch.__version__.startswith(\"2.11.0\"); assert torch.version.cuda == \"13.0\""
+            python -c "import onnxruntime as o; p=o.get_available_providers(); print(p); assert \"CUDAExecutionProvider\" in p"
+            python -c "import triton,sageattention; print(\"triton\",triton.__version__); print(\"sageattention OK\")"
+            python /ComfyUI/main.py --cpu --quick-test-for-ci --disable-auto-launch
+            python /opt/mmh3/services/phone-ui/server.py --help >/dev/null
+            jupyter-lab --version
+            ffmpeg -version | head -1
+          '
+
+      - name: Image inventory
+        shell: bash
+        run: |
+          docker image inspect "$CANDIDATE" --format='uncompressed_bytes={{.Size}}'
+          echo "history_entries=$(docker history -q "$CANDIDATE" | wc -l)"
+          echo "nonempty_history_entries=$(docker history --format '{{.Size}}' "$CANDIDATE" | grep -vc '^0B$' || true)"
+          docker history --format 'table {{.Size}}\t{{.CreatedBy}}' "$CANDIDATE" | head -100
+
+      - name: Push candidate
+        run: docker push "$CANDIDATE"
+
+      - name: Registry manifest stats
+        shell: bash
+        run: |
+          python - "$CANDIDATE" <<'PY'
+          import json,subprocess,sys
+          ref=sys.argv[1]
+          d=json.loads(subprocess.check_output(["docker","manifest","inspect",ref],text=True))
+          layers=d.get("layers") or []
+          sizes=sorted((int(x.get("size") or 0) for x in layers),reverse=True)
+          total=sum(sizes)
+          print(json.dumps({
+              "ref":ref,
+              "layers":len(layers),
+              "compressed_bytes":total,
+              "compressed_gb":round(total/1e9,3),
+              "largest_layers_gb":[round(x/1e9,3) for x in sizes[:10]],
+          },indent=2))
+          with open("/tmp/candidate-stats.md","w") as f:
+              f.write("### Production candidate\n\n")
+              f.write(f"- Image: `{ref}`\n")
+              f.write(f"- Registry layers: **{len(layers)}**\n")
+              f.write(f"- Compressed size: **{total/1e9:.2f} GB**\n")
+              if sizes:
+                  f.write(f"- Largest compressed layer: **{sizes[0]/1e9:.2f} GB**\n")
+          PY
+          cat /tmp/candidate-stats.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-candidate-${{ github.run_id }}
+          path: |
+            candidate-build.log
+            /tmp/candidate-stats.md
+          if-no-files-found: ignore
+          retention-days: 7

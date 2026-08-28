@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 export PATH="/opt/venv/bin:$PATH"
 export PYTHONPATH="/opt/mmh3/runtime${PYTHONPATH:+:$PYTHONPATH}"
+export MMH3_CONTAINER_START_EPOCH="${MMH3_CONTAINER_START_EPOCH:-$(date +%s.%N)}"
 
 mkdir -p /workspace/mmh3/{config,data,state,logs} /workspace/ComfyUI/{models,user,input,output}
 
