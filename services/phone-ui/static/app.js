@@ -542,6 +542,7 @@ async function generate(){
     if(state.mode==="i2v"&&!payload.starting_image) throw new Error("Choose or upload a starting image.");
     const d=await api("/api/generate",{method:"POST",body:payload});
     $("#seed").value=d.seed;
+    stashCurrentDraft();
     msg($("#generateMsg"),"Queued · seed "+d.seed,"ok");
     switchTab("queue"); await refreshQueue(); await refreshProgress();
   }catch(e){msg($("#generateMsg"),e.message,"error");}
@@ -564,9 +565,23 @@ async function refreshProgress(){
 async function refreshQueue(){
   try{
     const d=await api("/api/queue"), host=$("#queueList");
-    if(!(d.items||[]).length){host.innerHTML='<div class="muted">Queue empty.</div>';return;}
-    host.innerHTML=d.items.map(x=>`<div class="qitem" data-pid="${esc(x.prompt_id)}"><div><strong>${esc((x.record.mode||"").toUpperCase())} · ${esc((x.record.prompt_mode||"").toUpperCase())}</strong><div class="muted">${esc((x.record.prompt_idea||x.record.prompt||"").slice(0,130))}</div></div><button class="danger cancel">Cancel</button></div>`).join("");
+    const items=d.items||[];
+    if(!items.length){host.innerHTML='<div class="muted">Queue empty.</div>';return;}
+    host.innerHTML=items.map(x=>{
+      const rec=x.record||{};
+      const label=x.label||(x.status==="running"?"RUNNING":"NEXT #"+(x.position||"?"));
+      return `<div class="qitem ${x.status==="running"?"running":""}" data-pid="${esc(x.prompt_id)}">
+        <div class="queue-badge ${x.status==="running"?"active":""}">${esc(label)}</div>
+        <div class="queue-main">
+          <strong>${esc((rec.mode||"").toUpperCase())} · ${esc((rec.prompt_mode||"").toUpperCase())}</strong>
+          <div class="muted">${esc((rec.prompt_idea||rec.prompt||"").slice(0,160))}</div>
+        </div>
+        <button class="danger cancel" type="button">${x.status==="running"?"Stop":"Cancel"}</button>
+      </div>`;
+    }).join("");
     $$(".qitem",host).forEach(row=>$(".cancel",row).onclick=async()=>{
+      const running=row.classList.contains("running");
+      if(running&&!confirm("Stop the currently running generation?"))return;
       try{await api("/api/cancel/"+encodeURIComponent(row.dataset.pid),{method:"POST"});await refreshQueue();}catch(e){toast(e.message);}
     });
   }catch(e){}
