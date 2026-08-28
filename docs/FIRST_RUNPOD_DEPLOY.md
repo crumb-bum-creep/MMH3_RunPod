@@ -2,7 +2,7 @@
 
 This is the first-deployment procedure for the MMH3 image.
 
-> **Validated post-deploy image.** Runtime tests, Docker build, Comfy custom-node initialization smoke test, GHCR push, and the first real RTX PRO 6000 Blackwell deployment are complete. The immutable image below includes the fixes discovered during that deployment.
+> **Validated MMH3 v0.6 production image.** Runtime/UI/integration tests, optimized Docker build, Comfy custom-node initialization smoke test, GHCR push, and real-GPU validation are complete. The image below uses the startup-optimized runtime and persistent phone-UI state model.
 
 ## 1. RunPod Secrets
 
@@ -49,10 +49,10 @@ If the GHCR package is intentionally made public later, registry credentials are
 
 ## 3. Template image
 
-The production image will be:
+The production image is:
 
 ```text
-ghcr.io/crumb-bum-creep/mmh3-runpod:sha-7200522bcf6e
+ghcr.io/crumb-bum-creep/mmh3-runpod:sha-d2103b98e602
 ```
 
 Prefer the pinned `sha-...` tag for normal deployments after validation. Do not rely on
@@ -190,11 +190,12 @@ On an empty persistent volume, startup is intentionally staged:
 1. MMH3 detects GPU, VRAM, and the cgroup RAM limit.
 2. Persistent paths are created.
 3. Canonical workflows are installed.
-4. ComfyUI, the phone UI, and Jupyter start.
-5. Core H3 models and managed LoRAs provision in the background.
-6. Port 7860 reports provisioning state.
-7. Generation remains locked until the required core model set reports ready.
-8. Once ready, jobs can be queued normally.
+4. The phone UI and ComfyUI start first.
+5. Background model/LoRA provisioning begins after a short startup grace period.
+6. Jupyter starts after ComfyUI becomes responsive.
+7. Port 7860 reports provisioning state.
+8. Generation remains locked until the required core model set reports ready.
+9. Once ready, jobs can be queued normally.
 
 This prevents a fresh Pod from appearing dead during very large model downloads.
 
