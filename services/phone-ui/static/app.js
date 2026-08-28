@@ -108,10 +108,10 @@ function scheduleDraftSave(){
 function applyDraft(v={}){
   state.restoringDraft=true;
   $("#prompt").value=v.prompt||v.prompt_idea||"";
-  if(v.aspect_ratio)$("#aspect").value=v.aspect_ratio;
-  if(v.megapixels!=null)$("#mp").value=v.megapixels;
-  if(v.duration!=null)$("#duration").value=v.duration;
-  if(v.seed!=null)$("#seed").value=v.seed;
+  $("#aspect").value=v.aspect_ratio||"9:16 (Portrait Widescreen)";
+  $("#mp").value=v.megapixels!=null?v.megapixels:0.7;
+  $("#duration").value=v.duration!=null?v.duration:5;
+  $("#seed").value=v.seed!=null?v.seed:1;
   $("#randomSeed").checked=v.randomize_seed!==false;
   state.startingImage=v.starting_image||null;
   state.refs=Array.isArray(v.refs)?structuredClone(v.refs):[];
@@ -702,17 +702,38 @@ function wire(){
   $("#generate").onclick=generate;
   $("#refreshQueue").onclick=()=>{refreshQueue();refreshProgress();};
   $("#refreshOutputs").onclick=()=>refreshOutputs(true);
-  $("#goLoras").onclick=()=>switchTab("loras");
-  $("#loraSearch").oninput=renderLoras;
+
+  ["prompt","aspect","mp","duration","seed","randomSeed"].forEach(id=>{
+    const el=$("#"+id);
+    if(!el)return;
+    const event=(el.tagName==="SELECT"||el.type==="checkbox")?"change":"input";
+    el.addEventListener(event,()=>stashCurrentDraft());
+  });
+
+  $("#clearDraft").onclick=()=>{
+    const label=state.mode.toUpperCase()+" "+(state.promptMode==="auto"?"Auto":"Custom");
+    if(!confirm("Clear the "+label+" draft only?"))return;
+    delete state.uiProfiles[profileKey()];
+    applyDraft({});
+    stashCurrentDraft();
+    toast(label+" draft cleared");
+  };
 
   $("#uploadStart").onclick=()=>$("#startFile").click();
+  $("#chooseStartAsset").onclick=()=>openAssetPicker("start","image");
+  $("#clearStartImage").onclick=()=>{state.startingImage=null;renderStartingImage();stashCurrentDraft();};
   $("#startFile").onchange=async e=>{
     const file=e.target.files?.[0]; if(!file)return;
     try{
-      const d=await uploadFile(file); await refreshInputOptions(); $("#startImage").value=d.file; $("#startSelected").textContent=d.file; toast("Starting image uploaded");
-    }catch(err){toast(err.message);} finally{e.target.value="";}
+      const d=await uploadFile(file);
+      await loadAssets(false);
+      state.startingImage=d.file;
+      renderStartingImage();
+      stashCurrentDraft();
+      toast("Starting image uploaded");
+    }catch(err){toast(err.message);}
+    finally{e.target.value="";}
   };
-  $("#startImage").onchange=()=>$("#startSelected").textContent=$("#startImage").value;
 
   $$("[data-ref-kind]").forEach(b=>b.onclick=()=>{
     state.refKind=b.dataset.refKind;
@@ -723,11 +744,35 @@ function wire(){
     const file=e.target.files?.[0]; if(file)addUploadedReference(state.refKind,file);
     e.target.value="";
   };
-  $("#addExistingRef").onclick=()=>{
-    const sel=$("#refExisting"), opt=sel.selectedOptions[0];
-    if(!opt||!sel.value)return;
-    addRef(opt.dataset.kind||"image",sel.value,true);
+  $("#chooseExistingRef").onclick=()=>openAssetPicker("ref","all");
+  $("#clearRefs").onclick=()=>{if(state.refs.length&&confirm("Clear all R2V references?")){state.refs=[];renderRefs();stashCurrentDraft();}};
+
+  $("#closeAssetPicker").onclick=closeAssetPicker;
+  $("#assetPickerSearch").oninput=renderAssetPicker;
+  $("#assetPicker").addEventListener("click",e=>{if(e.target===$("#assetPicker"))closeAssetPicker();});
+
+  $("#addGenerationLora").onclick=addGenerationLora;
+  $("#goLoras").onclick=()=>switchTab("loras");
+  $("#loraSearch").oninput=renderLoras;
+  $("#loraSort").onchange=renderLoras;
+  $("#syncLoras").onclick=async()=>{try{await syncLoraCatalog(true);}catch(e){toast(e.message);}};
+  $("#addLoraVersion").onclick=async()=>{
+    const input=$("#newLoraVersion"), source=input.value.trim();
+    if(!source){toast("Enter a CivitAI version ID or URL");return;}
+    const button=$("#addLoraVersion"); button.disabled=true; button.textContent="Adding…";
+    try{
+      await api("/api/loras/config",{method:"POST",body:{source,enabled:true}});
+      button.textContent="Downloading…";
+      await syncLoraCatalog(false);
+      input.value="";
+      toast("LoRA added to managed catalog");
+    }catch(e){toast(e.message);}
+    finally{button.disabled=false;button.textContent="Add + Sync";}
   };
+
+  $("#assetSearch").oninput=renderAssetLibrary;
+  $("#assetSort").onchange=renderAssetLibrary;
+  $("#refreshAssets").onclick=()=>loadAssets(true);
 
   document.addEventListener("paste",async e=>{
     if(state.tab!=="generate")return;
@@ -737,37 +782,33 @@ function wire(){
     const file=new File([blob],"pasted_"+Date.now()+".png",{type:blob.type||"image/png"});
     e.preventDefault();
     try{
-      const d=await uploadFile(file); await refreshInputOptions();
-      if(state.mode==="r2v"){addRef("image",d.file);toast("Pasted image added as R2V reference");}
-      else {setMode("i2v");$("#startImage").value=d.file;$("#startSelected").textContent=d.file;toast("Pasted image set as I2V start");}
+      const d=await uploadFile(file);
+      await loadAssets(false);
+      if(state.mode==="r2v"){
+        addRef("image",d.file);
+        toast("Pasted image added as R2V reference");
+      }else{
+        if(state.mode!=="i2v")setMode("i2v");
+        state.startingImage=d.file;
+        renderStartingImage();
+        stashCurrentDraft();
+        toast("Pasted image set as I2V start");
+      }
     }catch(err){toast(err.message);}
   });
 
   $("#saveTemplate").onclick=async()=>{
     const name=prompt("Template name"); if(!name)return;
-    try{await api("/api/templates",{method:"POST",body:{name,value:formSnapshot()}});await loadTemplates();$("#templateSelect").value=name;toast("Template saved");}catch(e){toast(e.message);}
+    try{
+      stashCurrentDraft();
+      await api("/api/templates",{method:"POST",body:{name,value:formSnapshot()}});
+      await loadTemplates(); $("#templateSelect").value=name; toast("Template saved");
+    }catch(e){toast(e.message);}
   };
   $("#templateSelect").onchange=e=>{if(e.target.value&&state.templates[e.target.value])applySnapshot(state.templates[e.target.value]);};
   $("#deleteTemplate").onclick=async()=>{
     const name=$("#templateSelect").value;if(!name)return;
     try{await api("/api/templates/"+encodeURIComponent(name),{method:"DELETE"});await loadTemplates();toast("Template deleted");}catch(e){toast(e.message);}
-  };
-
-  $("#syncLoras").onclick=async()=>{
-    try{await syncLoraCatalog(true);}catch(e){toast(e.message);}
-  };
-  $("#addLoraVersion").onclick=async()=>{
-    const input=$("#newLoraVersion"), source=input.value.trim();
-    if(!source){toast("Enter a CivitAI version ID or URL");return;}
-    const b=$("#addLoraVersion");b.disabled=true;b.textContent="Adding…";
-    try{
-      await api("/api/loras/config",{method:"POST",body:{source,enabled:true}});
-      b.textContent="Downloading…";
-      await syncLoraCatalog(false);
-      input.value="";
-      toast("LoRA added to managed catalog");
-    }catch(e){toast(e.message);}
-    finally{b.disabled=false;b.textContent="Add + Sync";}
   };
 
   $("#freeMemory").onclick=async()=>{try{await api("/api/system/free",{method:"POST"});toast("Memory release requested");}catch(e){toast(e.message);}};
@@ -778,11 +819,19 @@ function wire(){
       msg($("#systemMsg"),"System prompts saved. New Auto jobs use them immediately.","ok");
     }catch(e){msg($("#systemMsg"),e.message,"error");}
   };
+
+  window.addEventListener("pagehide",()=>{stashCurrentDraft();});
 }
 
 async function init(){
-  wire(); setMode("t2v");setPromptMode("auto");renderRefs();renderSelectedLoras();
-  await Promise.allSettled([refreshInfo(),refreshInputOptions(),loadLoras(),loadTemplates(),refreshQueue(),refreshProgress(),refreshOutputs(true)]);
+  wire();
+  renderRefs(); renderSelectedLoras(); renderStartingImage();
+  await Promise.allSettled([
+    refreshInfo(),loadLoras(),loadAssets(true),loadTemplates(),
+    refreshQueue(),refreshProgress(),refreshOutputs(true)
+  ]);
+  await loadUiState();
+  renderLoras(); renderAssetLibrary(); renderRefs(); renderStartingImage(); renderSelectedLoras();
   setInterval(refreshProgress,700);
   setInterval(refreshQueue,2500);
   setInterval(refreshInfo,5000);
