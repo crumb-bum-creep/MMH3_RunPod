@@ -116,7 +116,7 @@ function applyDraft(v={}){
   state.startingImage=v.starting_image||null;
   state.refs=Array.isArray(v.refs)?structuredClone(v.refs):[];
   state.selectedLoras.clear();
-  (v.loras||[]).forEach(x=>{if(x.filename)state.selectedLoras.set(x.filename,{...x});});
+  (v.loras||[]).forEach(x=>{if(x.filename&&!isCoreWorkflowLora(x))state.selectedLoras.set(x.filename,{...x});});
   renderStartingImage();
   renderRefs();
   renderSelectedLoras();
@@ -206,6 +206,18 @@ async function refreshInputOptions(){
   return loadAssets(false);
 }
 
+async function renameAsset(file){
+  if(!file)return;
+  const current=assetByFile(file);
+  const next=prompt("Asset nickname",current?.nickname||"");
+  if(next===null)return;
+  try{
+    await api("/api/assets/meta",{method:"PUT",body:{file,nickname:next}});
+    await loadAssets(false);
+    toast(next.trim()?"Asset nickname saved":"Asset nickname cleared");
+  }catch(e){toast(e.message);}
+}
+
 function renderStartingImage(){
   const host=$("#startSelected");
   if(!host)return;
@@ -217,10 +229,14 @@ function renderStartingImage(){
   }
   const thumb=assetThumb(file);
   host.className="selected-asset-slot";
-  host.innerHTML=`<div class="asset-mini">
-    ${thumb?`<img src="${esc(thumb)}" alt="">`:'<div class="asset-icon">IMG</div>'}
-    <div class="asset-mini-text"><strong>${esc(assetName(file))}</strong><div class="muted">${esc(file)}</div></div>
+  host.innerHTML=`<div class="selected-asset-inner">
+    <div class="asset-mini">
+      ${thumb?`<img src="${esc(thumb)}" alt="">`:'<div class="asset-icon">IMG</div>'}
+      <div class="asset-mini-text"><strong>${esc(assetName(file))}</strong><div class="muted">${esc(file)}</div></div>
+    </div>
+    <button class="ghost small rename-start-asset" type="button">Name</button>
   </div>`;
+  $(".rename-start-asset",host).onclick=()=>renameAsset(file);
 }
 
 function moveRefWithinKind(index,delta){
@@ -251,6 +267,7 @@ function renderRefs(){
         </div>
       </div>
       <div class="ref-actions">
+        <button class="ghost small rename-ref" type="button" aria-label="Nickname asset">✎</button>
         <button class="ghost small move-up" type="button" ${pos===0?"disabled":""} aria-label="Move up">↑</button>
         <button class="ghost small move-down" type="button" ${pos===same.length-1?"disabled":""} aria-label="Move down">↓</button>
         <button class="danger ghost small remove-ref" type="button" aria-label="Remove">×</button>
@@ -260,6 +277,7 @@ function renderRefs(){
   $$(".ref-card",host).forEach(row=>{
     const i=Number(row.dataset.i);
     $(".remove-ref",row).onclick=()=>{state.refs.splice(i,1);renderRefs();stashCurrentDraft();};
+    $(".rename-ref",row).onclick=()=>renameAsset(state.refs[i].file);
     $(".move-up",row).onclick=()=>moveRefWithinKind(i,-1);
     $(".move-down",row).onclick=()=>moveRefWithinKind(i,1);
     const cb=$(".soundtrack",row);
