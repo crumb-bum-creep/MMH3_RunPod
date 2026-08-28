@@ -203,42 +203,70 @@ async function uploadFile(file){
 }
 
 async function refreshInputOptions(){
-  try{
-    const d=await api("/api/inputs?kind=image");
-    const start=$("#startImage"); const current=start.value;
-    start.innerHTML='<option value="">Select existing image…</option>'+
-      (d.items||[]).map(x=>'<option value="'+esc(x.file)+'">'+esc(x.file)+'</option>').join("");
-    if([...start.options].some(o=>o.value===current)) start.value=current;
-
-    const all=await api("/api/inputs?kind=all");
-    const ref=$("#refExisting"); const rc=ref.value;
-    ref.innerHTML='<option value="">Existing input…</option>'+
-      (all.items||[]).map(x=>{
-        const ext=x.file.split(".").pop().toLowerCase();
-        const kind=["png","jpg","jpeg","webp","bmp"].includes(ext)?"image":
-          ["mp4","mov","mkv","webm","avi"].includes(ext)?"video":"audio";
-        return '<option data-kind="'+kind+'" value="'+esc(x.file)+'">'+esc(kind.toUpperCase()+" · "+x.file)+'</option>';
-      }).join("");
-    if([...ref.options].some(o=>o.value===rc)) ref.value=rc;
-  }catch(e){}
+  return loadAssets(false);
 }
+
+function renderStartingImage(){
+  const host=$("#startSelected");
+  if(!host)return;
+  const file=state.startingImage;
+  if(!file){
+    host.className="selected-asset-slot muted";
+    host.innerHTML="No starting image selected.";
+    return;
+  }
+  const thumb=assetThumb(file);
+  host.className="selected-asset-slot";
+  host.innerHTML=`<div class="asset-mini">
+    ${thumb?`<img src="${esc(thumb)}" alt="">`:'<div class="asset-icon">IMG</div>'}
+    <div class="asset-mini-text"><strong>${esc(assetName(file))}</strong><div class="muted">${esc(file)}</div></div>
+  </div>`;
+}
+
+function moveRefWithinKind(index,delta){
+  const ref=state.refs[index];
+  if(!ref)return;
+  const same=state.refs.map((x,i)=>x.kind===ref.kind?i:-1).filter(i=>i>=0);
+  const pos=same.indexOf(index), next=same[pos+delta];
+  if(next==null)return;
+  [state.refs[index],state.refs[next]]=[state.refs[next],state.refs[index]];
+  renderRefs(); stashCurrentDraft();
+}
+
 function renderRefs(){
   const host=$("#refs");
+  if(!host)return;
   if(!state.refs.length){host.innerHTML='<div class="muted">No references selected.</div>';return;}
-  host.innerHTML=state.refs.map((r,i)=>`
-    <div class="ref-card" data-i="${i}">
-      <div>
-        <strong>${esc(r.kind.toUpperCase())}</strong> · ${esc(r.file)}
-        ${r.kind==="video"?`<label class="check"><input class="soundtrack" type="checkbox" ${r.use_soundtrack!==false?"checked":""}> Use video soundtrack</label>`:""}
+  host.innerHTML=state.refs.map((r,i)=>{
+    const thumb=r.kind==="image"?assetThumb(r.file):null;
+    const same=state.refs.map((x,j)=>x.kind===r.kind?j:-1).filter(j=>j>=0);
+    const pos=same.indexOf(i);
+    return `<div class="ref-card ref-rich" data-i="${i}">
+      <div class="asset-mini">
+        ${thumb?`<img src="${esc(thumb)}" alt="">`:`<div class="asset-icon">${esc(({image:"IMG",video:"VID",audio:"AUD"}[r.kind]||"?"))}</div>`}
+        <div class="asset-mini-text">
+          <div class="ref-title"><span class="ref-slot">${esc(refTag(i))}</span><strong>${esc(assetName(r.file))}</strong></div>
+          <div class="muted filename-line">${esc(r.file)}</div>
+          ${r.kind==="video"?`<label class="check compact-check"><input class="soundtrack" type="checkbox" ${r.use_soundtrack!==false?"checked":""}> Use soundtrack</label>`:""}
+        </div>
       </div>
-      <button class="danger ghost remove-ref">×</button>
-    </div>`).join("");
+      <div class="ref-actions">
+        <button class="ghost small move-up" type="button" ${pos===0?"disabled":""} aria-label="Move up">↑</button>
+        <button class="ghost small move-down" type="button" ${pos===same.length-1?"disabled":""} aria-label="Move down">↓</button>
+        <button class="danger ghost small remove-ref" type="button" aria-label="Remove">×</button>
+      </div>
+    </div>`;
+  }).join("");
   $$(".ref-card",host).forEach(row=>{
     const i=Number(row.dataset.i);
-    $(".remove-ref",row).onclick=()=>{state.refs.splice(i,1);renderRefs();};
-    const cb=$(".soundtrack",row); if(cb) cb.onchange=()=>state.refs[i].use_soundtrack=cb.checked;
+    $(".remove-ref",row).onclick=()=>{state.refs.splice(i,1);renderRefs();stashCurrentDraft();};
+    $(".move-up",row).onclick=()=>moveRefWithinKind(i,-1);
+    $(".move-down",row).onclick=()=>moveRefWithinKind(i,1);
+    const cb=$(".soundtrack",row);
+    if(cb)cb.onchange=()=>{state.refs[i].use_soundtrack=cb.checked;stashCurrentDraft();};
   });
 }
+
 function canAddRef(kind){
   const cap={image:9,video:3,audio:3}[kind];
   return state.refs.filter(x=>x.kind===kind).length<cap;
@@ -246,78 +274,113 @@ function canAddRef(kind){
 function addRef(kind,file,useSoundtrack=true){
   if(!canAddRef(kind)){toast("Reference limit reached for "+kind);return false;}
   state.refs.push({kind,file,...(kind==="video"?{use_soundtrack:useSoundtrack}:{})});
-  renderRefs(); return true;
+  renderRefs(); stashCurrentDraft(); return true;
 }
-
 async function addUploadedReference(kind,file){
   try{
     const d=await uploadFile(file);
-    addRef(kind,d.file,true); refreshInputOptions();
+    await loadAssets(false);
+    addRef(kind,d.file,true);
   }catch(e){toast("Upload failed: "+e.message);}
 }
 
+function sortedLoraCatalog(){
+  return [...state.loraCatalog].sort((a,b)=>
+    String(a.nickname||a.model_name||a.version_name||a.filename).localeCompare(
+      String(b.nickname||b.model_name||b.version_name||b.filename),undefined,{sensitivity:"base"}
+    )
+  );
+}
 function selectedLoraArray(){
   return [...state.selectedLoras.values()].map(x=>({
     filename:x.filename,
     strength:Number(x.strength ?? x.recommended_strength ?? 1),
-    nickname:x.nickname||x.model_name||x.filename
+    nickname:x.nickname||x.model_name||x.version_name||x.filename
   }));
+}
+function loraOptions(current){
+  return sortedLoraCatalog().map(x=>{
+    const name=x.nickname||x.model_name||x.version_name||x.filename;
+    return `<option value="${esc(x.filename)}" ${x.filename===current?"selected":""}>${esc(name)}</option>`;
+  }).join("");
 }
 function renderSelectedLoras(){
   const host=$("#selectedLoras"), arr=selectedLoraArray();
+  if(!host)return;
   $("#loraCount").textContent=String(arr.length);
   if(!arr.length){host.innerHTML='<div class="muted">No custom LoRAs selected.</div>';return;}
-  host.innerHTML=arr.map(x=>`<div class="ref-card"><div><strong>${esc(x.nickname)}</strong><div class="muted">${esc(x.filename)}</div></div><span class="pill">${Number(x.strength).toFixed(2)}</span></div>`).join("");
+  host.innerHTML=arr.map(x=>`<div class="gen-lora-row" data-file="${esc(x.filename)}">
+    <select class="gen-lora-select" aria-label="LoRA">${loraOptions(x.filename)}</select>
+    <input class="gen-lora-strength" aria-label="Strength" type="number" step=".05" min="-3" max="3" value="${esc(Number(x.strength).toFixed(2))}">
+    <button class="danger ghost remove-gen-lora" type="button" aria-label="Remove LoRA">×</button>
+  </div>`).join("");
+  $$(".gen-lora-row",host).forEach(row=>{
+    const oldFile=row.dataset.file;
+    $(".gen-lora-select",row).onchange=e=>{
+      const newFile=e.target.value;
+      if(newFile!==oldFile && state.selectedLoras.has(newFile)){
+        toast("That LoRA is already selected");
+        e.target.value=oldFile;
+        return;
+      }
+      const old=state.selectedLoras.get(oldFile)||{};
+      const item=state.loraCatalog.find(x=>x.filename===newFile)||old;
+      state.selectedLoras.delete(oldFile);
+      state.selectedLoras.set(newFile,{...item,strength:Number($(".gen-lora-strength",row).value||item.recommended_strength||1)});
+      renderSelectedLoras(); stashCurrentDraft();
+    };
+    $(".gen-lora-strength",row).onchange=e=>{
+      const item=state.selectedLoras.get(oldFile);
+      if(item){item.strength=Number(e.target.value||item.recommended_strength||1);stashCurrentDraft();}
+    };
+    $(".remove-gen-lora",row).onclick=()=>{state.selectedLoras.delete(oldFile);renderSelectedLoras();stashCurrentDraft();};
+  });
 }
+function addGenerationLora(){
+  const next=sortedLoraCatalog().find(x=>!state.selectedLoras.has(x.filename));
+  if(!next){toast(state.loraCatalog.length?"All LoRAs are already selected":"LoRA catalog is empty");return;}
+  state.selectedLoras.set(next.filename,{...next,strength:Number(next.recommended_strength??1)});
+  renderSelectedLoras(); stashCurrentDraft();
+}
+
 function renderLoras(){
-  const q=$("#loraSearch").value.trim().toLowerCase();
   const host=$("#loraLibrary");
-  const items=state.loraCatalog.filter(x=>!q||[x.nickname,x.model_name,x.version_name,x.filename,...(x.tags||[])].join(" ").toLowerCase().includes(q));
-  if(!items.length){host.innerHTML='<div class="muted">No matching LoRAs. Sync if you recently changed the catalog.</div>';return;}
-  host.innerHTML=items.map((x,i)=>{
-    const key=x.filename, selected=state.selectedLoras.get(key);
-    const strength=selected?.strength ?? x.recommended_strength ?? 1;
+  if(!host)return;
+  const q=($("#loraSearch")?.value||"").trim().toLowerCase();
+  const sort=$("#loraSort")?.value||"alpha";
+  let items=state.loraCatalog.filter(x=>!q||[
+    x.nickname,x.model_name,x.version_name,x.filename,...(x.tags||[]),...(x.trigger_words||[])
+  ].join(" ").toLowerCase().includes(q));
+  if(sort==="alpha")items=[...items].sort((a,b)=>String(a.nickname||a.model_name||a.version_name||a.filename).localeCompare(String(b.nickname||b.model_name||b.version_name||b.filename),undefined,{sensitivity:"base"}));
+  if(!items.length){host.innerHTML='<div class="muted">No matching LoRAs.</div>';return;}
+  host.innerHTML=items.map(x=>{
+    const name=x.nickname||x.model_name||x.version_name||x.filename;
+    const tags=(x.tags||[]).map(t=>`<span class="tag-chip">${esc(t)}</span>`).join("");
     const triggers=(x.trigger_words||[]).join(", ");
-    return `<div class="lora-card" data-file="${esc(key)}">
-      <div class="lora-head">
-        <input class="pick" type="checkbox" ${selected?"checked":""}>
-        <div class="lora-main">
-          <div class="lora-name">${esc(x.nickname||x.model_name||x.version_name||x.filename)}</div>
-          <div class="lora-file">${esc(x.filename)}</div>
-          <div>${x.managed?'<span class="pill">managed</span>':'<span class="pill">local</span>'}
-          ${x.version_id?'<span class="pill">v'+esc(x.version_id)+'</span>':""}</div>
-        </div>
-      </div>
-      <div class="lora-controls">
-        <label>Strength</label><input class="strength" type="number" step=".05" min="-3" max="3" value="${esc(strength)}">
-      </div>
-      ${triggers?'<div class="triggers"><strong>Triggers:</strong> '+esc(triggers)+'</div>':""}
-      ${(x.notes||[]).length?'<div class="triggers"><strong>Notes:</strong> '+esc((x.notes||[]).join(" · "))+'</div>':""}
-      ${x.managed?`<details class="meta-editor">
-        <summary>Edit metadata</summary>
+    return `<details class="lora-card compact-lora" data-file="${esc(x.filename)}">
+      <summary class="lora-summary">
+        <div class="lora-summary-name"><strong>${esc(name)}</strong><div class="lora-file">${esc(x.filename)}</div></div>
+        <div class="lora-summary-tags">${tags||'<span class="muted">No tags</span>'}</div>
+        <div class="lora-summary-strength"><span class="muted">Rec.</span><strong>${Number(x.recommended_strength??1).toFixed(2)}</strong></div>
+        <div class="lora-summary-trigger"><span class="muted">Triggers</span><span>${esc(triggers||"—")}</span></div>
+      </summary>
+      <div class="meta-editor">
+        ${x.managed?`
         <label>Nickname</label><input class="meta-nickname" value="${esc(x.nickname||"")}">
         <label>Recommended strength</label><input class="meta-strength" type="number" step=".05" value="${esc(x.recommended_strength??1)}">
         <label>Trigger words <span class="muted">(comma-separated)</span></label><input class="meta-triggers" value="${esc((x.trigger_words||[]).join(", "))}">
         <label>Tags <span class="muted">(comma-separated)</span></label><input class="meta-tags" value="${esc((x.tags||[]).join(", "))}">
         <label>Personal notes <span class="muted">(one per line)</span></label><textarea class="meta-notes" rows="3">${esc((x.notes||[]).join("\n"))}</textarea>
-        <button class="secondary save-meta">Save metadata</button>
-      </details>`:""}
-    </div>`;
+        <button class="secondary save-meta" type="button">Save metadata</button>
+        `:`<div class="muted">Local/core LoRA · metadata editing is available for managed CivitAI LoRAs.</div>`}
+      </div>
+    </details>`;
   }).join("");
   $$(".lora-card",host).forEach(card=>{
     const file=card.dataset.file;
     const item=state.loraCatalog.find(x=>x.filename===file);
-    const pick=$(".pick",card), strength=$(".strength",card);
-    const sync=()=>{
-      if(pick.checked){
-        state.selectedLoras.set(file,{...item,strength:Number(strength.value||item.recommended_strength||1)});
-      }else state.selectedLoras.delete(file);
-      renderSelectedLoras();
-    };
-    pick.onchange=sync;
-    strength.onchange=()=>{if(pick.checked)sync();};
     const save=$(".save-meta",card);
-    if(save) save.onclick=async()=>{
+    if(save)save.onclick=async()=>{
       save.disabled=true; save.textContent="Saving…";
       try{
         await api("/api/loras/config",{method:"POST",body:{
@@ -338,10 +401,13 @@ function renderLoras(){
 async function loadLoras(){
   try{
     const d=await api("/api/loras");
-    state.loraCatalog=d.items||[]; renderLoras(); renderSelectedLoras();
-  }catch(e){$("#loraLibrary").innerHTML='<div class="message error">'+esc(e.message)+'</div>';}
+    state.loraCatalog=d.items||[];
+    renderLoras(); renderSelectedLoras();
+  }catch(e){
+    const host=$("#loraLibrary");
+    if(host)host.innerHTML='<div class="message error">'+esc(e.message)+'</div>';
+  }
 }
-
 async function syncLoraCatalog(showToast=true){
   const b=$("#syncLoras");
   if(b){b.disabled=true;b.textContent="Syncing…";}
@@ -351,6 +417,91 @@ async function syncLoraCatalog(showToast=true){
     if(showToast)toast("LoRA catalog synced");
   }finally{
     if(b){b.disabled=false;b.textContent="Sync";}
+  }
+}
+
+function assetCardMedia(item){
+  if(item.kind==="image"&&item.thumb)return `<img class="asset-thumb" src="${esc(item.thumb)}" alt="">`;
+  return `<div class="asset-icon asset-thumb">${esc(({video:"VID",audio:"AUD"}[item.kind]||"FILE"))}</div>`;
+}
+function renderAssetLibrary(){
+  const host=$("#assetLibrary");
+  if(!host)return;
+  const q=($("#assetSearch")?.value||"").trim().toLowerCase();
+  const sort=$("#assetSort")?.value||"alpha";
+  let items=state.assetCatalog.filter(x=>!q||[x.display_name,x.nickname,x.file,x.kind].join(" ").toLowerCase().includes(q));
+  if(sort==="alpha")items=[...items].sort((a,b)=>String(a.display_name).localeCompare(String(b.display_name),undefined,{sensitivity:"base"}));
+  else items=[...items].sort((a,b)=>Number(b.mtime||0)-Number(a.mtime||0));
+  if(!items.length){host.innerHTML='<div class="muted">No matching uploaded assets.</div>';return;}
+  host.innerHTML=items.map(x=>`<div class="asset-card" data-file="${esc(x.file)}">
+    ${assetCardMedia(x)}
+    <div class="asset-card-main">
+      <strong>${esc(x.display_name)}</strong>
+      <div class="muted">${esc(x.kind.toUpperCase())} · ${esc(x.file)} · ${bytes(x.size)}</div>
+      <div class="asset-nickname-row">
+        <input class="asset-nickname" value="${esc(x.nickname||"")}" placeholder="Nickname (optional)">
+        <button class="secondary small save-asset-name" type="button">Save</button>
+      </div>
+    </div>
+  </div>`).join("");
+  $$(".asset-card",host).forEach(card=>{
+    $(".save-asset-name",card).onclick=async()=>{
+      const file=card.dataset.file, input=$(".asset-nickname",card), button=$(".save-asset-name",card);
+      button.disabled=true;
+      try{
+        await api("/api/assets/meta",{method:"PUT",body:{file,nickname:input.value}});
+        await loadAssets(false);
+        toast("Asset nickname saved");
+      }catch(e){toast(e.message);}
+      finally{button.disabled=false;}
+    };
+  });
+}
+function renderAssetPicker(){
+  const host=$("#assetPickerList");
+  if(!host)return;
+  const q=($("#assetPickerSearch")?.value||"").trim().toLowerCase();
+  const kind=state.assetPickerKind;
+  let items=state.assetCatalog.filter(x=>(kind==="all"||x.kind===kind)&&(!q||[x.display_name,x.nickname,x.file,x.kind].join(" ").toLowerCase().includes(q)));
+  items=[...items].sort((a,b)=>String(a.display_name).localeCompare(String(b.display_name),undefined,{sensitivity:"base"}));
+  if(!items.length){host.innerHTML='<div class="muted">No matching assets.</div>';return;}
+  host.innerHTML=items.map(x=>`<button class="asset-pick-row" data-file="${esc(x.file)}" data-kind="${esc(x.kind)}" type="button">
+    ${assetCardMedia(x)}
+    <span><strong>${esc(x.display_name)}</strong><small>${esc(x.kind.toUpperCase()+" · "+x.file)}</small></span>
+  </button>`).join("");
+  $$(".asset-pick-row",host).forEach(row=>row.onclick=()=>{
+    const file=row.dataset.file, kind=row.dataset.kind;
+    if(state.assetPickerMode==="start"){
+      state.startingImage=file; renderStartingImage(); stashCurrentDraft();
+    }else{
+      addRef(kind,file,true);
+    }
+    closeAssetPicker();
+  });
+}
+function openAssetPicker(mode,kind="all"){
+  state.assetPickerMode=mode; state.assetPickerKind=kind;
+  $("#assetPickerTitle").textContent=mode==="start"?"Choose starting image":"Add R2V reference";
+  $("#assetPickerHint").textContent=mode==="start"?"Images only":"Images, videos, or audio";
+  $("#assetPickerSearch").value="";
+  renderAssetPicker();
+  const dialog=$("#assetPicker");
+  if(dialog.showModal)dialog.showModal(); else dialog.setAttribute("open","");
+}
+function closeAssetPicker(){
+  const dialog=$("#assetPicker");
+  if(dialog.close&&dialog.open)dialog.close(); else dialog.removeAttribute("open");
+}
+async function loadAssets(render=true){
+  try{
+    const d=await api("/api/inputs?kind=all&sort=recent");
+    state.assetCatalog=d.items||[];
+    renderStartingImage(); renderRefs();
+    if(render)renderAssetLibrary();
+    if($("#assetPicker")?.open)renderAssetPicker();
+  }catch(e){
+    const host=$("#assetLibrary");
+    if(host&&render)host.innerHTML='<div class="message error">'+esc(e.message)+'</div>';
   }
 }
 
