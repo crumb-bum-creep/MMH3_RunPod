@@ -8,14 +8,22 @@ const state = {
   mode: "t2v",
   promptMode: "auto",
   refs: [],
+  startingImage: null,
   selectedLoras: new Map(),
   loraCatalog: [],
+  assetCatalog: [],
   templates: {},
   outputs: [],
   info: null,
   openOutputs: new Set(),
   outputsSignature: "",
   refKind: "image",
+  uiProfiles: {},
+  uiUpdatedAt: 0,
+  draftTimer: null,
+  restoringDraft: false,
+  assetPickerMode: null,
+  assetPickerKind: "all",
 };
 
 function esc(v=""){
@@ -35,6 +43,123 @@ function toast(msg){
   clearTimeout(toast.t); toast.t=setTimeout(()=>el.classList.remove("show"),2200);
 }
 function msg(el,text,type=""){ el.textContent=text||""; el.className="message"+(type?" "+type:""); }
+
+function profileKey(mode=state.mode,promptMode=state.promptMode){ return mode+":"+promptMode; }
+function assetByFile(file){ return state.assetCatalog.find(x=>x.file===file)||null; }
+function assetName(file){
+  const a=assetByFile(file);
+  return a?.display_name||a?.nickname||file?.split("/").pop()||file||"";
+}
+function assetThumb(file){
+  const a=assetByFile(file);
+  return a?.thumb||null;
+}
+function assetKind(file){
+  const a=assetByFile(file);
+  if(a?.kind)return a.kind;
+  const ext=String(file||"").split(".").pop().toLowerCase();
+  return ["png","jpg","jpeg","webp","bmp"].includes(ext)?"image":
+    ["mp4","mov","mkv","webm","avi"].includes(ext)?"video":"audio";
+}
+function refTag(index){
+  const ref=state.refs[index], letter={image:"P",video:"V",audio:"A"}[ref?.kind]||"?";
+  const ordinal=state.refs.slice(0,index+1).filter(x=>x.kind===ref.kind).length;
+  return "<"+letter+ordinal+">";
+}
+function captureDraft(){
+  return {
+    prompt:$("#prompt")?.value||"",
+    aspect_ratio:$("#aspect")?.value||"9:16 (Portrait Widescreen)",
+    megapixels:Number($("#mp")?.value||0.7),
+    duration:Number($("#duration")?.value||5),
+    seed:Number($("#seed")?.value||1),
+    randomize_seed:$("#randomSeed")?.checked!==false,
+    starting_image:state.startingImage||null,
+    refs:structuredClone(state.refs||[]),
+    loras:selectedLoraArray()
+  };
+}
+function mirrorUiState(){
+  const payload={
+    active:{mode:state.mode,prompt_mode:state.promptMode},
+    profiles:state.uiProfiles,
+    updated_at:Date.now()/1000
+  };
+  state.uiUpdatedAt=payload.updated_at;
+  try{localStorage.setItem("mmh3.uiState.v2",JSON.stringify(payload));}catch{}
+  return payload;
+}
+function stashCurrentDraft(){
+  if(state.restoringDraft)return;
+  state.uiProfiles[profileKey()]=captureDraft();
+  mirrorUiState();
+  scheduleDraftSave();
+}
+function scheduleDraftSave(){
+  clearTimeout(state.draftTimer);
+  state.draftTimer=setTimeout(async()=>{
+    try{
+      const payload=mirrorUiState();
+      const d=await api("/api/ui-state",{method:"PUT",body:payload});
+      state.uiUpdatedAt=Number(d.updated_at||state.uiUpdatedAt);
+    }catch{}
+  },450);
+}
+function applyDraft(v={}){
+  state.restoringDraft=true;
+  $("#prompt").value=v.prompt||v.prompt_idea||"";
+  if(v.aspect_ratio)$("#aspect").value=v.aspect_ratio;
+  if(v.megapixels!=null)$("#mp").value=v.megapixels;
+  if(v.duration!=null)$("#duration").value=v.duration;
+  if(v.seed!=null)$("#seed").value=v.seed;
+  $("#randomSeed").checked=v.randomize_seed!==false;
+  state.startingImage=v.starting_image||null;
+  state.refs=Array.isArray(v.refs)?structuredClone(v.refs):[];
+  state.selectedLoras.clear();
+  (v.loras||[]).forEach(x=>{if(x.filename)state.selectedLoras.set(x.filename,{...x});});
+  renderStartingImage();
+  renderRefs();
+  renderSelectedLoras();
+  state.restoringDraft=false;
+}
+function updateDraftLabel(){
+  const el=$("#draftLabel");
+  if(el)el.textContent=state.mode.toUpperCase()+" "+(state.promptMode==="auto"?"Auto":"Custom")+" draft · autosaved";
+}
+function activateProfile(mode,promptMode){
+  if(!state.restoringDraft)stashCurrentDraft();
+  state.mode=mode;
+  state.promptMode=promptMode;
+  setSegment($("#modeSeg"),mode);
+  setSegment($("#promptModeSeg"),promptMode);
+  $("#i2vBlock").hidden=mode!=="i2v";
+  $("#r2vBlock").hidden=mode!=="r2v";
+  $("#promptLabel").textContent=promptMode==="auto"?"Prompt idea":"Custom prompt";
+  applyDraft(state.uiProfiles[profileKey()]||{});
+  updateDraftLabel();
+  refreshInputOptions();
+  mirrorUiState();
+  scheduleDraftSave();
+}
+async function loadUiState(){
+  let remote={active:{mode:"t2v",prompt_mode:"auto"},profiles:{},updated_at:0};
+  try{ remote=await api("/api/ui-state"); }catch{}
+  let local=null;
+  try{local=JSON.parse(localStorage.getItem("mmh3.uiState.v2")||"null");}catch{}
+  const source=local&&Number(local.updated_at||0)>Number(remote.updated_at||0)?local:remote;
+  state.uiProfiles=source.profiles&&typeof source.profiles==="object"?source.profiles:{};
+  state.uiUpdatedAt=Number(source.updated_at||0);
+  const mode=["t2v","i2v","r2v"].includes(source.active?.mode)?source.active.mode:"t2v";
+  const pm=["auto","custom"].includes(source.active?.prompt_mode)?source.active.prompt_mode:"auto";
+  state.restoringDraft=true;
+  state.mode=mode; state.promptMode=pm;
+  setSegment($("#modeSeg"),mode); setSegment($("#promptModeSeg"),pm);
+  $("#i2vBlock").hidden=mode!=="i2v"; $("#r2vBlock").hidden=mode!=="r2v";
+  $("#promptLabel").textContent=pm==="auto"?"Prompt idea":"Custom prompt";
+  applyDraft(state.uiProfiles[profileKey()]||{});
+  state.restoringDraft=false;
+  updateDraftLabel();
+}
 
 async function api(path, options={}){
   const opts={...options, headers:{...(options.headers||{})}};
@@ -63,22 +188,14 @@ function switchTab(name){
   $$(".tab").forEach(s=>s.classList.toggle("active",s.id==="tab-"+name));
   if(name==="outputs") refreshOutputs(true);
   if(name==="loras") loadLoras();
+  if(name==="assets") loadAssets();
   if(name==="system"){ refreshInfo(); loadPrompts(); }
 }
 function setSegment(host, value){
   $$("button",host).forEach(b=>b.classList.toggle("active",b.dataset.value===value));
 }
-function setMode(mode){
-  state.mode=mode; setSegment($("#modeSeg"),mode);
-  $("#i2vBlock").hidden=mode!=="i2v";
-  $("#r2vBlock").hidden=mode!=="r2v";
-  $("#promptLabel").textContent=state.promptMode==="auto"?"Prompt idea":"Custom prompt";
-  refreshInputOptions();
-}
-function setPromptMode(mode){
-  state.promptMode=mode; setSegment($("#promptModeSeg"),mode);
-  $("#promptLabel").textContent=mode==="auto"?"Prompt idea":"Custom prompt";
-}
+function setMode(mode){ activateProfile(mode,state.promptMode); }
+function setPromptMode(mode){ activateProfile(state.mode,mode); }
 
 async function uploadFile(file){
   const fd=new FormData(); fd.append("file",file,file.name||"upload.bin");
