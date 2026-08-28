@@ -59,23 +59,15 @@ RUN set -eux; \
     find /ComfyUI -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true
 
 
-# Stage the heaviest Python payloads separately. The final image restores them
-# into the same site-packages paths, but each COPY becomes an independent
-# registry blob. Docker pulls three layers concurrently by default, so this
-# avoids making one ~4 GB compressed venv blob the entire cold-start critical
-# path.
-RUN set -eux; \
-    SP=/opt/venv/lib/python3.12/site-packages; \
-    mkdir -p /opt/mmh3-layer/torch/$SP /opt/mmh3-layer/nvidia-a/$SP/nvidia /opt/mmh3-layer/nvidia-b/$SP/nvidia /opt/mmh3-layer/nvidia-c/$SP/nvidia /opt/mmh3-layer/other/$SP; \
-    echo "=== heavy Python package sizes before split ==="; \
-    du -sh "$SP"/torch "$SP"/nvidia "$SP"/triton "$SP"/onnxruntime 2>/dev/null || true; \
-    du -sh "$SP"/nvidia/* 2>/dev/null | sort -h || true; \
-    if [[ -d "$SP/torch" ]]; then mv "$SP/torch" /opt/mmh3-layer/torch/$SP/; fi; \
-    for d in cublas cudnn; do [[ ! -e "$SP/nvidia/$d" ]] || mv "$SP/nvidia/$d" /opt/mmh3-layer/nvidia-a/$SP/nvidia/; done; \
-    for d in cusparse cusolver cufft curand; do [[ ! -e "$SP/nvidia/$d" ]] || mv "$SP/nvidia/$d" /opt/mmh3-layer/nvidia-b/$SP/nvidia/; done; \
-    if [[ -d "$SP/nvidia" ]]; then find "$SP/nvidia" -mindepth 1 -maxdepth 1 -exec mv -t /opt/mmh3-layer/nvidia-c/$SP/nvidia/ {} +; rmdir "$SP/nvidia" || true; fi; \
-    for d in triton onnxruntime; do [[ ! -e "$SP/$d" ]] || mv "$SP/$d" /opt/mmh3-layer/other/$SP/; done; \
-    echo "=== venv after split ==="; du -sh /opt/venv /opt/mmh3-layer/*
+# Repack the validated Python environment into balanced registry blobs. This
+# does not change a single final filesystem path; it only gives Docker's
+# concurrent layer downloader several similarly-sized units of work instead of
+# one 1.6+ GB compressed bottleneck.
+COPY scripts/split_runtime_layers.py /tmp/split_runtime_layers.py
+RUN /opt/venv/bin/python /tmp/split_runtime_layers.py \
+    && rm -f /tmp/split_runtime_layers.py \
+    && echo "=== venv skeleton after split ===" \
+    && du -sh /opt/venv /opt/mmh3-layer/*
 
 
 FROM ubuntu:24.04 AS runtime
@@ -93,11 +85,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
 
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /opt/mmh3-layer/venv-1/ /
+COPY --from=builder /opt/mmh3-layer/venv-2/ /
+COPY --from=builder /opt/mmh3-layer/venv-3/ /
 COPY --from=builder /opt/mmh3-layer/torch/ /
-COPY --from=builder /opt/mmh3-layer/nvidia-a/ /
-COPY --from=builder /opt/mmh3-layer/nvidia-b/ /
-COPY --from=builder /opt/mmh3-layer/nvidia-c/ /
-COPY --from=builder /opt/mmh3-layer/other/ /
+COPY --from=builder /opt/mmh3-layer/triton/ /
+COPY --from=builder /opt/mmh3-layer/onnxruntime/ /
+COPY --from=builder /opt/mmh3-layer/cudnn/ /
+COPY --from=builder /opt/mmh3-layer/nvidia-1/ /
+COPY --from=builder /opt/mmh3-layer/nvidia-2/ /
+COPY --from=builder /opt/mmh3-layer/nvidia-3/ /
 COPY --from=builder /ComfyUI /ComfyUI
 
 RUN set -eux; \
