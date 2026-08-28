@@ -506,30 +506,22 @@ async function loadAssets(render=true){
 }
 
 function formSnapshot(){
-  return {
-    mode:state.mode,prompt_mode:state.promptMode,prompt:$("#prompt").value,
-    aspect_ratio:$("#aspect").value,megapixels:Number($("#mp").value),
-    duration:Number($("#duration").value),seed:Number($("#seed").value),
-    randomize_seed:$("#randomSeed").checked,starting_image:$("#startImage").value||null,
-    refs:state.refs,loras:selectedLoraArray()
-  };
+  const draft=captureDraft();
+  return {mode:state.mode,prompt_mode:state.promptMode,...draft};
 }
 function applySnapshot(v){
-  if(!v) return;
-  setMode(v.mode||"t2v"); setPromptMode(v.prompt_mode||"auto");
-  $("#prompt").value=v.prompt||v.prompt_idea||"";
-  if(v.aspect_ratio) $("#aspect").value=v.aspect_ratio;
-  if(v.megapixels!=null) $("#mp").value=v.megapixels;
-  if(v.duration!=null) $("#duration").value=v.duration;
-  if(v.seed!=null) $("#seed").value=v.seed;
-  $("#randomSeed").checked=v.randomize_seed!==false;
-  state.refs=Array.isArray(v.refs)?structuredClone(v.refs):[];
-  renderRefs();
-  state.selectedLoras.clear();
-  (v.loras||[]).forEach(x=>{if(x.filename)state.selectedLoras.set(x.filename,{...x});});
-  renderSelectedLoras(); renderLoras();
-  if(v.starting_image) $("#startImage").value=v.starting_image;
+  if(!v)return;
+  const mode=v.mode||"t2v", pm=v.prompt_mode||"auto";
+  if(!state.restoringDraft)stashCurrentDraft();
+  state.mode=mode; state.promptMode=pm;
+  setSegment($("#modeSeg"),mode); setSegment($("#promptModeSeg"),pm);
+  $("#i2vBlock").hidden=mode!=="i2v"; $("#r2vBlock").hidden=mode!=="r2v";
+  $("#promptLabel").textContent=pm==="auto"?"Prompt idea":"Custom prompt";
+  applyDraft(v);
+  state.uiProfiles[profileKey()]=captureDraft();
+  updateDraftLabel(); mirrorUiState(); scheduleDraftSave();
 }
+
 async function loadTemplates(){
   try{
     const d=await api("/api/templates"); state.templates=d.templates||{};
