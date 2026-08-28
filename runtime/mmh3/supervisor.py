@@ -135,23 +135,29 @@ def main() -> int:
     mem_cfg.update(profile.get("memory") or {})
     threading.Thread(target=run_memory_guard, args=(mem_cfg,), daemon=True).start()
 
-    # Prioritize interactive readiness over background provisioning. On a fresh
-    # volume the provisioner can immediately start writing tens of gigabytes,
-    # which competes with Comfy startup for disk/network/CPU. Bring the control
-    # plane up first, then start background downloads as soon as Comfy is ready
-    # (or after the readiness timeout so provisioning is never blocked forever).
-    comfy_proc = start_comfy()
+    # Optimize for two separate milestones:
+    #   * interactive shell/UI availability as fast as possible;
+    #   * first-generation readiness on an empty volume.
+    #
+    # Phone UI and Comfy start first. Give them a very short uncontested grace
+    # period, then start large model downloads while Comfy finishes importing.
+    # Jupyter is intentionally deferred until Comfy is healthy so notebook
+    # startup cannot steal CPU/I/O from the latency-critical service.
     phone_proc = start_phone()
-    jupyter_proc = start_jupyter()
-    startup_mark(control_plane_spawned=True)
+    comfy_proc = start_comfy()
+    startup_mark(phone_spawned=True, comfy_spawned=True)
+
+    STOP.wait(3)
+    provision_proc = start_provisioner()
+    startup_mark(provisioner_started=True)
 
     comfy_ready = comfy.wait_ready(180)
     startup_mark(comfy_ready=comfy_ready, comfy_ready_seconds=round(time.time() - START_EPOCH, 3))
     if not comfy_ready:
-        print("[mmh3] ComfyUI did not become healthy within 180s; starting provisioner anyway.", flush=True)
+        print("[mmh3] ComfyUI did not become healthy within 180s; supervisor remains alive.", flush=True)
 
-    provision_proc = start_provisioner()
-    startup_mark(provisioner_started=True)
+    jupyter_proc = start_jupyter()
+    startup_mark(jupyter_spawned=bool(jupyter_proc))
 
     def _signal(_sig, _frame):
         STOP.set()
