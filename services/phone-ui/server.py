@@ -884,9 +884,9 @@ async def serve_input_thumb(request: web.Request) -> web.StreamResponse:
 
 
 async def api_ui_state_get(request: web.Request) -> web.Response:
-    value = _load_json(UI_STATE_FILE, {"active": {"mode": "t2v", "prompt_mode": "auto"}, "profiles": {}})
+    value = _load_json(UI_STATE_FILE, {"active": {"mode": "t2v", "prompt_mode": "auto"}, "profiles": {}, "updated_at": 0})
     if not isinstance(value, dict):
-        value = {"active": {"mode": "t2v", "prompt_mode": "auto"}, "profiles": {}}
+        value = {"active": {"mode": "t2v", "prompt_mode": "auto"}, "profiles": {}, "updated_at": 0}
     return web.json_response(value)
 
 
@@ -908,7 +908,7 @@ async def api_ui_state_put(request: web.Request) -> web.Response:
             continue
         if isinstance(value, dict):
             clean_profiles[key] = value
-    value = {"active": {"mode": mode, "prompt_mode": prompt_mode}, "profiles": clean_profiles}
+    value = {"active": {"mode": mode, "prompt_mode": prompt_mode}, "profiles": clean_profiles, "updated_at": time.time()}
     _save_json(UI_STATE_FILE, value)
     return web.json_response({"ok": True, **value})
 
