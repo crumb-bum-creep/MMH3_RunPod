@@ -2,7 +2,7 @@ name: Test startup optimization branch
 
 on:
   push:
-    branches: [startup-runtime-fastpath]
+    branches: [startup-runtime-fastpath, phone-ui-library-ux]
   workflow_dispatch:
 
 permissions:
