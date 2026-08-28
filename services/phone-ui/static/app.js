@@ -335,6 +335,12 @@ function renderSelectedLoras(){
   const host=$("#selectedLoras"), arr=selectedLoraArray();
   if(!host)return;
   $("#loraCount").textContent=String(arr.length);
+  const add=$("#addGenerationLora");
+  if(add){
+    const available=sortedLoraCatalog().filter(x=>!state.selectedLoras.has(x.filename));
+    add.innerHTML='<option value="">+ Add LoRA…</option>'+available.map(x=>`<option value="${esc(x.filename)}">${esc(x.nickname||x.model_name||x.version_name||x.filename)}</option>`).join("");
+    add.value="";
+  }
   if(!arr.length){host.innerHTML='<div class="muted">No custom LoRAs selected.</div>';return;}
   host.innerHTML=arr.map(x=>`<div class="gen-lora-row" data-file="${esc(x.filename)}">
     <select class="gen-lora-select" aria-label="LoRA">${loraOptions(x.filename)}</select>
@@ -363,9 +369,10 @@ function renderSelectedLoras(){
     $(".remove-gen-lora",row).onclick=()=>{state.selectedLoras.delete(oldFile);renderSelectedLoras();stashCurrentDraft();};
   });
 }
-function addGenerationLora(){
-  const next=sortedLoraCatalog().find(x=>!state.selectedLoras.has(x.filename));
-  if(!next){toast(state.loraCatalog.length?"All LoRAs are already selected":"LoRA catalog is empty");return;}
+function addGenerationLora(file){
+  const next=sortedLoraCatalog().find(x=>x.filename===file);
+  if(!next)return;
+  if(state.selectedLoras.has(file)){toast("That LoRA is already selected");return;}
   state.selectedLoras.set(next.filename,{...next,strength:Number(next.recommended_strength??1)});
   renderSelectedLoras(); stashCurrentDraft();
 }
@@ -375,7 +382,7 @@ function renderLoras(){
   if(!host)return;
   const q=($("#loraSearch")?.value||"").trim().toLowerCase();
   const sort=$("#loraSort")?.value||"alpha";
-  let items=state.loraCatalog.filter(x=>!q||[
+  let items=state.loraCatalog.filter(x=>!isCoreWorkflowLora(x)).filter(x=>!q||[
     x.nickname,x.model_name,x.version_name,x.filename,...(x.tags||[]),...(x.trigger_words||[])
   ].join(" ").toLowerCase().includes(q));
   if(sort==="alpha")items=[...items].sort((a,b)=>String(a.nickname||a.model_name||a.version_name||a.filename).localeCompare(String(b.nickname||b.model_name||b.version_name||b.filename),undefined,{sensitivity:"base"}));
@@ -782,7 +789,7 @@ function wire(){
   $("#assetPickerSearch").oninput=renderAssetPicker;
   $("#assetPicker").addEventListener("click",e=>{if(e.target===$("#assetPicker"))closeAssetPicker();});
 
-  $("#addGenerationLora").onclick=addGenerationLora;
+  $("#addGenerationLora").onchange=e=>{if(e.target.value)addGenerationLora(e.target.value);};
   $("#goLoras").onclick=()=>switchTab("loras");
   $("#loraSearch").oninput=renderLoras;
   $("#loraSort").onchange=renderLoras;
