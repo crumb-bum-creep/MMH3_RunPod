@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install pytest PyYAML requests psutil huggingface_hub
+      - run: pip install pytest PyYAML requests psutil huggingface_hub aiohttp Pillow
       - run: PYTHONPATH=runtime pytest -q
       - run: python -m py_compile services/phone-ui/server.py runtime/mmh3/*.py
       - run: node --check services/phone-ui/static/app.js
