@@ -26,6 +26,8 @@ MMH3 is designed so normal maintenance does not require remembering long ComfyUI
 
 ```bash
 mmh3 status
+mmh3 doctor
+mmh3 gpu-smoke
 mmh3 free
 mmh3 interrupt
 mmh3 restart-comfy
@@ -48,6 +50,14 @@ Shows:
 - cgroup RAM usage / limit
 - Comfy health
 - paths to memory/hardware state
+
+### `mmh3 doctor`
+
+Checks the local 7860/8188/8888 services, MMH3 processes, GPU, cgroup RAM, startup timing, and provisioning state. If the local services are healthy while RunPod's exposed links are unavailable, the command explicitly calls that out as a likely RunPod proxy/host issue.
+
+### `mmh3 gpu-smoke`
+
+Runs a small real CUDA matmul and verifies Triton, SageAttention, and ONNX Runtime's CUDA provider. Use it after moving the template to a new image/runtime architecture.
 
 ### `mmh3 free`
 
