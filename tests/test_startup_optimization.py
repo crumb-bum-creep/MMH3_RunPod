@@ -41,9 +41,13 @@ def test_ultra_image_drops_manager_and_git_metadata():
     assert "FROM ubuntu:24.04 AS runtime" in dockerfile
     assert "rm -rf /ComfyUI/custom_nodes/comfyui-manager" in dockerfile
     assert "rm -rf /ComfyUI/.git /ComfyUI/custom_nodes/*/.git" in dockerfile
-    assert "COPY --from=builder /opt/mmh3-layer/nvidia-a/ /" in dockerfile
-    assert "COPY --from=builder /opt/mmh3-layer/nvidia-b/ /" in dockerfile
-    assert "COPY --from=builder /opt/mmh3-layer/nvidia-c/ /" in dockerfile
+    assert "COPY scripts/split_runtime_layers.py /tmp/split_runtime_layers.py" in dockerfile
+    assert "COPY --from=builder /opt/mmh3-layer/venv-1/ /" in dockerfile
+    assert "COPY --from=builder /opt/mmh3-layer/venv-2/ /" in dockerfile
+    assert "COPY --from=builder /opt/mmh3-layer/venv-3/ /" in dockerfile
+    assert "COPY --from=builder /opt/mmh3-layer/nvidia-1/ /" in dockerfile
+    assert "COPY --from=builder /opt/mmh3-layer/nvidia-2/ /" in dockerfile
+    assert "COPY --from=builder /opt/mmh3-layer/nvidia-3/ /" in dockerfile
 
 
 def test_ops_exposes_doctor_and_gpu_smoke():
