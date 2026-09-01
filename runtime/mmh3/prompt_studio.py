@@ -631,8 +631,12 @@ def validate_project(
     if not str(scene.get("concept") or "").strip():
         warnings.append("Concept/direction is empty.")
 
-    if project["mode"] == "i2v" and not str((project.get("starting_image") or {}).get("asset_file") or "").strip():
-        warnings.append("I2V has no starting image yet; add one before sending the prompt to a Custom generation.")
+    if project["mode"] == "i2v":
+        starting_asset = str((project.get("starting_image") or {}).get("asset_file") or "").strip()
+        if not starting_asset:
+            warnings.append("I2V has no starting image yet; add one before sending the prompt to a Custom generation.")
+        elif available_assets is not None and starting_asset not in available_assets:
+            errors.append(f"I2V starting image is missing: {starting_asset}")
 
     subjects = list(scene.get("subjects") or [])
     subject_ids = [str(x.get("id") or "") for x in subjects]
