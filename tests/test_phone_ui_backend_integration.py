@@ -205,3 +205,30 @@ def test_prompt_studio_planner_merge_preserves_ids_references_and_blocking():
     assert merged["shots"][0]["id"] == "shot_stable_1"
     assert merged["shots"][0]["blocking"][0]["id"] == "block_stable"
     assert merged["shots"][0]["action"] == "new action"
+
+
+def test_prompt_studio_llm_scene_strips_raw_sketch_but_keeps_semantic_blocking():
+    server = load_server_module()
+    scene = server.prompt_studio.new_project()["scene"]
+    scene["shots"][0]["blocking"] = [{
+        "id": "block_1",
+        "subject_id": "",
+        "kind": "note",
+        "label": "foreground mark",
+        "x": 0.1,
+        "y": 0.2,
+        "width": 0.3,
+        "height": 0.4,
+        "facing": "unspecified",
+        "note": "",
+    }]
+    scene["shots"][0]["blocking_sketch"] = [{
+        "id": "stroke_1",
+        "block_id": "block_1",
+        "points": [[0.1, 0.2], [0.3, 0.4]],
+    }]
+
+    llm_scene = server._studio_llm_scene(scene)
+    assert "blocking_sketch" not in llm_scene["shots"][0]
+    assert llm_scene["shots"][0]["blocking"][0]["id"] == "block_1"
+    assert "blocking_sketch" in scene["shots"][0]
