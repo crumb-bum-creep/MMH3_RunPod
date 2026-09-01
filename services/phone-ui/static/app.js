@@ -34,6 +34,7 @@ const state = {
   studioBlockingSelectedId: null,
   studioBlockingDrawMode: false,
   studioBlockingCurrentStroke: null,
+  studioPreflight: null,
 };
 
 function esc(v=""){
@@ -871,6 +872,8 @@ function pullStudioStatic(){
 function scheduleStudioSave(){
   if(!studioProject())return;
   studioSetSaveState("Unsaved…");
+  state.studioPreflight=null;
+  renderStudioPreflight(null);
   clearTimeout(state.studioSaveTimer);
   state.studioSaveTimer=setTimeout(()=>saveStudioProject(false),650);
 }
@@ -891,6 +894,47 @@ function renderStudioSavedSubjects(){
   const sel=$("#studioSavedSubjectSelect");if(!sel)return;
   sel.innerHTML='<option value="">Saved subject…</option>'+state.studioSavedSubjects.map(x=>'<option value="'+esc(x.saved_id||x.id)+'">'+esc(x.label||"Saved subject")+'</option>').join("");
 }
+function renderStudioPreflight(result){
+  const badge=$("#studioPreflightBadge"),host=$("#studioPreflightMsg");if(!badge||!host)return;
+  badge.className="pill";
+  if(!result){
+    badge.textContent="Unchecked";
+    host.textContent="";
+    return;
+  }
+  const errors=result.errors||[],warnings=result.warnings||[];
+  if(errors.length){
+    badge.textContent=errors.length+" issue"+(errors.length===1?"":"s");
+    badge.classList.add("studio-preflight-error");
+  }else if(warnings.length){
+    badge.textContent=warnings.length+" warning"+(warnings.length===1?"":"s");
+    badge.classList.add("studio-preflight-warn");
+  }else{
+    badge.textContent="✓ Ready";
+    badge.classList.add("studio-preflight-ok");
+  }
+  const rows=[
+    ...errors.map(x=>"✕ "+x),
+    ...warnings.map(x=>"⚠ "+x)
+  ];
+  msg(host,rows.join("\n"),errors.length?"error":warnings.length?"":"ok");
+}
+async function runStudioPreflight(project=null,showToast=false){
+  const p=project||await saveStudioProject(false);if(!p)return null;
+  try{
+    const d=await api("/api/prompt-studio/projects/"+encodeURIComponent(p.id)+"/preflight");
+    state.studioPreflight=d.preflight||{valid:false,errors:["Preflight returned no result."],warnings:[]};
+    renderStudioPreflight(state.studioPreflight);
+    if(showToast)toast(state.studioPreflight.valid?"Project preflight complete":"Project has structural issues");
+    return state.studioPreflight;
+  }catch(e){
+    state.studioPreflight={valid:false,errors:[e.message],warnings:[]};
+    renderStudioPreflight(state.studioPreflight);
+    if(showToast)toast("Preflight failed");
+    return state.studioPreflight;
+  }
+}
+
 function renderStudioProject(){
   const p=studioProject();if(!p)return;
   $("#studioProjectSelect").value=p.id;
@@ -912,6 +956,8 @@ function renderStudioProject(){
   renderStudioTimeline();
   renderStudioShots();
   renderStudioCompiled();
+  state.studioPreflight=null;
+  renderStudioPreflight(null);
   msg($("#studioMsg"),"");
 }
 function renderStudioSubjects(){
@@ -1255,6 +1301,11 @@ async function saveStudioSubject(subject){
 }
 async function studioPlan(){
   const p=await saveStudioProject(false);if(!p)return;
+  const preflight=await runStudioPreflight(p,false);
+  if(!preflight?.valid){
+    msg($("#studioMsg"),"Fix the preflight issues above before calling the planner.","error");
+    return;
+  }
   const button=$("#studioPlan");button.disabled=true;button.textContent="Planning…";msg($("#studioMsg"),"Gemini is building the editable scene plan…");
   try{
     const d=await api("/api/prompt-studio/projects/"+encodeURIComponent(p.id)+"/plan",{method:"POST",body:{}});
@@ -1278,6 +1329,11 @@ async function studioAIEdit(scope,targetId,instruction){
 }
 async function studioCompile(){
   const p=await saveStudioProject(false);if(!p)return;
+  const preflight=await runStudioPreflight(p,false);
+  if(!preflight?.valid){
+    msg($("#studioMsg"),"Fix the preflight issues above before compiling.","error");
+    return;
+  }
   const button=$("#studioCompile");button.disabled=true;button.textContent="Compiling…";msg($("#studioMsg"),"Compiling and validating the H3 prompt…");
   try{
     const d=await api("/api/prompt-studio/projects/"+encodeURIComponent(p.id)+"/compile",{method:"POST",body:{}});
@@ -1352,6 +1408,7 @@ function wireStudio(){
     scene.locks=studioToggleLock(scene.locks,e.target.dataset.studioSceneLock,e.target.checked);scheduleStudioSave();
   });
   $$("[data-studio-edit-field]").forEach(el=>el.onclick=()=>studioPromptEdit(el.dataset.studioEditField,"","Describe the change to this field only"));
+  $("#studioPreflight").onclick=()=>runStudioPreflight(null,true);
   $("#studioPlan").onclick=studioPlan;
   $("#studioCheckpoint").onclick=studioCheckpoint;
   $("#studioAddSubject").onclick=()=>addStudioSubject();
