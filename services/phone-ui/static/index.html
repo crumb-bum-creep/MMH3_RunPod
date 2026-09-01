@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>MMH3</title>
-  <link rel="stylesheet" href="/static/styles.css?v=4">
+  <link rel="stylesheet" href="/static/styles.css?v=5">
 </head>
 <body>
 <header>
@@ -366,6 +366,12 @@
     <select id="studioBlockingSubject"><option value="">Choose subject…</option></select>
     <button id="studioAddBlockingSubject" class="secondary small" type="button">Add to frame</button>
   </div>
+  <div class="studio-blocking-sketch-tools">
+    <button id="studioBlockingDrawToggle" class="secondary small" type="button">Draw selected</button>
+    <button id="studioBlockingUndoSketch" class="ghost small" type="button" disabled>Undo stroke</button>
+    <button id="studioBlockingClearSketch" class="danger ghost small" type="button" disabled>Clear sketch</button>
+  </div>
+  <div class="muted studio-sketch-hint">Select a subject block, then draw rough shapes/poses directly in the frame. Each stroke is tagged to that subject and updates its semantic placement.</div>
   <div class="studio-blocking-stage-wrap">
     <div id="studioBlockingFrame" class="studio-blocking-frame" aria-label="Semantic shot blocking frame"></div>
   </div>
@@ -375,6 +381,6 @@
 </dialog>
 
 <div id="toast" role="status"></div>
-<script src="/static/app.js?v=4"></script>
+<script src="/static/app.js?v=5"></script>
 </body>
 </html>
