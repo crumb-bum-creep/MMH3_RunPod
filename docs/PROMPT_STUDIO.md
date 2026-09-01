@@ -151,6 +151,25 @@ Structured output is used for planner/editor responses. Broad edits restore lock
 
 Subject reference bindings are always preserved across AI edits.
 
+## Local project preflight
+
+Prompt Studio can validate the editable project structure before making an OpenRouter request.
+
+The **Check project** control verifies locally:
+
+- referenced persistent assets still exist
+- actual Picture slots have selected assets
+- one Picture number is not accidentally assigned to two different concrete images
+- subject and shot IDs remain unique
+- shot timing is structurally valid
+- shot subject references point to defined subjects
+- semantic blocking points to defined subjects
+- freehand sketch strokes still point to existing blocking items
+
+Incomplete-but-useful states are warnings rather than hard failures. For example, an I2V prompt project may be drafted without choosing its final starting image yet.
+
+Build/Rebuild Plan and Compile + Validate run this preflight automatically. Structural errors stop before any OpenRouter call, while warnings remain visible and allow the operation to continue.
+
 ## Compilation and validation
 
 Compilation is a separate model call from planning.
