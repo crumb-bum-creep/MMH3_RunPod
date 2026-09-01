@@ -180,3 +180,8 @@ touch-action:none;overflow:hidden}
 
 .studio-model-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center}
 #studioModelStatus{margin-top:4px;min-height:18px}
+
+.output-run-meta{display:flex;flex-wrap:wrap;gap:5px;margin:7px 0}
+.output-run-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 7px;border:1px solid var(--line);border-radius:999px;background:#111824;font-size:10px;color:#d7e1f4}
+.output-run-chip strong{font-size:10px;color:#fff}
+.output-lora-chip{background:#17233a}
