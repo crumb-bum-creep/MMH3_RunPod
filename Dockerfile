@@ -96,6 +96,7 @@ COPY --from=builder /opt/mmh3-layer/nvidia-1/ /
 COPY --from=builder /opt/mmh3-layer/nvidia-2/ /
 COPY --from=builder /opt/mmh3-layer/nvidia-3/ /
 COPY --from=builder /ComfyUI /ComfyUI
+COPY custom_nodes/MMH3-Core /ComfyUI/custom_nodes/MMH3-Core
 
 RUN set -eux; \
     sed -i -E 's#^home = .*#home = /usr/bin#; s#^executable = .*#executable = /usr/bin/python3.12#' /opt/venv/pyvenv.cfg; \

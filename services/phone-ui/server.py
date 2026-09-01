@@ -34,7 +34,7 @@ from mmh3.common import (
 from mmh3.hardware import detect
 from mmh3.loras import sync_loras
 
-APP_VERSION = "0.7.0-mmH3-prompt-studio"
+APP_VERSION = "0.7.1-mmH3-workflow-controls"
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 WORKFLOW_DIR = Path(os.environ.get("MMH3_WORKFLOW_DIR", IMAGE_ROOT / "workflows" / "api"))
@@ -183,6 +183,54 @@ def _set_power_loras(graph: dict[str, Any], loras: list[dict[str, Any]]) -> None
             inputs[f"lora_{i}"] = {"on": True, "lora": filename, "strength": strength}
 
 
+def _applied_loras(
+    graph: dict[str, Any],
+    selected: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    out = []
+    selected_by_file = {
+        str(item.get("filename") or item.get("lora") or ""): item
+        for item in (selected or [])
+        if str(item.get("filename") or item.get("lora") or "")
+    }
+    for _, node in find_nodes(graph, "Power Lora Loader (rgthree)"):
+        for key, value in (node.get("inputs") or {}).items():
+            if not re.fullmatch(r"lora_\d+", str(key)) or not isinstance(value, dict):
+                continue
+            if not bool(value.get("on", True)):
+                continue
+            filename = str(value.get("lora") or "").strip()
+            if not filename:
+                continue
+            try:
+                strength = float(value.get("strength", 1.0))
+            except (TypeError, ValueError):
+                strength = 1.0
+            selected_item = selected_by_file.get(filename) or {}
+            out.append({
+                "filename": filename,
+                "nickname": str(selected_item.get("nickname") or ""),
+                "strength": strength,
+                "source": "custom",
+            })
+    for _, node in find_nodes(graph, "LoraLoaderModelOnly"):
+        inputs = node.get("inputs") or {}
+        filename = str(inputs.get("lora_name") or "").strip()
+        if not filename:
+            continue
+        try:
+            strength = float(inputs.get("strength_model", 1.0))
+        except (TypeError, ValueError):
+            strength = 1.0
+        out.append({
+            "filename": filename,
+            "nickname": str((node.get("_meta") or {}).get("title") or "Workflow LoRA"),
+            "strength": strength,
+            "source": "workflow",
+        })
+    return out
+
+
 def _reference_json(refs: list[dict[str, Any]]) -> str:
     out = []
     counts = {"image": 0, "video": 0, "audio": 0}
@@ -235,6 +283,17 @@ def patch_workflow(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
             node["inputs"]["value"] = duration
     for _, node in find_nodes(graph, "RandomNoise"):
         node["inputs"]["noise_seed"] = seed
+
+    sampler_name = str(payload.get("sampler_name") or "").strip()
+    sampler_nodes = find_nodes(graph, "KSamplerSelect")
+    if sampler_nodes:
+        if not sampler_name:
+            sampler_name = str((sampler_nodes[0][1].get("inputs") or {}).get("sampler_name") or "").strip()
+        if not sampler_name:
+            raise web.HTTPBadRequest(text="sampler_name is required")
+        for _, node in sampler_nodes:
+            node.setdefault("inputs", {})["sampler_name"] = sampler_name
+
     for _, node in find_nodes(graph, "VHS_VideoCombine"):
         node["inputs"]["filename_prefix"] = f"MMH3/{mode.upper()}"
 
@@ -319,10 +378,12 @@ def patch_workflow(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         "megapixels": mp,
         "duration": duration,
         "seed": seed,
+        "sampler_name": sampler_name,
         "randomize_seed": bool(payload.get("randomize_seed", True)),
         "starting_image": payload.get("starting_image"),
         "refs": payload.get("refs") or [],
         "loras": payload.get("loras") or [],
+        "applied_loras": _applied_loras(graph, payload.get("loras") or []),
         "queued_at": time.time(),
     }
     return graph, record
@@ -603,6 +664,25 @@ async def _ws_loop(app: web.Application) -> None:
             pass
         app["ws_connected"] = False
         await asyncio.sleep(2)
+
+
+async def api_samplers(request: web.Request) -> web.Response:
+    """Return sampler names from the running Comfy KSamplerSelect definition."""
+    items = []
+    try:
+        async with request.app["session"].get(f"{request.app['comfy']}/object_info/KSamplerSelect") as r:
+            data = await r.json()
+        info = data.get("KSamplerSelect") if isinstance(data, dict) else None
+        required = ((info or {}).get("input") or {}).get("required") or {}
+        spec = required.get("sampler_name")
+        if isinstance(spec, list) and spec and isinstance(spec[0], list):
+            items = [str(x) for x in spec[0]]
+    except Exception:
+        items = []
+    for fallback in ("euler", "seeds_2"):
+        if fallback not in items:
+            items.append(fallback)
+    return web.json_response({"items": items})
 
 
 async def api_info(request: web.Request) -> web.Response:
@@ -1727,6 +1807,7 @@ def make_app(comfy_url: str) -> web.Application:
         web.get("/", index),
         web.static("/static", STATIC, show_index=False),
         web.get("/api/info", api_info),
+        web.get("/api/samplers", api_samplers),
         web.post("/api/generate", api_generate),
         web.get("/api/queue", api_queue),
         web.get("/api/progress", api_progress),

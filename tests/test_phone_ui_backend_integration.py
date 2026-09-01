@@ -290,3 +290,48 @@ def test_prompt_studio_model_check_uses_project_model_without_comfy(tmp_path):
     assert data["model"] == "google/gemini-3-flash-preview"
     assert calls[0]["model"] == "google/gemini-3-flash-preview"
     assert "image_parts" not in calls[0]
+
+
+def test_patch_workflow_sets_sampler_and_records_lora_weights(tmp_path):
+    server = load_server_module()
+    server.WORKFLOW_DIR = ROOT / "workflows" / "api"
+    graph, record = server.patch_workflow({
+        "mode": "t2v",
+        "prompt_mode": "custom",
+        "prompt": "test",
+        "aspect_ratio": "9:16 (Portrait Widescreen)",
+        "megapixels": 0.7,
+        "duration": 5,
+        "randomize_seed": False,
+        "seed": 42,
+        "sampler_name": "euler_ancestral",
+        "loras": [
+            {"filename": "character.safetensors", "nickname": "Character", "strength": 0.75}
+        ],
+    })
+    sampler = server.find_nodes(graph, "KSamplerSelect")[0][1]
+    assert sampler["inputs"]["sampler_name"] == "euler_ancestral"
+    assert record["sampler_name"] == "euler_ancestral"
+    assert record["loras"][0]["strength"] == 0.75
+    applied = record["applied_loras"]
+    assert any(x["filename"] == "character.safetensors" and x["strength"] == 0.75 for x in applied)
+    assert any(x["source"] == "workflow" and "turbo" in x["filename"].lower() for x in applied)
+
+
+def test_phone_r2v_overrides_comfy_asset_selector_link_with_payload_refs():
+    server = load_server_module()
+    server.WORKFLOW_DIR = ROOT / "workflows" / "api"
+    graph, record = server.patch_workflow({
+        "mode": "r2v",
+        "prompt_mode": "custom",
+        "prompt": "test",
+        "duration": 5,
+        "randomize_seed": False,
+        "seed": 1,
+        "sampler_name": "seeds_2",
+        "refs": [{"kind": "image", "file": "hero.png"}],
+    })
+    pack = server.find_nodes(graph, "MiniMaxH3ReferencePack")[0][1]
+    assert isinstance(pack["inputs"]["references_json"], str)
+    parsed = json.loads(pack["inputs"]["references_json"])
+    assert parsed["references"][0]["file"] == "hero.png"

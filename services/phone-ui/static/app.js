@@ -84,6 +84,7 @@ function captureDraft(){
     megapixels:Number($("#mp")?.value||0.7),
     duration:Number($("#duration")?.value||5),
     seed:Number($("#seed")?.value||1),
+    sampler_name:$("#samplerName")?.value||(state.mode==="r2v"?"seeds_2":"euler"),
     randomize_seed:$("#randomSeed")?.checked!==false,
     starting_image:state.startingImage||null,
     refs:structuredClone(state.refs||[]),
@@ -123,6 +124,7 @@ function applyDraft(v={}){
   $("#mp").value=v.megapixels!=null?v.megapixels:0.7;
   $("#duration").value=v.duration!=null?v.duration:5;
   $("#seed").value=v.seed!=null?v.seed:1;
+  $("#samplerName").value=v.sampler_name||(state.mode==="r2v"?"seeds_2":"euler");
   $("#randomSeed").checked=v.randomize_seed!==false;
   state.startingImage=v.starting_image||null;
   state.refs=Array.isArray(v.refs)?structuredClone(v.refs):[];
@@ -193,6 +195,17 @@ async function api(path, options={}){
     throw new Error(detail);
   }
   return data;
+}
+
+async function loadSamplers(){
+  try{
+    const d=await api("/api/samplers");
+    const sel=$("#samplerName"), current=sel.value||(state.mode==="r2v"?"seeds_2":"euler");
+    const items=d.items||[];
+    sel.innerHTML=items.map(x=>'<option value="'+esc(x)+'">'+esc(x)+'</option>').join("");
+    if(items.includes(current))sel.value=current;
+    else if(items.length)sel.value=items[0];
+  }catch{}
 }
 
 function switchTab(name){
@@ -641,6 +654,17 @@ function copyText(text){
   if(navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(()=>toast("Copied")).catch(()=>toast("Copy failed"));
   else toast("Clipboard unavailable");
 }
+function outputRunChips(m={}){
+  const chips=[];
+  if(m.sampler_name)chips.push('<span class="output-run-chip"><span>Sampler</span><strong>'+esc(m.sampler_name)+'</strong></span>');
+  (m.applied_loras||m.loras||[]).forEach(x=>{
+    const name=x.nickname||x.filename||x.lora||"LoRA";
+    const strength=Number(x.strength ?? x.recommended_strength ?? 1);
+    chips.push('<span class="output-run-chip output-lora-chip"><span>'+esc(name)+'</span><strong>'+esc(strength.toFixed(2))+'</strong></span>');
+  });
+  if(!chips.length)chips.push('<span class="output-run-chip"><span>No custom LoRAs</span></span>');
+  return '<div class="output-run-meta">'+chips.join("")+'</div>';
+}
 async function refreshOutputs(force=false){
   const host=$("#outputs");
   // Never replace a live <video> element underneath active playback. The old
@@ -671,7 +695,7 @@ async function refreshOutputs(force=false){
     host.innerHTML=next.map(x=>{
       const m=x.metadata||{}, open=state.openOutputs.has(x.file)?" open":"";
       return `<details class="output" data-file="${esc(x.file)}"${open}>
-        <summary><strong>${esc(x.file.split("/").pop())}</strong><div class="muted">${esc((m.mode||"").toUpperCase())} ${esc((m.prompt_mode||"").toUpperCase())} · ${bytes(x.size)}</div></summary>
+        <summary><div><strong>${esc(x.file.split("/").pop())}</strong><div class="muted">${esc((m.mode||"").toUpperCase())} ${esc((m.prompt_mode||"").toUpperCase())} · ${bytes(x.size)}</div>${outputRunChips(m)}</div></summary>
         <video controls preload="metadata" src="${esc(mediaUrl(x.file))}"></video>
         <div class="actions">
           <button class="secondary copy-prompt">Copy prompt</button>
@@ -1461,7 +1485,7 @@ function wire(){
   $("#refreshQueue").onclick=()=>{refreshQueue();refreshProgress();};
   $("#refreshOutputs").onclick=()=>refreshOutputs(true);
 
-  ["prompt","aspect","mp","duration","seed","randomSeed"].forEach(id=>{
+  ["prompt","aspect","mp","duration","seed","samplerName","randomSeed"].forEach(id=>{
     const el=$("#"+id);
     if(!el)return;
     const event=(el.tagName==="SELECT"||el.type==="checkbox")?"change":"input";
@@ -1586,7 +1610,7 @@ async function init(){
   wire();
   renderRefs(); renderSelectedLoras(); renderStartingImage();
   await Promise.allSettled([
-    refreshInfo(),loadLoras(),loadAssets(true),loadTemplates(),
+    refreshInfo(),loadLoras(),loadAssets(true),loadTemplates(),loadSamplers(),
     refreshQueue(),refreshProgress(),refreshOutputs(true)
   ]);
   await loadUiState();
