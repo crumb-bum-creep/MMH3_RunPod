@@ -175,3 +175,14 @@ def test_compiler_contract_treats_blocking_as_semantic_not_coordinate_output():
     prompt = prompt_studio.compiler_system_prompt("r2v")
     assert "Blocking is authoritative" in prompt
     assert "Do not mention coordinates" in prompt
+
+
+def test_exact_shot_count_is_enforced_during_normalization():
+    project = prompt_studio.new_project(duration=12)
+    project["scene"]["shot_count_mode"] = "exact"
+    project["scene"]["exact_shot_count"] = 4
+    project["scene"]["shots"] = [prompt_studio.empty_shot(1)]
+    project = prompt_studio.normalize_project(project)
+    assert len(project["scene"]["shots"]) == 4
+    assert [round(x["start_seconds"], 3) for x in project["scene"]["shots"]] == [0.0, 3.0, 6.0, 9.0]
+    assert "shot_count_mode=exact" in prompt_studio.planner_system_prompt()
