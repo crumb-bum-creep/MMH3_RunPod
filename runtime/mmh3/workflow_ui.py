@@ -66,6 +66,9 @@ def _type_name(spec: Any) -> str:
 def _is_widget_spec(spec: Any) -> bool:
     if not isinstance(spec, (list, tuple)) or not spec:
         return False
+    options = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+    if options.get("forceInput"):
+        return False
     first = spec[0]
     return first in {"INT", "FLOAT", "STRING", "BOOLEAN"} or isinstance(first, (list, tuple))
 
