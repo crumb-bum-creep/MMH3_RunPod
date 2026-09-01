@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>MMH3</title>
-  <link rel="stylesheet" href="/static/styles.css?v=6">
+  <link rel="stylesheet" href="/static/styles.css?v=7">
 </head>
 <body>
 <header>
@@ -89,6 +89,13 @@
       <div>
         <label for="seed">Video seed</label>
         <input id="seed" type="number" value="1">
+      </div>
+      <div>
+        <label for="samplerName">Sampler</label>
+        <select id="samplerName">
+          <option value="euler">euler</option>
+          <option value="seeds_2">seeds_2</option>
+        </select>
       </div>
     </div>
 
@@ -390,6 +397,6 @@
 </dialog>
 
 <div id="toast" role="status"></div>
-<script src="/static/app.js?v=6"></script>
+<script src="/static/app.js?v=7"></script>
 </body>
 </html>
