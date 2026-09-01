@@ -905,7 +905,7 @@ function renderStudioProject(){
   $("#studioI2VStartBlock").hidden=p.mode!=="i2v";
   $("#studioStartingImage").innerHTML=studioImageOptions(p.starting_image?.asset_file||"");
   $("#studioStartingAnalyze").checked=p.starting_image?.analyze!==false;
-  $("[data-studio-scene-lock]").forEach(el=>el.checked=(p.scene?.locks||[]).includes(el.dataset.studioSceneLock));
+  $$("[data-studio-scene-lock]").forEach(el=>el.checked=(p.scene?.locks||[]).includes(el.dataset.studioSceneLock));
   renderStudioSubjects();
   renderStudioTimeline();
   renderStudioShots();
@@ -934,7 +934,7 @@ function renderStudioSubjects(){
       '</div>';
   }).join("");
 
-  $(".studio-subject-card",host).forEach(card=>{
+  $$(".studio-subject-card",host).forEach(card=>{
     const id=card.dataset.studioSubject;
     const s=subjects.find(x=>x.id===id);if(!s)return;
     $(".studio-subject-label",card).oninput=e=>{s.label=e.target.value;scheduleStudioSave();};
@@ -1010,13 +1010,13 @@ function renderStudioShots(){
       '<label>Shot-specific sound</label><textarea class="studio-shot-sound" rows="2">'+esc(s.sound||"")+'</textarea>'+
       '</div>';
   }).join("");
-  $$(".studio-shot-card",host).forEach((card,index)=>{
+  $$$(".studio-shot-card",host).forEach((card,index)=>{
     const id=card.dataset.studioShot,s=shots.find(x=>x.id===id);if(!s)return;
     const cameraKeys=["framing","camera_motion","camera_custom","amplitude","speed"];
     const bind=(selector,key,event="input")=>{const el=$(selector,card);if(el)el.addEventListener(event,e=>{s[key]=e.target.value;if(key==="start_seconds")renderStudioTimeline();scheduleStudioSave();});};
     bind(".studio-shot-start","start_seconds");bind(".studio-shot-framing","framing","change");bind(".studio-shot-camera","camera_motion","change");bind(".studio-shot-camera-custom","camera_custom");bind(".studio-shot-amplitude","amplitude","change");bind(".studio-shot-speed","speed","change");bind(".studio-shot-action","action");bind(".studio-shot-dialogue","dialogue");bind(".studio-shot-sound","sound");
     $$(".studio-framing-card",card).forEach(el=>el.onclick=()=>{s.framing=el.dataset.framing;$(".studio-shot-framing",card).value=s.framing;renderStudioShots();scheduleStudioSave();});
-    $$(".studio-chip input",card).forEach(el=>el.onchange=e=>{const sid=e.target.dataset.shotSubject,set=new Set(s.subjects||[]);e.target.checked?set.add(sid):set.delete(sid);s.subjects=[...set];scheduleStudioSave();});
+    $$$(".studio-chip input",card).forEach(el=>el.onchange=e=>{const sid=e.target.dataset.shotSubject,set=new Set(s.subjects||[]);e.target.checked?set.add(sid):set.delete(sid);s.subjects=[...set];scheduleStudioSave();});
     $(".studio-shot-lock-time",card).onchange=e=>{s.locks=studioToggleLock(s.locks,"start_seconds",e.target.checked);scheduleStudioSave();};
     $(".studio-shot-lock-camera",card).onchange=e=>{s.locks=studioToggleLockGroup(s.locks,cameraKeys,e.target.checked);scheduleStudioSave();};
     $(".studio-shot-lock-action",card).onchange=e=>{s.locks=studioToggleLock(s.locks,"action",e.target.checked);scheduleStudioSave();};
@@ -1242,11 +1242,11 @@ function wireStudio(){
     if(id==="studioMode")renderStudioProject();
     scheduleStudioSave();
   }));
-  $("[data-studio-scene-lock]").forEach(el=>el.onchange=e=>{
+  $$("[data-studio-scene-lock]").forEach(el=>el.onchange=e=>{
     const scene=studioScene();if(!scene)return;
     scene.locks=studioToggleLock(scene.locks,e.target.dataset.studioSceneLock,e.target.checked);scheduleStudioSave();
   });
-  $("[data-studio-edit-field]").forEach(el=>el.onclick=()=>studioPromptEdit(el.dataset.studioEditField,"","Describe the change to this field only"));
+  $$("[data-studio-edit-field]").forEach(el=>el.onclick=()=>studioPromptEdit(el.dataset.studioEditField,"","Describe the change to this field only"));
   $("#studioPlan").onclick=studioPlan;
   $("#studioCheckpoint").onclick=studioCheckpoint;
   $("#studioAddSubject").onclick=()=>addStudioSubject();
