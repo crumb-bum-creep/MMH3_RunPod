@@ -34,6 +34,8 @@ google/gemini-3-flash-preview
 
 The model is stored per project and can be changed in the Studio UI without changing the six canonical Comfy workflows.
 
+**Test model** makes a tiny text-only request through the selected project model. It verifies the configured OpenRouter key, model slug, and provider path without loading Comfy, sending reference images, or starting a video generation.
+
 OpenRouter calls happen in the MMH3 backend. The browser never receives the OpenRouter API key.
 
 ## Reference modes
