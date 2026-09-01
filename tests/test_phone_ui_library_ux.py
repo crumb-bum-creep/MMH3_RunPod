@@ -71,3 +71,19 @@ def test_prompt_studio_is_separate_from_generation_and_phone_friendly():
     assert 'google/gemini-3-flash-preview' in APP
     assert 'reference.mode=picture_slot' in (ROOT / "runtime" / "mmh3" / "prompt_studio.py").read_text()
     assert 'nav{grid-template-columns:repeat(4,1fr)}' in CSS
+
+
+def test_prompt_studio_director_controls_and_collection_selectors():
+    assert 'id="studioTimeline"' in HTML
+    assert 'id="studioShotCount"' in HTML
+    assert 'id="studioBlockingDialog"' in HTML
+    assert 'class="studio-framing-grid"' in APP
+    assert 'function renderStudioTimeline' in APP
+    assert 'function renderStudioBlocking' in APP
+    assert 'function framingIcon' in APP
+    assert '$$(".studio-subject-card",host).forEach' in APP
+    assert '$$(".studio-shot-card",host).forEach' in APP
+    assert '$$(".studio-chip input",card).forEach' in APP
+    assert '$$("[data-studio-scene-lock]").forEach' in APP
+    assert '$$("[data-studio-edit-field]").forEach' in APP
+    assert '.studio-blocking-frame' in CSS
