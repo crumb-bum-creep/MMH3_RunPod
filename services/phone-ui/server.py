@@ -235,6 +235,17 @@ def patch_workflow(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
             node["inputs"]["value"] = duration
     for _, node in find_nodes(graph, "RandomNoise"):
         node["inputs"]["noise_seed"] = seed
+
+    sampler_name = str(payload.get("sampler_name") or "").strip()
+    sampler_nodes = find_nodes(graph, "KSamplerSelect")
+    if sampler_nodes:
+        if not sampler_name:
+            sampler_name = str((sampler_nodes[0][1].get("inputs") or {}).get("sampler_name") or "").strip()
+        if not sampler_name:
+            raise web.HTTPBadRequest(text="sampler_name is required")
+        for _, node in sampler_nodes:
+            node.setdefault("inputs", {})["sampler_name"] = sampler_name
+
     for _, node in find_nodes(graph, "VHS_VideoCombine"):
         node["inputs"]["filename_prefix"] = f"MMH3/{mode.upper()}"
 
@@ -319,6 +330,7 @@ def patch_workflow(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         "megapixels": mp,
         "duration": duration,
         "seed": seed,
+        "sampler_name": sampler_name,
         "randomize_seed": bool(payload.get("randomize_seed", True)),
         "starting_image": payload.get("starting_image"),
         "refs": payload.get("refs") or [],
@@ -603,6 +615,25 @@ async def _ws_loop(app: web.Application) -> None:
             pass
         app["ws_connected"] = False
         await asyncio.sleep(2)
+
+
+async def api_samplers(request: web.Request) -> web.Response:
+    """Return sampler names from the running Comfy KSamplerSelect definition."""
+    items = []
+    try:
+        async with request.app["session"].get(f"{request.app['comfy']}/object_info/KSamplerSelect") as r:
+            data = await r.json()
+        info = data.get("KSamplerSelect") if isinstance(data, dict) else None
+        required = ((info or {}).get("input") or {}).get("required") or {}
+        spec = required.get("sampler_name")
+        if isinstance(spec, list) and spec and isinstance(spec[0], list):
+            items = [str(x) for x in spec[0]]
+    except Exception:
+        items = []
+    for fallback in ("euler", "seeds_2"):
+        if fallback not in items:
+            items.append(fallback)
+    return web.json_response({"items": items})
 
 
 async def api_info(request: web.Request) -> web.Response:
@@ -1727,6 +1758,7 @@ def make_app(comfy_url: str) -> web.Application:
         web.get("/", index),
         web.static("/static", STATIC, show_index=False),
         web.get("/api/info", api_info),
+        web.get("/api/samplers", api_samplers),
         web.post("/api/generate", api_generate),
         web.get("/api/queue", api_queue),
         web.get("/api/progress", api_progress),
