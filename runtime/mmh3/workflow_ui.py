@@ -70,7 +70,7 @@ def _is_widget_spec(spec: Any) -> bool:
     if options.get("forceInput"):
         return False
     first = spec[0]
-    return first in {"INT", "FLOAT", "STRING", "BOOLEAN"} or isinstance(first, (list, tuple))
+    return isinstance(first, (list, tuple)) or first in {"INT", "FLOAT", "STRING", "BOOLEAN"}
 
 
 def _default_widget(spec: Any) -> Any:
