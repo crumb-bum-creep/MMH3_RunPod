@@ -177,3 +177,6 @@ touch-action:none;overflow:hidden}
 .studio-preflight-warn{background:#493a1b;color:#ffe09c}
 .studio-preflight-error{background:#4a2028;color:#ffdce1}
 #studioPreflightMsg{margin-top:5px}
+
+.studio-model-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center}
+#studioModelStatus{margin-top:4px;min-height:18px}
