@@ -31,16 +31,30 @@ def copy_default_configs() -> None:
 
 
 def install_workflows() -> list[str]:
-    src = IMAGE_ROOT / "workflows" / "api"
+    """Prepare the persistent workflow folder without installing API prompt JSON.
+
+    API-format graphs are queue payloads, not drawable LiteGraph workflows.
+    Real ComfyUI workflows are generated after Comfy exposes /object_info.
+    """
     dst = COMFY_PERSIST / "user" / "default" / "workflows" / "MMH3"
     dst.mkdir(parents=True, exist_ok=True)
-    installed = []
-    if src.exists():
-        for p in src.glob("*.json"):
-            shutil.copy2(p, dst / p.name)
-            installed.append(p.name)
-    return installed
-
+    legacy = (
+        "t2v_auto.json", "t2v_custom.json",
+        "i2v_auto.json", "i2v_custom.json",
+        "r2v_auto.json", "r2v_custom.json",
+    )
+    removed = []
+    for name in legacy:
+        path = dst / name
+        if path.exists():
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                value = None
+            if isinstance(value, dict) and "nodes" not in value:
+                path.unlink()
+                removed.append(name)
+    return [f"drawable workflows generated after Comfy startup; removed legacy={len(removed)}"]
 
 def custom_node_report() -> list[dict]:
     cfg = load_yaml(IMAGE_ROOT / "config" / "custom_nodes.yaml", {}) or {}
