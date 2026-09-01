@@ -12,6 +12,7 @@ from . import comfy
 from .common import CONFIG_ROOT, IMAGE_ROOT, LOG_ROOT, STATE_ROOT, COMFY_DIR, dump_json, load_yaml
 from .hardware import detect, select_profile
 from .memory_guard import run as run_memory_guard
+from .workflow_ui import install_ui_workflows
 
 STOP = threading.Event()
 
@@ -155,6 +156,14 @@ def main() -> int:
     startup_mark(comfy_ready=comfy_ready, comfy_ready_seconds=round(time.time() - START_EPOCH, 3))
     if not comfy_ready:
         print("[mmh3] ComfyUI did not become healthy within 180s; supervisor remains alive.", flush=True)
+    else:
+        try:
+            installed = install_ui_workflows(comfy.base_url())
+            print(f"[mmh3] installed drawable workflows: {', '.join(installed)}", flush=True)
+            startup_mark(ui_workflows_ready=True, ui_workflow_count=len(installed))
+        except Exception as exc:
+            print(f"[mmh3] WARNING: drawable workflow generation failed: {exc}", flush=True)
+            startup_mark(ui_workflows_ready=False, ui_workflow_error=str(exc))
 
     jupyter_proc = start_jupyter()
     startup_mark(jupyter_spawned=bool(jupyter_proc))
@@ -174,7 +183,11 @@ def main() -> int:
             STOP.wait(delay)
             if not STOP.is_set():
                 comfy_proc = start_comfy()
-                comfy.wait_ready(240)
+                if comfy.wait_ready(240):
+                    try:
+                        install_ui_workflows(comfy.base_url())
+                    except Exception as exc:
+                        print(f"[mmh3] WARNING: drawable workflow refresh failed: {exc}", flush=True)
         if provision_proc is not None and provision_proc.poll() is not None:
             # Provisioning is a one-shot task. Successful completion stays stopped;
             # failures are visible in the UI/log and can be retried with mmh3 sync-*.
