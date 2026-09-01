@@ -124,3 +124,26 @@ def test_generated_nodes_serialize_declared_unlinked_widget_inputs():
         "widget": {"name": "sampler_name"},
     }]
     assert sampler["widgets_values"] == ["euler"]
+
+
+def test_force_input_primitive_is_serialized_as_socket_not_widget():
+    graph = {
+        "1": {
+            "inputs": {"text": ""},
+            "class_type": "ForcedText",
+            "_meta": {"title": "Forced Text"},
+        }
+    }
+    info = {
+        "ForcedText": {
+            "input": {"required": {"text": ["STRING", {"default": "", "forceInput": True}]}},
+            "input_order": {"required": ["text"]},
+            "output": [],
+            "output_name": [],
+        }
+    }
+    ui = workflow_ui.api_graph_to_ui(graph, info)
+    node = ui["nodes"][0]
+    assert node["inputs"][0]["name"] == "text"
+    assert "widget" not in node["inputs"][0]
+    assert node["widgets_values"] == []
