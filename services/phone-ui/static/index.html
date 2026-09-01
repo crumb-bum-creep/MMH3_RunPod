@@ -160,7 +160,11 @@
     </select>
 
     <label for="studioModel">OpenRouter model</label>
-    <input id="studioModel" value="google/gemini-3-flash-preview" autocapitalize="off" spellcheck="false">
+    <div class="studio-model-row">
+      <input id="studioModel" value="google/gemini-3-flash-preview" autocapitalize="off" spellcheck="false">
+      <button id="studioTestModel" class="ghost small" type="button">Test model</button>
+    </div>
+    <div id="studioModelStatus" class="muted"></div>
 
     <label for="studioConcept">Concept / direction</label>
     <textarea id="studioConcept" rows="6" placeholder="Describe the scene you want to build…"></textarea>
