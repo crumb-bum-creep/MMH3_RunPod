@@ -962,7 +962,11 @@ function renderStudioTimeline(){
   const p=studioProject(),host=$("#studioTimeline");if(!p||!host)return;
   const shots=[...(p.scene.shots||[])].sort((a,b)=>Number(a.start_seconds)-Number(b.start_seconds));
   const duration=Math.max(.001,Number(p.duration||1));
-  $("#studioShotCount").value=shots.length;
+  const shotMode=p.scene.shot_count_mode||"auto";
+  $("#studioShotCountMode").value=shotMode;
+  $("#studioShotCount").value=shotMode==="exact"?(p.scene.exact_shot_count||shots.length):shots.length;
+  $("#studioShotCount").disabled=shotMode!=="exact";
+  $("#studioSetShotCount").disabled=shotMode!=="exact";
   const segments=shots.map((s,i)=>{
     const start=Number(s.start_seconds||0),end=i+1<shots.length?Number(shots[i+1].start_seconds||duration):duration;
     const width=Math.max(1,(end-start)/duration*100);
@@ -1019,7 +1023,7 @@ function renderStudioShots(){
     $(".studio-shot-lock-dialogue",card).onchange=e=>{s.locks=studioToggleLock(s.locks,"dialogue",e.target.checked);scheduleStudioSave();};
     $(".studio-shot-ai",card).onclick=()=>studioPromptEdit("shot",id,"Describe the change to Shot "+(index+1)+" only");
     $(".studio-open-blocking",card).onclick=()=>openStudioBlocking(id);
-    const rm=$(".studio-shot-remove",card);if(rm)rm.onclick=()=>{if(confirm("Remove Shot "+(index+1)+"?")){p.scene.shots=p.scene.shots.filter(x=>x.id!==id);renderStudioTimeline();renderStudioShots();scheduleStudioSave();}};
+    const rm=$(".studio-shot-remove",card);if(rm)rm.onclick=()=>{if(confirm("Remove Shot "+(index+1)+"?")){p.scene.shots=p.scene.shots.filter(x=>x.id!==id);if(p.scene.shot_count_mode==="exact")p.scene.exact_shot_count=p.scene.shots.length;renderStudioTimeline();renderStudioShots();scheduleStudioSave();}};
   });
 }
 
@@ -1041,11 +1045,16 @@ function addStudioShot(){
   const p=studioProject();if(!p)return;
   const shots=p.scene.shots||[],last=shots[shots.length-1],start=Math.min(Math.max(0,Number(p.duration)-.001),Number(last?.start_seconds||0)+3);
   shots.push(studioNewShot(start));
-  p.scene.shots=shots;renderStudioTimeline();renderStudioShots();scheduleStudioSave();
+  p.scene.shots=shots;
+  p.scene.shot_count_mode="exact";
+  p.scene.exact_shot_count=shots.length;
+  renderStudioTimeline();renderStudioShots();scheduleStudioSave();
 }
 function studioSetShotCount(){
   const p=studioProject();if(!p)return;
   const count=Math.max(1,Math.min(12,Number($("#studioShotCount").value||1)));
+  p.scene.shot_count_mode="exact";
+  p.scene.exact_shot_count=count;
   const shots=p.scene.shots||[];
   while(shots.length<count)shots.push(studioNewShot(0));
   if(shots.length>count)shots.splice(count);
@@ -1243,6 +1252,12 @@ function wireStudio(){
   $("#studioAddSubject").onclick=()=>addStudioSubject();
   $("#studioAddSavedSubject").onclick=()=>{const id=$("#studioSavedSubjectSelect").value,s=state.studioSavedSubjects.find(x=>(x.saved_id||x.id)===id);if(s)addStudioSubject(s);};
   $("#studioAddShot").onclick=addStudioShot;
+  $("#studioShotCountMode").onchange=e=>{
+    const p=studioProject();if(!p)return;
+    p.scene.shot_count_mode=e.target.value;
+    if(e.target.value==="exact")p.scene.exact_shot_count=(p.scene.shots||[]).length||1;
+    renderStudioTimeline();scheduleStudioSave();
+  };
   $("#studioSetShotCount").onclick=studioSetShotCount;
   $("#studioEvenTiming").onclick=studioEvenTiming;
   $("#studioCloseBlocking").onclick=closeStudioBlocking;
