@@ -129,6 +129,7 @@ def test_generation_sampler_and_output_lora_weights_are_visible():
     assert 'sampler_name:$("#samplerName")' in APP
     assert 'function loadSamplers' in APP
     assert 'function outputRunChips' in APP
+    assert 'm.applied_loras||m.loras||[]' in APP
     assert 'output-lora-chip' in APP
     assert '.output-lora-chip' in CSS
     assert 'web.get("/api/samplers", api_samplers)' in SERVER
