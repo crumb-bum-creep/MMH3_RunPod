@@ -112,3 +112,13 @@ def test_prompt_studio_preflight_is_visible_and_gates_openrouter_actions():
     assert 'Fix the preflight issues above before compiling.' in APP
     assert 'web.get("/api/prompt-studio/projects/{project_id}/preflight", api_studio_preflight)' in SERVER
     assert '.studio-preflight-error' in CSS
+
+
+def test_prompt_studio_model_check_is_project_scoped_and_text_only():
+    assert 'id="studioTestModel"' in HTML
+    assert 'id="studioModelStatus"' in HTML
+    assert 'async function testStudioModel' in APP
+    assert '"/model-check"' in APP
+    assert 'web.post("/api/prompt-studio/projects/{project_id}/model-check", api_studio_model_check)' in SERVER
+    assert 'Connectivity check.' in SERVER
+    assert '.studio-model-row' in CSS
