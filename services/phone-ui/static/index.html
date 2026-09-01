@@ -212,8 +212,14 @@
       <button id="studioAddShot" class="secondary small" type="button">+ Shot</button>
     </div>
     <div class="studio-shot-toolbar">
-      <label class="studio-shot-count">Shot count <input id="studioShotCount" type="number" min="1" max="12" value="1"></label>
-      <button id="studioSetShotCount" class="secondary small" type="button">Set count</button>
+      <label class="studio-shot-mode">Shot planning
+        <select id="studioShotCountMode">
+          <option value="auto">Auto</option>
+          <option value="exact">Exact</option>
+        </select>
+      </label>
+      <label class="studio-shot-count">Count <input id="studioShotCount" type="number" min="1" max="12" value="1"></label>
+      <button id="studioSetShotCount" class="secondary small" type="button">Apply count</button>
       <button id="studioEvenTiming" class="ghost small" type="button">Even timing</button>
     </div>
     <div id="studioTimeline" class="studio-timeline"></div>
