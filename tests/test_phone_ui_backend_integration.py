@@ -313,6 +313,9 @@ def test_patch_workflow_sets_sampler_and_records_lora_weights(tmp_path):
     assert sampler["inputs"]["sampler_name"] == "euler_ancestral"
     assert record["sampler_name"] == "euler_ancestral"
     assert record["loras"][0]["strength"] == 0.75
+    applied = record["applied_loras"]
+    assert any(x["filename"] == "character.safetensors" and x["strength"] == 0.75 for x in applied)
+    assert any(x["source"] == "workflow" and "turbo" in x["filename"].lower() for x in applied)
 
 
 def test_phone_r2v_overrides_comfy_asset_selector_link_with_payload_refs():
