@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import hashlib
+import io
 import json
 import mimetypes
 import os
@@ -18,7 +20,7 @@ from typing import Any
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 import yaml
 
-from mmh3 import comfy
+from mmh3 import comfy, prompt_studio
 from mmh3.common import (
     COMFY_PERSIST,
     CONFIG_ROOT,
@@ -31,7 +33,7 @@ from mmh3.common import (
 from mmh3.hardware import detect
 from mmh3.loras import sync_loras
 
-APP_VERSION = "0.6.0-mmH3-library-ux"
+APP_VERSION = "0.7.0-mmH3-prompt-studio"
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 WORKFLOW_DIR = Path(os.environ.get("MMH3_WORKFLOW_DIR", IMAGE_ROOT / "workflows" / "api"))
@@ -43,6 +45,9 @@ OUTPUT_META_FILE = DATA_ROOT / "output_meta.json"
 ASSET_META_FILE = DATA_ROOT / "assets.json"
 UI_STATE_FILE = DATA_ROOT / "ui_state.json"
 THUMB_DIR = DATA_ROOT / "input_thumbs"
+PROMPT_PROJECT_FILE = DATA_ROOT / "prompt_projects.json"
+PROMPT_SUBJECT_FILE = DATA_ROOT / "prompt_subjects.json"
+OPENROUTER_CHAT_URL = os.environ.get("MMH3_OPENROUTER_CHAT_URL", "https://openrouter.ai/api/v1/chat/completions")
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
@@ -1085,6 +1090,433 @@ async def api_sync_loras(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
+def _studio_projects() -> dict[str, Any]:
+    value = _load_json(PROMPT_PROJECT_FILE, {})
+    return value if isinstance(value, dict) else {}
+
+
+def _save_studio_projects(value: dict[str, Any]) -> None:
+    _save_json(PROMPT_PROJECT_FILE, value)
+
+
+def _studio_project(project_id: str) -> dict[str, Any]:
+    value = _studio_projects().get(project_id)
+    if not isinstance(value, dict):
+        raise web.HTTPNotFound(text="Prompt Studio project not found")
+    return prompt_studio.normalize_project(value)
+
+
+def _studio_project_summary(project: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": project["id"],
+        "name": project["name"],
+        "mode": project["mode"],
+        "duration": project["duration"],
+        "aspect_ratio": project["aspect_ratio"],
+        "model": project["model"],
+        "updated_at": project.get("updated_at", 0),
+        "revision_count": len(project.get("revisions") or []),
+        "valid": bool((project.get("validation") or {}).get("valid")),
+    }
+
+
+def _studio_save_project(project: dict[str, Any]) -> dict[str, Any]:
+    project = prompt_studio.normalize_project(project)
+    data = _studio_projects()
+    data[project["id"]] = project
+    _save_studio_projects(data)
+    return project
+
+
+def _studio_image_data_url(rel: str) -> str:
+    path = _inside(INPUT_DIR, rel)
+    if not path.is_file() or path.suffix.lower() not in IMAGE_EXT:
+        raise web.HTTPBadRequest(text=f"Prompt Studio image not found: {rel}")
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(path) as image:
+            image = ImageOps.exif_transpose(image)
+            image.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+            if image.mode != "RGB":
+                if "A" in image.getbands():
+                    bg = Image.new("RGB", image.size, (14, 18, 27))
+                    bg.paste(image, mask=image.getchannel("A"))
+                    image = bg
+                else:
+                    image = image.convert("RGB")
+            buf = io.BytesIO()
+            image.save(buf, "JPEG", quality=90, optimize=True)
+    except Exception as exc:
+        raise web.HTTPUnsupportedMediaType(text=f"Prompt Studio image preparation failed: {exc}")
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _studio_image_attachments(project: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
+    labels: list[str] = []
+    parts: list[dict[str, Any]] = []
+    if project.get("mode") == "i2v":
+        start = project.get("starting_image") or {}
+        if start.get("asset_file") and start.get("analyze", True):
+            labels.append(f"Attachment {len(labels) + 1}: I2V <Picture 1> starting frame")
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": _studio_image_data_url(str(start["asset_file"]))},
+            })
+    for index, subject in enumerate((project.get("scene") or {}).get("subjects") or [], start=1):
+        ref = subject.get("reference") or {}
+        if ref.get("mode") != "asset" or not ref.get("analyze") or not ref.get("asset_file"):
+            continue
+        number = int(ref.get("picture_number") or index)
+        labels.append(
+            f"Attachment {len(labels) + 1}: {subject.get('id')} / <Subject {index}> appearance from <Picture {number}>"
+        )
+        parts.append({
+            "type": "image_url",
+            "image_url": {"url": _studio_image_data_url(str(ref["asset_file"]))},
+        })
+    return labels, parts
+
+
+async def _studio_openrouter(
+    *,
+    model: str,
+    system_prompt: str,
+    user_text: str,
+    response_format: dict[str, Any] | None = None,
+    image_parts: list[dict[str, Any]] | None = None,
+    temperature: float = 0.7,
+) -> Any:
+    key = str(os.environ.get("OPENROUTER_API_KEY") or "").strip()
+    if not key:
+        raise web.HTTPServiceUnavailable(text="OPENROUTER_API_KEY is not configured")
+
+    user_content: Any = user_text
+    if image_parts:
+        user_content = [{"type": "text", "text": user_text}, *image_parts]
+
+    body: dict[str, Any] = {
+        "model": model or prompt_studio.DEFAULT_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": temperature,
+        "stream": False,
+    }
+    if response_format:
+        body["response_format"] = response_format
+        body["plugins"] = [{"id": "response-healing"}]
+        body["provider"] = {"require_parameters": True}
+
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/crumb-bum-creep/MMH3_RunPod",
+        "X-Title": "MMH3 Prompt Studio",
+    }
+    timeout = ClientTimeout(total=150)
+    async with ClientSession(timeout=timeout) as session:
+        async with session.post(OPENROUTER_CHAT_URL, headers=headers, json=body) as response:
+            raw = await response.text()
+            try:
+                data = json.loads(raw)
+            except Exception:
+                data = {}
+            if response.status >= 400:
+                detail = ((data.get("error") or {}).get("message") if isinstance(data, dict) else None) or raw
+                raise web.HTTPBadGateway(text=f"OpenRouter error: {detail}")
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except Exception:
+        raise web.HTTPBadGateway(text="OpenRouter returned no completion")
+    if isinstance(content, list):
+        content = "".join(
+            str(x.get("text") or "") if isinstance(x, dict) else str(x)
+            for x in content
+        )
+    content = str(content or "").strip()
+    if not response_format:
+        return content
+    try:
+        return json.loads(content)
+    except Exception as exc:
+        raise web.HTTPBadGateway(text=f"OpenRouter structured response was not valid JSON: {exc}")
+
+
+async def api_studio_projects_get(request: web.Request) -> web.Response:
+    projects = [prompt_studio.normalize_project(x) for x in _studio_projects().values() if isinstance(x, dict)]
+    projects.sort(key=lambda x: float(x.get("updated_at") or 0), reverse=True)
+    subjects = _load_json(PROMPT_SUBJECT_FILE, {})
+    if not isinstance(subjects, dict):
+        subjects = {}
+    return web.json_response({
+        "projects": [_studio_project_summary(x) for x in projects],
+        "saved_subjects": list(subjects.values()),
+        "default_model": prompt_studio.DEFAULT_MODEL,
+        "subject_types": prompt_studio.SUBJECT_TYPES,
+        "camera_motions": prompt_studio.CAMERA_MOTIONS,
+        "framing_presets": prompt_studio.FRAMING_PRESETS,
+    })
+
+
+async def api_studio_project_get(request: web.Request) -> web.Response:
+    return web.json_response({"project": _studio_project(request.match_info["project_id"])})
+
+
+async def api_studio_project_post(request: web.Request) -> web.Response:
+    body = await request.json()
+    project = prompt_studio.new_project(
+        name=str(body.get("name") or "Untitled Prompt"),
+        mode=str(body.get("mode") or "r2v"),
+        duration=float(body.get("duration") or 10),
+        aspect_ratio=str(body.get("aspect_ratio") or "9:16 (Portrait Widescreen)"),
+        concept=str(body.get("concept") or ""),
+        model=str(body.get("model") or prompt_studio.DEFAULT_MODEL),
+    )
+    project = _studio_save_project(project)
+    return web.json_response({"project": project})
+
+
+async def api_studio_project_put(request: web.Request) -> web.Response:
+    body = await request.json()
+    project = body.get("project")
+    if not isinstance(project, dict):
+        raise web.HTTPBadRequest(text="project object required")
+    project["id"] = request.match_info["project_id"]
+    project = _studio_save_project(project)
+    return web.json_response({"project": project})
+
+
+async def api_studio_project_delete(request: web.Request) -> web.Response:
+    project_id = request.match_info["project_id"]
+    data = _studio_projects()
+    existed = project_id in data
+    data.pop(project_id, None)
+    _save_studio_projects(data)
+    return web.json_response({"ok": True, "deleted": existed})
+
+
+async def api_studio_plan(request: web.Request) -> web.Response:
+    body = await request.json()
+    project = _studio_project(request.match_info["project_id"])
+    instruction = str(body.get("instruction") or "Create the best coherent scene plan from the current concept and constraints.").strip()
+    old_scene = project["scene"]
+    labels, images = _studio_image_attachments(project)
+    user_text = (
+        f"Mode: {project['mode']}\n"
+        f"Duration: {project['duration']} seconds\n"
+        f"Aspect ratio: {project['aspect_ratio']}\n"
+        f"Reference contract:\n{prompt_studio.reference_contract(project)}\n\n"
+        f"Existing editable scene:\n{json.dumps(old_scene, indent=2, ensure_ascii=False)}\n\n"
+        f"Planning instruction:\n{instruction}"
+    )
+    if labels:
+        user_text += "\n\nAttached image mapping:\n" + "\n".join(labels)
+    planned = await _studio_openrouter(
+        model=project["model"],
+        system_prompt=prompt_studio.planner_system_prompt(),
+        user_text=user_text,
+        response_format=prompt_studio.planner_request_schema(),
+        image_parts=images,
+        temperature=0.7,
+    )
+    if not isinstance(planned, dict):
+        raise web.HTTPBadGateway(text="Planner did not return a scene object")
+    planned = prompt_studio.preserve_locks(old_scene, planned)
+
+    # Manually defined subjects are authoritative. Planner may enrich them but
+    # may not silently delete them or replace their reference bindings.
+    planned_subjects = {str(x.get("id")): x for x in planned.get("subjects") or []}
+    merged_subjects = []
+    for old in old_scene.get("subjects") or []:
+        candidate = planned_subjects.pop(str(old.get("id")), copy.deepcopy(old))
+        candidate["reference"] = copy.deepcopy(old.get("reference") or {})
+        candidate["locks"] = copy.deepcopy(old.get("locks") or [])
+        merged_subjects.append(candidate)
+    merged_subjects.extend(planned_subjects.values())
+    planned["subjects"] = merged_subjects
+
+    project["scene"] = planned
+    project["final_prompt"] = ""
+    project["validation"] = {"valid": False, "errors": [], "warnings": []}
+    project = prompt_studio.normalize_project(project)
+    prompt_studio.snapshot_revision(project, "AI scene plan")
+    project = _studio_save_project(project)
+    return web.json_response({"project": project})
+
+
+async def api_studio_edit(request: web.Request) -> web.Response:
+    body = await request.json()
+    project = _studio_project(request.match_info["project_id"])
+    scope = str(body.get("scope") or "whole").lower()
+    target_id = str(body.get("target_id") or "")
+    instruction = str(body.get("instruction") or "").strip()
+    if not instruction:
+        raise web.HTTPBadRequest(text="edit instruction required")
+
+    scene = project["scene"]
+    if scope == "whole":
+        current: Any = scene
+    elif scope == "subject":
+        current = next((x for x in scene.get("subjects") or [] if str(x.get("id")) == target_id), None)
+        if current is None:
+            raise web.HTTPNotFound(text="Prompt Studio subject not found")
+    elif scope == "shot":
+        current = next((x for x in scene.get("shots") or [] if str(x.get("id")) == target_id), None)
+        if current is None:
+            raise web.HTTPNotFound(text="Prompt Studio shot not found")
+    elif scope in {"concept", "environment", "visual_style", "soundscape", "music"}:
+        if scope in (scene.get("locks") or []):
+            raise web.HTTPLocked(text=f"{scope} is locked")
+        current = str(scene.get(scope) or "")
+    else:
+        raise web.HTTPBadRequest(text="invalid Prompt Studio edit scope")
+
+    labels, images = _studio_image_attachments(project)
+    user_text = (
+        f"Project mode: {project['mode']}\n"
+        f"Duration: {project['duration']} seconds\n"
+        f"Reference contract:\n{prompt_studio.reference_contract(project)}\n\n"
+        f"Full scene context:\n{json.dumps(scene, indent=2, ensure_ascii=False)}\n\n"
+        f"Current {scope} component:\n{json.dumps(current, indent=2, ensure_ascii=False)}\n\n"
+        f"Requested change:\n{instruction}"
+    )
+    if labels:
+        user_text += "\n\nAttached image mapping:\n" + "\n".join(labels)
+
+    edited = await _studio_openrouter(
+        model=project["model"],
+        system_prompt=prompt_studio.edit_system_prompt(scope),
+        user_text=user_text,
+        response_format=prompt_studio.edit_request_schema(scope),
+        image_parts=images,
+        temperature=0.55,
+    )
+    if not isinstance(edited, dict) or "value" not in edited:
+        raise web.HTTPBadGateway(text="Editor returned an invalid replacement")
+    value = edited["value"]
+    new_scene = copy.deepcopy(scene)
+    if scope == "whole":
+        new_scene = value
+    elif scope == "subject":
+        value["id"] = current["id"]
+        value["reference"] = copy.deepcopy(current.get("reference") or {})
+        value["locks"] = copy.deepcopy(current.get("locks") or [])
+        new_scene["subjects"] = [value if str(x.get("id")) == target_id else x for x in new_scene.get("subjects") or []]
+    elif scope == "shot":
+        value["id"] = current["id"]
+        value["locks"] = copy.deepcopy(current.get("locks") or [])
+        new_scene["shots"] = [value if str(x.get("id")) == target_id else x for x in new_scene.get("shots") or []]
+    else:
+        new_scene[scope] = str(value or "")
+
+    project["scene"] = prompt_studio.preserve_locks(scene, new_scene)
+    project["final_prompt"] = ""
+    project["validation"] = {"valid": False, "errors": [], "warnings": []}
+    project = prompt_studio.normalize_project(project)
+    prompt_studio.snapshot_revision(project, str(edited.get("summary") or f"AI edit: {scope}"))
+    project = _studio_save_project(project)
+    return web.json_response({"project": project, "summary": str(edited.get("summary") or "")})
+
+
+async def api_studio_compile(request: web.Request) -> web.Response:
+    project = _studio_project(request.match_info["project_id"])
+    user_text = (
+        f"Mode: {project['mode']}\n"
+        f"Duration: {project['duration']} seconds\n"
+        f"Aspect ratio: {project['aspect_ratio']}\n\n"
+        f"REFERENCE CONTRACT:\n{prompt_studio.reference_contract(project)}\n\n"
+        f"STRUCTURED SCENE PLAN:\n{json.dumps(project['scene'], indent=2, ensure_ascii=False)}"
+    )
+    prompt = await _studio_openrouter(
+        model=project["model"],
+        system_prompt=prompt_studio.compiler_system_prompt(project["mode"]),
+        user_text=user_text,
+        temperature=0.45,
+    )
+    validation = prompt_studio.validate_prompt(project, prompt)
+    if not validation["valid"]:
+        repair_text = (
+            user_text
+            + "\n\nPREVIOUS COMPILED PROMPT:\n"
+            + prompt
+            + "\n\nVALIDATOR ERRORS:\n- "
+            + "\n- ".join(validation["errors"])
+            + "\n\nReturn the complete corrected prompt only."
+        )
+        repaired = await _studio_openrouter(
+            model=project["model"],
+            system_prompt=prompt_studio.compiler_system_prompt(project["mode"]),
+            user_text=repair_text,
+            temperature=0.25,
+        )
+        repaired_validation = prompt_studio.validate_prompt(project, repaired)
+        if repaired_validation["valid"] or len(repaired_validation["errors"]) < len(validation["errors"]):
+            prompt, validation = repaired, repaired_validation
+
+    project["final_prompt"] = prompt
+    project["validation"] = validation
+    prompt_studio.snapshot_revision(project, "Compiled H3 prompt")
+    project = _studio_save_project(project)
+    return web.json_response({"project": project})
+
+
+async def api_studio_revision_post(request: web.Request) -> web.Response:
+    body = await request.json()
+    project = _studio_project(request.match_info["project_id"])
+    label = str(body.get("label") or "Manual checkpoint")
+    prompt_studio.snapshot_revision(project, label)
+    project = _studio_save_project(project)
+    return web.json_response({"project": project})
+
+
+async def api_studio_revision_restore(request: web.Request) -> web.Response:
+    project = _studio_project(request.match_info["project_id"])
+    try:
+        project = prompt_studio.restore_revision(project, request.match_info["revision_id"])
+    except KeyError:
+        raise web.HTTPNotFound(text="Prompt Studio revision not found")
+    project = _studio_save_project(project)
+    return web.json_response({"project": project})
+
+
+async def api_studio_subjects_get(request: web.Request) -> web.Response:
+    value = _load_json(PROMPT_SUBJECT_FILE, {})
+    return web.json_response({"subjects": list(value.values()) if isinstance(value, dict) else []})
+
+
+async def api_studio_subject_upsert(request: web.Request) -> web.Response:
+    body = await request.json()
+    value = _load_json(PROMPT_SUBJECT_FILE, {})
+    if not isinstance(value, dict):
+        value = {}
+    subject = body.get("subject")
+    if not isinstance(subject, dict):
+        raise web.HTTPBadRequest(text="subject object required")
+    saved_id = str(subject.get("saved_id") or ("saved_" + uuid.uuid4().hex[:10]))
+    clean = prompt_studio.empty_subject(1)
+    for key in ("label", "type", "description", "performance_notes", "reference"):
+        if key in subject:
+            clean[key] = copy.deepcopy(subject[key])
+    clean = prompt_studio.normalize_project({"scene": {"subjects": [clean]}})["scene"]["subjects"][0]
+    clean["saved_id"] = saved_id
+    clean["id"] = saved_id
+    clean["locks"] = []
+    value[saved_id] = clean
+    _save_json(PROMPT_SUBJECT_FILE, value)
+    return web.json_response({"subject": clean})
+
+
+async def api_studio_subject_delete(request: web.Request) -> web.Response:
+    value = _load_json(PROMPT_SUBJECT_FILE, {})
+    if not isinstance(value, dict):
+        value = {}
+    existed = request.match_info["saved_id"] in value
+    value.pop(request.match_info["saved_id"], None)
+    _save_json(PROMPT_SUBJECT_FILE, value)
+    return web.json_response({"ok": True, "deleted": existed})
+
+
 async def api_prompts_get(request: web.Request) -> web.Response:
     return web.json_response({"prompts": _system_prompts()})
 
@@ -1193,6 +1625,19 @@ def make_app(comfy_url: str) -> web.Application:
         web.get("/api/loras/config", api_lora_config_get),
         web.post("/api/loras/config", api_lora_config_upsert),
         web.delete("/api/loras/config/{vid}", api_lora_config_disable),
+        web.get("/api/prompt-studio/projects", api_studio_projects_get),
+        web.post("/api/prompt-studio/projects", api_studio_project_post),
+        web.get("/api/prompt-studio/projects/{project_id}", api_studio_project_get),
+        web.put("/api/prompt-studio/projects/{project_id}", api_studio_project_put),
+        web.delete("/api/prompt-studio/projects/{project_id}", api_studio_project_delete),
+        web.post("/api/prompt-studio/projects/{project_id}/plan", api_studio_plan),
+        web.post("/api/prompt-studio/projects/{project_id}/edit", api_studio_edit),
+        web.post("/api/prompt-studio/projects/{project_id}/compile", api_studio_compile),
+        web.post("/api/prompt-studio/projects/{project_id}/revisions", api_studio_revision_post),
+        web.post("/api/prompt-studio/projects/{project_id}/revisions/{revision_id}/restore", api_studio_revision_restore),
+        web.get("/api/prompt-studio/subjects", api_studio_subjects_get),
+        web.post("/api/prompt-studio/subjects", api_studio_subject_upsert),
+        web.delete("/api/prompt-studio/subjects/{saved_id}", api_studio_subject_delete),
         web.get("/api/system-prompts", api_prompts_get),
         web.put("/api/system-prompts", api_prompts_put),
         web.get("/api/templates", api_templates_get),
