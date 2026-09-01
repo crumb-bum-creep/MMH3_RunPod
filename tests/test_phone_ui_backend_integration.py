@@ -265,3 +265,28 @@ def test_prompt_studio_preflight_endpoint_uses_persistent_asset_inventory(tmp_pa
         )
     )
     assert response_json(present)["preflight"]["valid"] is True
+
+
+def test_prompt_studio_model_check_uses_project_model_without_comfy(tmp_path):
+    server = load_server_module()
+    server.PROMPT_PROJECT_FILE = tmp_path / "projects.json"
+    project = server.prompt_studio.new_project(model="google/gemini-3-flash-preview")
+    server._save_json(server.PROMPT_PROJECT_FILE, {project["id"]: project})
+
+    calls = []
+
+    async def fake_openrouter(**kwargs):
+        calls.append(kwargs)
+        return "MMH3_STUDIO_OK"
+
+    server._studio_openrouter = fake_openrouter
+    response = asyncio.run(
+        server.api_studio_model_check(
+            JsonRequest(match_info={"project_id": project["id"]})
+        )
+    )
+    data = response_json(response)
+    assert data["ok"] is True
+    assert data["model"] == "google/gemini-3-flash-preview"
+    assert calls[0]["model"] == "google/gemini-3-flash-preview"
+    assert "image_parts" not in calls[0]
