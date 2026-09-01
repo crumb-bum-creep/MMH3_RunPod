@@ -657,7 +657,7 @@ function copyText(text){
 function outputRunChips(m={}){
   const chips=[];
   if(m.sampler_name)chips.push('<span class="output-run-chip"><span>Sampler</span><strong>'+esc(m.sampler_name)+'</strong></span>');
-  (m.loras||[]).forEach(x=>{
+  (m.applied_loras||m.loras||[]).forEach(x=>{
     const name=x.nickname||x.filename||x.lora||"LoRA";
     const strength=Number(x.strength ?? x.recommended_strength ?? 1);
     chips.push('<span class="output-run-chip output-lora-chip"><span>'+esc(name)+'</span><strong>'+esc(strength.toFixed(2))+'</strong></span>');
