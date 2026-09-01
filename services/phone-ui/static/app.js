@@ -894,6 +894,22 @@ function renderStudioSavedSubjects(){
   const sel=$("#studioSavedSubjectSelect");if(!sel)return;
   sel.innerHTML='<option value="">Saved subject…</option>'+state.studioSavedSubjects.map(x=>'<option value="'+esc(x.saved_id||x.id)+'">'+esc(x.label||"Saved subject")+'</option>').join("");
 }
+async function testStudioModel(){
+  const p=await saveStudioProject(false);if(!p)return;
+  const button=$("#studioTestModel"),status=$("#studioModelStatus");
+  button.disabled=true;button.textContent="Testing…";status.textContent="Sending a tiny text-only OpenRouter check…";
+  try{
+    const d=await api("/api/prompt-studio/projects/"+encodeURIComponent(p.id)+"/model-check",{method:"POST",body:{}});
+    status.textContent="✓ "+d.model+" responded · "+Number(d.elapsed_ms||0)+" ms";
+    toast("Studio model check passed");
+  }catch(e){
+    status.textContent="✕ "+e.message;
+    toast("Studio model check failed");
+  }finally{
+    button.disabled=false;button.textContent="Test model";
+  }
+}
+
 function renderStudioPreflight(result){
   const badge=$("#studioPreflightBadge"),host=$("#studioPreflightMsg");if(!badge||!host)return;
   badge.className="pill";
@@ -1398,6 +1414,7 @@ function wireStudio(){
     try{await api("/api/prompt-studio/projects/"+encodeURIComponent(p.id),{method:"DELETE"});state.studioProject=null;await loadStudioIndex();toast("Prompt project deleted");}catch(e){toast(e.message);}
   };
   ["studioName","studioDuration","studioModel","studioConcept","studioEnvironment","studioVisualStyle","studioSoundscape","studioMusic"].forEach(id=>$("#"+id).addEventListener("input",scheduleStudioSave));
+  $("#studioModel").addEventListener("input",()=>{$("#studioModelStatus").textContent="";});
   ["studioMode","studioAspect","studioStartingImage","studioStartingAnalyze"].forEach(id=>$("#"+id).addEventListener("change",()=>{
     pullStudioStatic();
     if(id==="studioMode")renderStudioProject();
@@ -1408,6 +1425,7 @@ function wireStudio(){
     scene.locks=studioToggleLock(scene.locks,e.target.dataset.studioSceneLock,e.target.checked);scheduleStudioSave();
   });
   $$("[data-studio-edit-field]").forEach(el=>el.onclick=()=>studioPromptEdit(el.dataset.studioEditField,"","Describe the change to this field only"));
+  $("#studioTestModel").onclick=testStudioModel;
   $("#studioPreflight").onclick=()=>runStudioPreflight(null,true);
   $("#studioPlan").onclick=studioPlan;
   $("#studioCheckpoint").onclick=studioCheckpoint;
