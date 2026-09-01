@@ -183,8 +183,16 @@ def _set_power_loras(graph: dict[str, Any], loras: list[dict[str, Any]]) -> None
             inputs[f"lora_{i}"] = {"on": True, "lora": filename, "strength": strength}
 
 
-def _applied_loras(graph: dict[str, Any]) -> list[dict[str, Any]]:
+def _applied_loras(
+    graph: dict[str, Any],
+    selected: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     out = []
+    selected_by_file = {
+        str(item.get("filename") or item.get("lora") or ""): item
+        for item in (selected or [])
+        if str(item.get("filename") or item.get("lora") or "")
+    }
     for _, node in find_nodes(graph, "Power Lora Loader (rgthree)"):
         for key, value in (node.get("inputs") or {}).items():
             if not re.fullmatch(r"lora_\d+", str(key)) or not isinstance(value, dict):
@@ -198,7 +206,13 @@ def _applied_loras(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 strength = float(value.get("strength", 1.0))
             except (TypeError, ValueError):
                 strength = 1.0
-            out.append({"filename": filename, "strength": strength, "source": "custom"})
+            selected_item = selected_by_file.get(filename) or {}
+            out.append({
+                "filename": filename,
+                "nickname": str(selected_item.get("nickname") or ""),
+                "strength": strength,
+                "source": "custom",
+            })
     for _, node in find_nodes(graph, "LoraLoaderModelOnly"):
         inputs = node.get("inputs") or {}
         filename = str(inputs.get("lora_name") or "").strip()
@@ -369,7 +383,7 @@ def patch_workflow(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         "starting_image": payload.get("starting_image"),
         "refs": payload.get("refs") or [],
         "loras": payload.get("loras") or [],
-        "applied_loras": _applied_loras(graph),
+        "applied_loras": _applied_loras(graph, payload.get("loras") or []),
         "queued_at": time.time(),
     }
     return graph, record
