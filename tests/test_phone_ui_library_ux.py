@@ -100,3 +100,15 @@ def test_prompt_studio_freehand_sketch_is_subject_tagged_and_ui_only():
     assert 'fitStudioBlockToSketch' in APP
     assert '.studio-blocking-canvas.drawing' in CSS
     assert '_studio_llm_scene' in SERVER
+
+
+def test_prompt_studio_preflight_is_visible_and_gates_openrouter_actions():
+    assert 'id="studioPreflight"' in HTML
+    assert 'id="studioPreflightBadge"' in HTML
+    assert 'id="studioPreflightMsg"' in HTML
+    assert 'function runStudioPreflight' in APP
+    assert 'await runStudioPreflight(p,false)' in APP
+    assert 'Fix the preflight issues above before calling the planner.' in APP
+    assert 'Fix the preflight issues above before compiling.' in APP
+    assert 'web.get("/api/prompt-studio/projects/{project_id}/preflight", api_studio_preflight)' in SERVER
+    assert '.studio-preflight-error' in CSS
