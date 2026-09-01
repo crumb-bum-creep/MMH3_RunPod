@@ -66,8 +66,11 @@ def _type_name(spec: Any) -> str:
 def _is_widget_spec(spec: Any) -> bool:
     if not isinstance(spec, (list, tuple)) or not spec:
         return False
+    options = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+    if options.get("forceInput"):
+        return False
     first = spec[0]
-    return first in {"INT", "FLOAT", "STRING", "BOOLEAN"} or isinstance(first, (list, tuple))
+    return isinstance(first, (list, tuple)) or first in {"INT", "FLOAT", "STRING", "BOOLEAN"}
 
 
 def _default_widget(spec: Any) -> Any:
@@ -137,34 +140,55 @@ def api_graph_to_ui(graph: dict[str, Any], object_info: dict[str, Any]) -> dict[
         if not isinstance(node, dict):
             continue
         info = object_info.get(str(node.get("class_type") or "")) or {}
-        order = _input_order(info)
-        order_index = {name: i for i, name in enumerate(order)}
-        pending_inputs = []
-        for name, value in (node.get("inputs") or {}).items():
-            if not (isinstance(value, list) and len(value) == 2 and str(value[0]) in graph):
+        declared_order = _input_order(info)
+        api_inputs = node.get("inputs") or {}
+
+        # Modern Comfy workflow JSON serializes the full node.inputs array, not
+        # only sockets that currently have links. Widget-backed entries therefore
+        # occupy target-slot indices too (with link:null). Preserve declaration
+        # order and append any API-only connected inputs after it.
+        full_order = list(declared_order)
+        for name, value in api_inputs.items():
+            if name in full_order:
                 continue
-            src_id, src_slot = str(value[0]), int(value[1])
+            if isinstance(value, list) and len(value) == 2 and str(value[0]) in graph:
+                full_order.append(str(name))
+
+        serialized_inputs = []
+        for dest_slot, name in enumerate(full_order):
             spec = _input_spec(info, name)
             input_type = _type_name(spec)
-            pending_inputs.append((order_index.get(name, 10_000), str(name), value, spec, input_type))
-        pending_inputs.sort(key=lambda item: (item[0], item[1]))
-
-        for dest_slot, (_, name, value, spec, input_type) in enumerate(pending_inputs):
-            src_id, src_slot = str(value[0]), int(value[1])
+            value = api_inputs.get(name)
             serialized = {
-                "name": name,
+                "name": str(name),
                 "type": input_type,
-                "link": link_id,
+                "link": None,
+                "slot_index": dest_slot,
             }
             if _is_widget_spec(spec):
-                serialized["widget"] = {"name": name}
-            node_inputs[str(dest_id)].append(serialized)
-            output_links[(src_id, src_slot)].append(link_id)
-            src_info = object_info.get(str((graph.get(src_id) or {}).get("class_type") or "")) or {}
-            out_types = src_info.get("output") or []
-            out_type = str(out_types[src_slot]) if src_slot < len(out_types) else "*"
-            links.append([link_id, id_map[src_id], src_slot, id_map[str(dest_id)], dest_slot, out_type])
-            link_id += 1
+                serialized["widget"] = {"name": str(name)}
+
+            if isinstance(value, list) and len(value) == 2 and str(value[0]) in graph:
+                src_id, src_slot = str(value[0]), int(value[1])
+                serialized["link"] = link_id
+                output_links[(src_id, src_slot)].append(link_id)
+                src_info = object_info.get(
+                    str((graph.get(src_id) or {}).get("class_type") or "")
+                ) or {}
+                out_types = src_info.get("output") or []
+                out_type = str(out_types[src_slot]) if src_slot < len(out_types) else "*"
+                links.append([
+                    link_id,
+                    id_map[src_id],
+                    src_slot,
+                    id_map[str(dest_id)],
+                    dest_slot,
+                    out_type,
+                ])
+                link_id += 1
+            serialized_inputs.append(serialized)
+
+        node_inputs[str(dest_id)] = serialized_inputs
 
     nodes = []
     for order_index, (raw_id, node) in enumerate(graph.items()):
