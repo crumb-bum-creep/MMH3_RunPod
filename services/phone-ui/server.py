@@ -183,6 +183,40 @@ def _set_power_loras(graph: dict[str, Any], loras: list[dict[str, Any]]) -> None
             inputs[f"lora_{i}"] = {"on": True, "lora": filename, "strength": strength}
 
 
+def _applied_loras(graph: dict[str, Any]) -> list[dict[str, Any]]:
+    out = []
+    for _, node in find_nodes(graph, "Power Lora Loader (rgthree)"):
+        for key, value in (node.get("inputs") or {}).items():
+            if not re.fullmatch(r"lora_\d+", str(key)) or not isinstance(value, dict):
+                continue
+            if not bool(value.get("on", True)):
+                continue
+            filename = str(value.get("lora") or "").strip()
+            if not filename:
+                continue
+            try:
+                strength = float(value.get("strength", 1.0))
+            except (TypeError, ValueError):
+                strength = 1.0
+            out.append({"filename": filename, "strength": strength, "source": "custom"})
+    for _, node in find_nodes(graph, "LoraLoaderModelOnly"):
+        inputs = node.get("inputs") or {}
+        filename = str(inputs.get("lora_name") or "").strip()
+        if not filename:
+            continue
+        try:
+            strength = float(inputs.get("strength_model", 1.0))
+        except (TypeError, ValueError):
+            strength = 1.0
+        out.append({
+            "filename": filename,
+            "nickname": str((node.get("_meta") or {}).get("title") or "Workflow LoRA"),
+            "strength": strength,
+            "source": "workflow",
+        })
+    return out
+
+
 def _reference_json(refs: list[dict[str, Any]]) -> str:
     out = []
     counts = {"image": 0, "video": 0, "audio": 0}
@@ -335,6 +369,7 @@ def patch_workflow(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         "starting_image": payload.get("starting_image"),
         "refs": payload.get("refs") or [],
         "loras": payload.get("loras") or [],
+        "applied_loras": _applied_loras(graph),
         "queued_at": time.time(),
     }
     return graph, record
