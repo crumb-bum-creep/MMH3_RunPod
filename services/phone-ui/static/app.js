@@ -695,8 +695,7 @@ async function refreshOutputs(force=false){
     host.innerHTML=next.map(x=>{
       const m=x.metadata||{}, open=state.openOutputs.has(x.file)?" open":"";
       return `<details class="output" data-file="${esc(x.file)}"${open}>
-        <summary><strong>${esc(x.file.split("/").pop())}</strong><div class="muted">${esc((m.mode||"").toUpperCase())} ${esc((m.prompt_mode||"").toUpperCase())} · ${bytes(x.size)}</div></summary>
-        ${outputRunChips(m)}
+        <summary><div><strong>${esc(x.file.split("/").pop())}</strong><div class="muted">${esc((m.mode||"").toUpperCase())} ${esc((m.prompt_mode||"").toUpperCase())} · ${bytes(x.size)}</div>${outputRunChips(m)}</div></summary>
         <video controls preload="metadata" src="${esc(mediaUrl(x.file))}"></video>
         <div class="actions">
           <button class="secondary copy-prompt">Copy prompt</button>
