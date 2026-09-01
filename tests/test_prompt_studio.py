@@ -186,3 +186,17 @@ def test_exact_shot_count_is_enforced_during_normalization():
     assert len(project["scene"]["shots"]) == 4
     assert [round(x["start_seconds"], 3) for x in project["scene"]["shots"]] == [0.0, 3.0, 6.0, 9.0]
     assert "shot_count_mode=exact" in prompt_studio.planner_system_prompt()
+
+
+def test_blocking_sketch_strokes_are_normalized_as_ui_only_metadata():
+    project = prompt_studio.new_project()
+    shot = project["scene"]["shots"][0]
+    shot["blocking_sketch"] = [{
+        "id": "stroke_1",
+        "block_id": "block_1",
+        "points": [[-1, 0.25], [0.5, 2], ["bad", 0.4], [0.7, 0.8]],
+    }]
+    project = prompt_studio.normalize_project(project)
+    stroke = project["scene"]["shots"][0]["blocking_sketch"][0]
+    assert stroke["block_id"] == "block_1"
+    assert stroke["points"] == [[0.0, 0.25], [0.5, 1.0], [0.7, 0.8]]
