@@ -1297,6 +1297,15 @@ async def api_studio_project_delete(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "deleted": existed})
 
 
+def _studio_llm_scene(scene: dict[str, Any]) -> dict[str, Any]:
+    """Return scene context without potentially large UI-only sketch strokes."""
+    value = copy.deepcopy(scene)
+    for shot in value.get("shots") or []:
+        if isinstance(shot, dict):
+            shot.pop("blocking_sketch", None)
+    return value
+
+
 def _studio_merge_planner_scene(old_scene: dict[str, Any], planned: dict[str, Any]) -> dict[str, Any]:
     """Merge LLM scene output onto stable user-owned IDs/reference metadata."""
     merged = prompt_studio.preserve_locks(old_scene, planned)
@@ -1360,6 +1369,7 @@ def _studio_merge_planner_scene(old_scene: dict[str, Any], planned: dict[str, An
             candidate["id"] = old["id"]
             candidate["locks"] = copy.deepcopy(old.get("locks") or [])
             candidate["blocking"] = copy.deepcopy(old.get("blocking") or [])
+            candidate["blocking_sketch"] = copy.deepcopy(old.get("blocking_sketch") or [])
         shot_result.append(candidate)
 
     if not exact:
@@ -1386,7 +1396,7 @@ async def api_studio_plan(request: web.Request) -> web.Response:
         f"Duration: {project['duration']} seconds\n"
         f"Aspect ratio: {project['aspect_ratio']}\n"
         f"Reference contract:\n{prompt_studio.reference_contract(project)}\n\n"
-        f"Existing editable scene:\n{json.dumps(old_scene, indent=2, ensure_ascii=False)}\n\n"
+        f"Existing editable scene:\n{json.dumps(_studio_llm_scene(old_scene), indent=2, ensure_ascii=False)}\n\n"
         f"Planning instruction:\n{instruction}"
     )
     if labels:
@@ -1444,7 +1454,7 @@ async def api_studio_edit(request: web.Request) -> web.Response:
         f"Project mode: {project['mode']}\n"
         f"Duration: {project['duration']} seconds\n"
         f"Reference contract:\n{prompt_studio.reference_contract(project)}\n\n"
-        f"Full scene context:\n{json.dumps(scene, indent=2, ensure_ascii=False)}\n\n"
+        f"Full scene context:\n{json.dumps(_studio_llm_scene(scene), indent=2, ensure_ascii=False)}\n\n"
         f"Current {scope} component:\n{json.dumps(current, indent=2, ensure_ascii=False)}\n\n"
         f"Requested change:\n{instruction}"
     )
@@ -1493,7 +1503,7 @@ async def api_studio_compile(request: web.Request) -> web.Response:
         f"Duration: {project['duration']} seconds\n"
         f"Aspect ratio: {project['aspect_ratio']}\n\n"
         f"REFERENCE CONTRACT:\n{prompt_studio.reference_contract(project)}\n\n"
-        f"STRUCTURED SCENE PLAN:\n{json.dumps(project['scene'], indent=2, ensure_ascii=False)}"
+        f"STRUCTURED SCENE PLAN:\n{json.dumps(_studio_llm_scene(project['scene']), indent=2, ensure_ascii=False)}"
     )
     prompt = await _studio_openrouter(
         model=project["model"],
