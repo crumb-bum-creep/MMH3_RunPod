@@ -112,3 +112,26 @@ def test_workflows_do_not_contain_embedded_credentials():
 def test_phone_ui_has_r2v_cache_nonce():
     source = (ROOT / "services" / "phone-ui" / "server.py").read_text()
     assert 'inp["local_model_slug"] = f"mmh3-cache-{random_openrouter_seed()}"' in source
+
+
+def test_all_workflows_expose_ksampler_select():
+    for name in EXPECTED:
+        graph = load(name)
+        samplers = nodes_of(graph, "KSamplerSelect")
+        assert len(samplers) == 1, name
+        assert isinstance(samplers[0]["inputs"]["sampler_name"], str)
+
+
+def test_r2v_workflows_use_persistent_asset_selector_for_comfy_ui():
+    for name in ("r2v_auto.json", "r2v_custom.json"):
+        graph = load(name)
+        selectors = nodes_of(graph, "MMH3AssetReferenceSelector")
+        assert len(selectors) == 1, name
+        selector_id = next(nid for nid, node in graph.items() if node is selectors[0])
+        pack = nodes_of(graph, "MiniMaxH3ReferencePack")[0]
+        assert pack["inputs"]["references_json"] == [selector_id, 0]
+        for i in range(1, 10):
+            assert selectors[0]["inputs"][f"picture_{i}"] == "(none)"
+        for i in range(1, 4):
+            assert selectors[0]["inputs"][f"video_{i}"] == "(none)"
+            assert selectors[0]["inputs"][f"audio_{i}"] == "(none)"
