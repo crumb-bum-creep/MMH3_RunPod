@@ -76,6 +76,7 @@ def test_prompt_studio_is_separate_from_generation_and_phone_friendly():
 def test_prompt_studio_director_controls_and_collection_selectors():
     assert 'id="studioTimeline"' in HTML
     assert 'id="studioShotCount"' in HTML
+    assert 'id="studioShotCountMode"' in HTML
     assert 'id="studioBlockingDialog"' in HTML
     assert 'class="studio-framing-grid"' in APP
     assert 'function renderStudioTimeline' in APP
