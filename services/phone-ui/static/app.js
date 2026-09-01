@@ -1122,8 +1122,10 @@ function renderStudioBlockingControls(){
     '<label>Facing</label><select id="studioBlockFacing"><option value="unspecified">Unspecified</option><option value="left">Left</option><option value="right">Right</option><option value="camera">Camera</option><option value="away">Away from camera</option></select>'+
     '<label>Blocking note</label><input id="studioBlockNote" value="'+esc(b.note||"")+'" placeholder="e.g. leaning against wall, foreground">';
   $("#studioBlockFacing").value=b.facing||"unspecified";
-  $("#studioBlockWidth").oninput=e=>{b.width=Number(e.target.value);b.x=Math.min(b.x,1-b.width);renderStudioBlocking();scheduleStudioSave();};
-  $("#studioBlockHeight").oninput=e=>{b.height=Number(e.target.value);b.y=Math.min(b.y,1-b.height);renderStudioBlocking();scheduleStudioSave();};
+  $("#studioBlockWidth").oninput=e=>{b.width=Number(e.target.value);b.x=Math.min(b.x,1-b.width);const el=$('[data-block="'+CSS.escape(b.id)+'"]',$("#studioBlockingFrame"));if(el){el.style.width=(b.width*100)+"%";el.style.left=(b.x*100)+"%";}scheduleStudioSave();};
+  $("#studioBlockHeight").oninput=e=>{b.height=Number(e.target.value);b.y=Math.min(b.y,1-b.height);const el=$('[data-block="'+CSS.escape(b.id)+'"]',$("#studioBlockingFrame"));if(el){el.style.height=(b.height*100)+"%";el.style.top=(b.y*100)+"%";}scheduleStudioSave();};
+  $("#studioBlockWidth").onchange=renderStudioBlocking;
+  $("#studioBlockHeight").onchange=renderStudioBlocking;
   $("#studioBlockFacing").onchange=e=>{b.facing=e.target.value;renderStudioBlocking();scheduleStudioSave();};
   $("#studioBlockNote").oninput=e=>{b.note=e.target.value;scheduleStudioSave();};
   $("#studioRemoveBlock").onclick=()=>{const shot=blockingShot();shot.blocking=(shot.blocking||[]).filter(x=>x.id!==b.id);state.studioBlockingSelectedId=null;renderStudioBlocking();scheduleStudioSave();};
