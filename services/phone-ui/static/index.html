@@ -18,6 +18,7 @@
 
 <nav id="tabs">
   <button data-tab="generate" class="active">Generate</button>
+  <button data-tab="studio">Studio</button>
   <button data-tab="queue">Queue</button>
   <button data-tab="outputs">Outputs</button>
   <button data-tab="loras">LoRAs</button>
@@ -116,6 +117,137 @@
 
     <button id="generate" class="primary big">Queue Generation</button>
     <div id="generateMsg" class="message" aria-live="polite"></div>
+  </div>
+</section>
+
+<section id="tab-studio" class="tab">
+  <div class="card studio-project-card">
+    <div class="labelrow">
+      <div><strong>Prompt Studio</strong><div class="muted">Plan and refine prompts without starting a Comfy generation.</div></div>
+      <span id="studioSaveState" class="muted">Not loaded</span>
+    </div>
+    <div class="studio-project-picker">
+      <select id="studioProjectSelect"><option value="">Project…</option></select>
+      <button id="studioNewProject" class="secondary small" type="button">+ New</button>
+      <button id="studioDeleteProject" class="danger ghost small" type="button">Delete</button>
+    </div>
+
+    <label for="studioName">Project name</label>
+    <input id="studioName" placeholder="Untitled Prompt">
+
+    <div class="grid2">
+      <div>
+        <label for="studioMode">Mode</label>
+        <select id="studioMode">
+          <option value="t2v">T2V</option>
+          <option value="i2v">I2V</option>
+          <option value="r2v">R2V</option>
+        </select>
+      </div>
+      <div>
+        <label for="studioDuration">Duration (sec)</label>
+        <input id="studioDuration" type="number" min="1" max="30" step="1" value="10">
+      </div>
+    </div>
+
+    <label for="studioAspect">Aspect ratio</label>
+    <select id="studioAspect">
+      <option>9:16 (Portrait Widescreen)</option>
+      <option>16:9 (Widescreen)</option>
+      <option>2:3 (Portrait Photo)</option>
+      <option>3:2 (Photo)</option>
+      <option>1:1 (Square)</option>
+    </select>
+
+    <label for="studioModel">OpenRouter model</label>
+    <input id="studioModel" value="google/gemini-3-flash-preview" autocapitalize="off" spellcheck="false">
+
+    <label for="studioConcept">Concept / direction</label>
+    <textarea id="studioConcept" rows="6" placeholder="Describe the scene you want to build…"></textarea>
+
+    <div id="studioI2VStartBlock" hidden>
+      <div class="labelrow"><label for="studioStartingImage">I2V starting image</label><span class="muted">&lt;Picture 1&gt; at 0.00s</span></div>
+      <select id="studioStartingImage"><option value="">No image selected</option></select>
+      <label class="check compact-check"><input id="studioStartingAnalyze" type="checkbox" checked> Let the planner analyze this image</label>
+    </div>
+
+    <div class="media-row studio-actions">
+      <button id="studioPlan" class="primary" type="button">✨ Build / Rebuild Plan</button>
+      <button id="studioCheckpoint" class="secondary" type="button">Save Checkpoint</button>
+    </div>
+    <div id="studioMsg" class="message" aria-live="polite"></div>
+  </div>
+
+  <div class="card">
+    <div class="labelrow">
+      <div><strong>Subjects</strong><div class="muted">Actual assets, opaque Picture slots, or text-only subjects.</div></div>
+      <button id="studioAddSubject" class="secondary small" type="button">+ Subject</button>
+    </div>
+    <div class="studio-saved-row">
+      <select id="studioSavedSubjectSelect"><option value="">Saved subject…</option></select>
+      <button id="studioAddSavedSubject" class="ghost small" type="button">Add saved</button>
+    </div>
+    <div id="studioSubjects" class="stack padded-top"></div>
+  </div>
+
+  <div class="card">
+    <div class="labelrow"><strong>Scene</strong><span class="muted">🔒 fields are protected from broad AI edits</span></div>
+
+    <div class="studio-field-head"><label for="studioEnvironment">Environment</label><div><label class="inline-lock"><input type="checkbox" data-studio-scene-lock="environment"> 🔒</label><button class="ghost small" data-studio-edit-field="environment" type="button">✨</button></div></div>
+    <textarea id="studioEnvironment" rows="4"></textarea>
+
+    <div class="studio-field-head"><label for="studioVisualStyle">Visual style</label><div><label class="inline-lock"><input type="checkbox" data-studio-scene-lock="visual_style"> 🔒</label><button class="ghost small" data-studio-edit-field="visual_style" type="button">✨</button></div></div>
+    <textarea id="studioVisualStyle" rows="3"></textarea>
+
+    <div class="studio-field-head"><label for="studioSoundscape">Soundscape</label><div><label class="inline-lock"><input type="checkbox" data-studio-scene-lock="soundscape"> 🔒</label><button class="ghost small" data-studio-edit-field="soundscape" type="button">✨</button></div></div>
+    <textarea id="studioSoundscape" rows="3"></textarea>
+
+    <div class="studio-field-head"><label for="studioMusic">Non-diegetic music</label><div><label class="inline-lock"><input type="checkbox" data-studio-scene-lock="music"> 🔒</label><button class="ghost small" data-studio-edit-field="music" type="button">✨</button></div></div>
+    <textarea id="studioMusic" rows="2"></textarea>
+  </div>
+
+  <div class="card">
+    <div class="labelrow">
+      <div><strong>Shots</strong><div class="muted">Configure timing, framing, camera, action, dialogue and sound independently.</div></div>
+      <button id="studioAddShot" class="secondary small" type="button">+ Shot</button>
+    </div>
+    <div id="studioShots" class="stack"></div>
+  </div>
+
+  <div class="card">
+    <strong>Modify with AI</strong>
+    <div class="muted">Broad edits still preserve every locked field and subject reference binding.</div>
+    <label for="studioEditScope">Scope</label>
+    <select id="studioEditScope">
+      <option value="whole">Whole scene</option>
+      <option value="concept">Concept only</option>
+      <option value="environment">Environment only</option>
+      <option value="visual_style">Visual style only</option>
+      <option value="soundscape">Soundscape only</option>
+      <option value="music">Music only</option>
+    </select>
+    <label for="studioEditInstruction">Requested change</label>
+    <textarea id="studioEditInstruction" rows="3" placeholder="Example: make the cuts much harder and more sudden, but leave the dialogue and subject appearances alone"></textarea>
+    <button id="studioApplyEdit" class="secondary big" type="button">✨ Apply Scoped Change</button>
+  </div>
+
+  <div class="card">
+    <div class="labelrow"><strong>Compiled H3 prompt</strong><span id="studioValidationBadge" class="pill">Not compiled</span></div>
+    <div class="media-row studio-actions">
+      <button id="studioCompile" class="primary" type="button">Compile + Validate</button>
+      <button id="studioCopyPrompt" class="secondary" type="button">Copy</button>
+    </div>
+    <textarea id="studioFinalPrompt" rows="14" readonly placeholder="Compile the scene plan when you're ready…"></textarea>
+    <div id="studioValidation" class="message"></div>
+    <button id="studioUseCustom" class="primary big" type="button">Use in Custom Workflow →</button>
+
+    <details class="studio-revisions">
+      <summary>Revision history</summary>
+      <div class="studio-revision-row">
+        <select id="studioRevisionSelect"><option value="">Revision…</option></select>
+        <button id="studioRestoreRevision" class="secondary small" type="button">Restore</button>
+      </div>
+    </details>
   </div>
 </section>
 
