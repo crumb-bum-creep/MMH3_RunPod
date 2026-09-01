@@ -109,9 +109,9 @@
 
 
 /* Prompt Studio director controls */
-.studio-shot-toolbar{display:grid;grid-template-columns:minmax(120px,1fr) auto auto;gap:6px;align-items:end;margin-bottom:10px}
-.studio-shot-count{margin:0!important}
-.studio-shot-count input{margin-top:5px}
+.studio-shot-toolbar{display:grid;grid-template-columns:minmax(120px,1fr) 90px auto auto;gap:6px;align-items:end;margin-bottom:10px}
+.studio-shot-count,.studio-shot-mode{margin:0!important}
+.studio-shot-count input,.studio-shot-mode select{margin-top:5px}
 .studio-timeline{margin:6px 0 12px}
 .studio-timeline-bar{display:flex;width:100%;height:46px;overflow:hidden;border:1px solid var(--line);border-radius:10px;background:#0c1018}
 .studio-timeline-segment{min-width:0;border:0;border-right:1px solid #364057;border-radius:0;background:#1a2233;padding:4px 2px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#dce5fb}
@@ -150,7 +150,6 @@ touch-action:none;overflow:hidden}
 
 @media(max-width:520px){
   .studio-shot-toolbar{grid-template-columns:1fr 1fr}
-  .studio-shot-toolbar .studio-shot-count{grid-column:1/-1}
   .studio-framing-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
   .studio-framing-card{min-height:70px}
   #studioBlockingDialog{padding:9px}
