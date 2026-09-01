@@ -1297,6 +1297,84 @@ async def api_studio_project_delete(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "deleted": existed})
 
 
+def _studio_merge_planner_scene(old_scene: dict[str, Any], planned: dict[str, Any]) -> dict[str, Any]:
+    """Merge LLM scene output onto stable user-owned IDs/reference metadata."""
+    merged = prompt_studio.preserve_locks(old_scene, planned)
+
+    old_subjects = list(old_scene.get("subjects") or [])
+    new_subjects = list(merged.get("subjects") or [])
+    consumed_subjects: set[int] = set()
+    subject_result = []
+    for index, old in enumerate(old_subjects):
+        chosen_index = next(
+            (i for i, item in enumerate(new_subjects)
+             if i not in consumed_subjects and str(item.get("id")) == str(old.get("id"))),
+            None,
+        )
+        if chosen_index is None and index < len(new_subjects) and index not in consumed_subjects:
+            chosen_index = index
+        candidate = copy.deepcopy(new_subjects[chosen_index]) if chosen_index is not None else copy.deepcopy(old)
+        if chosen_index is not None:
+            consumed_subjects.add(chosen_index)
+        candidate["id"] = old["id"]
+        candidate["reference"] = copy.deepcopy(old.get("reference") or {})
+        candidate["locks"] = copy.deepcopy(old.get("locks") or [])
+        subject_result.append(candidate)
+    subject_result.extend(
+        copy.deepcopy(item)
+        for i, item in enumerate(new_subjects)
+        if i not in consumed_subjects
+    )
+    merged["subjects"] = subject_result
+
+    old_shots = list(old_scene.get("shots") or [])
+    new_shots = list(merged.get("shots") or [])
+    exact = str(old_scene.get("shot_count_mode") or "auto") == "exact"
+    target_count = int(old_scene.get("exact_shot_count") or len(old_shots) or 1) if exact else len(new_shots)
+    if target_count < 1:
+        target_count = 1
+
+    shot_result = []
+    consumed_shots: set[int] = set()
+    for index in range(target_count):
+        old = old_shots[index] if index < len(old_shots) else None
+        chosen_index = None
+        if old is not None:
+            chosen_index = next(
+                (i for i, item in enumerate(new_shots)
+                 if i not in consumed_shots and str(item.get("id")) == str(old.get("id"))),
+                None,
+            )
+        if chosen_index is None and index < len(new_shots) and index not in consumed_shots:
+            chosen_index = index
+
+        if chosen_index is not None:
+            candidate = copy.deepcopy(new_shots[chosen_index])
+            consumed_shots.add(chosen_index)
+        elif old is not None:
+            candidate = copy.deepcopy(old)
+        else:
+            candidate = prompt_studio.empty_shot(index + 1)
+
+        if old is not None:
+            candidate["id"] = old["id"]
+            candidate["locks"] = copy.deepcopy(old.get("locks") or [])
+            candidate["blocking"] = copy.deepcopy(old.get("blocking") or [])
+        shot_result.append(candidate)
+
+    if not exact:
+        shot_result.extend(
+            copy.deepcopy(item)
+            for i, item in enumerate(new_shots)
+            if i not in consumed_shots
+        )
+
+    merged["shots"] = shot_result
+    merged["shot_count_mode"] = str(old_scene.get("shot_count_mode") or "auto")
+    merged["exact_shot_count"] = int(old_scene.get("exact_shot_count") or max(1, len(shot_result)))
+    return merged
+
+
 async def api_studio_plan(request: web.Request) -> web.Response:
     body = await request.json()
     project = _studio_project(request.match_info["project_id"])
@@ -1323,19 +1401,7 @@ async def api_studio_plan(request: web.Request) -> web.Response:
     )
     if not isinstance(planned, dict):
         raise web.HTTPBadGateway(text="Planner did not return a scene object")
-    planned = prompt_studio.preserve_locks(old_scene, planned)
-
-    # Manually defined subjects are authoritative. Planner may enrich them but
-    # may not silently delete them or replace their reference bindings.
-    planned_subjects = {str(x.get("id")): x for x in planned.get("subjects") or []}
-    merged_subjects = []
-    for old in old_scene.get("subjects") or []:
-        candidate = planned_subjects.pop(str(old.get("id")), copy.deepcopy(old))
-        candidate["reference"] = copy.deepcopy(old.get("reference") or {})
-        candidate["locks"] = copy.deepcopy(old.get("locks") or [])
-        merged_subjects.append(candidate)
-    merged_subjects.extend(planned_subjects.values())
-    planned["subjects"] = merged_subjects
+    planned = _studio_merge_planner_scene(old_scene, planned)
 
     project["scene"] = planned
     project["final_prompt"] = ""
