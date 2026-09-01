@@ -63,6 +63,25 @@ def _type_name(spec: Any) -> str:
     return "*"
 
 
+def _is_widget_spec(spec: Any) -> bool:
+    if not isinstance(spec, (list, tuple)) or not spec:
+        return False
+    first = spec[0]
+    return first in {"INT", "FLOAT", "STRING", "BOOLEAN"} or isinstance(first, (list, tuple))
+
+
+def _default_widget(spec: Any) -> Any:
+    if not isinstance(spec, (list, tuple)) or not spec:
+        return None
+    first = spec[0]
+    options = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+    if "default" in options:
+        return options["default"]
+    if isinstance(first, (list, tuple)):
+        return first[0] if first else ""
+    return {"INT": 0, "FLOAT": 0.0, "STRING": "", "BOOLEAN": False}.get(first)
+
+
 def _widget_value(value: Any) -> Any:
     # LiteGraph widget serialization can safely carry the same JSON values that
     # the API prompt uses (including rgthree's small widget dictionaries).
@@ -119,21 +138,27 @@ def api_graph_to_ui(graph: dict[str, Any], object_info: dict[str, Any]) -> dict[
             continue
         info = object_info.get(str(node.get("class_type") or "")) or {}
         order = _input_order(info)
-        slot_index = {name: i for i, name in enumerate(order)}
+        order_index = {name: i for i, name in enumerate(order)}
+        pending_inputs = []
         for name, value in (node.get("inputs") or {}).items():
             if not (isinstance(value, list) and len(value) == 2 and str(value[0]) in graph):
                 continue
             src_id, src_slot = str(value[0]), int(value[1])
             spec = _input_spec(info, name)
             input_type = _type_name(spec)
-            dest_slot = slot_index.get(name, len(node_inputs[str(dest_id)]))
-            node_inputs[str(dest_id)].append({
-                "name": str(name),
+            pending_inputs.append((order_index.get(name, 10_000), str(name), value, spec, input_type))
+        pending_inputs.sort(key=lambda item: (item[0], item[1]))
+
+        for dest_slot, (_, name, value, spec, input_type) in enumerate(pending_inputs):
+            src_id, src_slot = str(value[0]), int(value[1])
+            serialized = {
+                "name": name,
                 "type": input_type,
                 "link": link_id,
-                "widget": {"name": str(name)},
-                "_slot": dest_slot,
-            })
+            }
+            if _is_widget_spec(spec):
+                serialized["widget"] = {"name": name}
+            node_inputs[str(dest_id)].append(serialized)
             output_links[(src_id, src_slot)].append(link_id)
             src_info = object_info.get(str((graph.get(src_id) or {}).get("class_type") or "")) or {}
             out_types = src_info.get("output") or []
@@ -156,10 +181,15 @@ def api_graph_to_ui(graph: dict[str, Any], object_info: dict[str, Any]) -> dict[
 
         widgets = []
         for name in input_order:
-            if name in linked_names:
+            spec = _input_spec(info, name)
+            if not _is_widget_spec(spec):
                 continue
-            if name in (node.get("inputs") or {}):
+            if name in linked_names:
+                widgets.append(_widget_value(_default_widget(spec)))
+            elif name in (node.get("inputs") or {}):
                 widgets.append(_widget_value(node["inputs"][name]))
+            else:
+                widgets.append(_widget_value(_default_widget(spec)))
 
         # Keep any dynamic API-only widgets (notably rgthree LoRAs) after the
         # declared widget sequence instead of silently throwing them away.
@@ -183,7 +213,7 @@ def api_graph_to_ui(graph: dict[str, Any], object_info: dict[str, Any]) -> dict[
                 "slot_index": slot,
             })
 
-        inputs = sorted(node_inputs.get(nid, []), key=lambda item: item.pop("_slot"))
+        inputs = list(node_inputs.get(nid, []))
         approx_rows = max(len(inputs), len(widgets), 2)
         nodes.append({
             "id": id_map[nid],
