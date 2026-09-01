@@ -32,6 +32,8 @@ const state = {
   studioLoading: false,
   studioBlockingShotId: null,
   studioBlockingSelectedId: null,
+  studioBlockingDrawMode: false,
+  studioBlockingCurrentStroke: null,
 };
 
 function esc(v=""){
@@ -1039,7 +1041,7 @@ function addStudioSubject(subject=null){
   p.scene.subjects.push(s);renderStudioSubjects();renderStudioShots();scheduleStudioSave();
 }
 function studioNewShot(start=0){
-  return {id:studioId("shot"),start_seconds:start,framing:"Medium",camera_motion:"Static Shot",camera_custom:"",amplitude:"",speed:"",subjects:[],action:"",dialogue:"",sound:"",blocking:[],locks:[]};
+  return {id:studioId("shot"),start_seconds:start,framing:"Medium",camera_motion:"Static Shot",camera_custom:"",amplitude:"",speed:"",subjects:[],action:"",dialogue:"",sound:"",blocking:[],blocking_sketch:[],locks:[]};
 }
 function addStudioShot(){
   const p=studioProject();if(!p)return;
@@ -1074,13 +1076,13 @@ function blockingSelected(){
   const shot=blockingShot();return shot?.blocking?.find(x=>x.id===state.studioBlockingSelectedId)||null;
 }
 function openStudioBlocking(shotId){
-  state.studioBlockingShotId=shotId;state.studioBlockingSelectedId=null;
+  state.studioBlockingShotId=shotId;state.studioBlockingSelectedId=null;state.studioBlockingDrawMode=false;state.studioBlockingCurrentStroke=null;
   renderStudioBlocking();
   const d=$("#studioBlockingDialog");if(d.showModal)d.showModal();else d.setAttribute("open","");
 }
 function closeStudioBlocking(){
   const d=$("#studioBlockingDialog");if(d.close&&d.open)d.close();else d.removeAttribute("open");
-  state.studioBlockingShotId=null;state.studioBlockingSelectedId=null;
+  state.studioBlockingShotId=null;state.studioBlockingSelectedId=null;state.studioBlockingDrawMode=false;state.studioBlockingCurrentStroke=null;
   renderStudioShots();scheduleStudioSave();
 }
 function addStudioBlockingSubject(){
@@ -1093,23 +1095,115 @@ function addStudioBlockingSubject(){
   shot.blocking.push(block);if(!(shot.subjects||[]).includes(sid))shot.subjects.push(sid);
   state.studioBlockingSelectedId=block.id;renderStudioBlocking();scheduleStudioSave();
 }
+function studioSketchesForBlock(blockId){
+  const shot=blockingShot();return (shot?.blocking_sketch||[]).filter(x=>x.block_id===blockId);
+}
+function fitStudioBlockToSketch(blockId){
+  const shot=blockingShot(),block=shot?.blocking?.find(x=>x.id===blockId);if(!shot||!block)return;
+  const points=studioSketchesForBlock(blockId).flatMap(x=>x.points||[]);
+  if(!points.length)return;
+  const xs=points.map(p=>Number(p[0])),ys=points.map(p=>Number(p[1]));
+  const pad=.025;
+  const minX=Math.max(0,Math.min(...xs)-pad),maxX=Math.min(1,Math.max(...xs)+pad);
+  const minY=Math.max(0,Math.min(...ys)-pad),maxY=Math.min(1,Math.max(...ys)+pad);
+  block.x=minX;block.y=minY;block.width=Math.max(.05,maxX-minX);block.height=Math.max(.05,maxY-minY);
+}
+function studioSketchPoint(e,canvas){
+  const rect=canvas.getBoundingClientRect();
+  return [
+    Math.max(0,Math.min(1,(e.clientX-rect.left)/Math.max(1,rect.width))),
+    Math.max(0,Math.min(1,(e.clientY-rect.top)/Math.max(1,rect.height)))
+  ];
+}
+function renderStudioSketchCanvas(){
+  const canvas=$("#studioBlockingCanvas"),shot=blockingShot();if(!canvas||!shot)return;
+  const rect=canvas.getBoundingClientRect(),dpr=Math.min(2,window.devicePixelRatio||1);
+  const width=Math.max(1,Math.round(rect.width*dpr)),height=Math.max(1,Math.round(rect.height*dpr));
+  if(canvas.width!==width)canvas.width=width;if(canvas.height!==height)canvas.height=height;
+  const ctx=canvas.getContext("2d");ctx.clearRect(0,0,width,height);
+  ctx.lineWidth=Math.max(2,2.5*dpr);ctx.lineCap="round";ctx.lineJoin="round";
+  const selected=state.studioBlockingSelectedId;
+  const strokes=[...(shot.blocking_sketch||[])];
+  if(state.studioBlockingCurrentStroke)strokes.push(state.studioBlockingCurrentStroke);
+  strokes.forEach(stroke=>{
+    const pts=stroke.points||[];if(pts.length<2)return;
+    ctx.globalAlpha=stroke.block_id===selected?1:.42;
+    ctx.strokeStyle=stroke.block_id===selected?"#e8efff":"#9ba8c3";
+    ctx.beginPath();
+    pts.forEach((p,i)=>{const x=Number(p[0])*width,y=Number(p[1])*height;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    ctx.stroke();
+  });
+  ctx.globalAlpha=1;
+}
+function wireStudioSketchCanvas(){
+  const canvas=$("#studioBlockingCanvas");if(!canvas)return;
+  canvas.classList.toggle("drawing",state.studioBlockingDrawMode);
+  canvas.onpointerdown=e=>{
+    if(!state.studioBlockingDrawMode)return;
+    const block=blockingSelected();if(!block){toast("Select a subject block first.");return;}
+    canvas.setPointerCapture?.(e.pointerId);
+    state.studioBlockingCurrentStroke={id:studioId("stroke"),block_id:block.id,points:[studioSketchPoint(e,canvas)]};
+    e.preventDefault();
+  };
+  canvas.onpointermove=e=>{
+    const stroke=state.studioBlockingCurrentStroke;if(!state.studioBlockingDrawMode||!stroke)return;
+    const point=studioSketchPoint(e,canvas),last=stroke.points[stroke.points.length-1];
+    const dx=point[0]-last[0],dy=point[1]-last[1];
+    if(dx*dx+dy*dy>.00001){stroke.points.push(point);renderStudioSketchCanvas();}
+    e.preventDefault();
+  };
+  const finish=e=>{
+    const stroke=state.studioBlockingCurrentStroke;if(!stroke)return;
+    const shot=blockingShot();state.studioBlockingCurrentStroke=null;
+    if(shot&&stroke.points.length>1){
+      shot.blocking_sketch=shot.blocking_sketch||[];
+      shot.blocking_sketch.push(stroke);
+      if(shot.blocking_sketch.length>200)shot.blocking_sketch=shot.blocking_sketch.slice(-200);
+      fitStudioBlockToSketch(stroke.block_id);
+      scheduleStudioSave();
+    }
+    renderStudioBlocking();
+    e?.preventDefault?.();
+  };
+  canvas.onpointerup=finish;canvas.onpointercancel=finish;
+}
+function toggleStudioSketchDrawing(){
+  if(!blockingSelected()){toast("Select a subject block before drawing.");return;}
+  state.studioBlockingDrawMode=!state.studioBlockingDrawMode;
+  state.studioBlockingCurrentStroke=null;
+  renderStudioBlocking();
+}
+function undoStudioSketch(){
+  const shot=blockingShot(),block=blockingSelected();if(!shot||!block)return;
+  const strokes=shot.blocking_sketch||[];
+  for(let i=strokes.length-1;i>=0;i--){if(strokes[i].block_id===block.id){strokes.splice(i,1);break;}}
+  fitStudioBlockToSketch(block.id);renderStudioBlocking();scheduleStudioSave();
+}
+function clearStudioSketch(){
+  const shot=blockingShot(),block=blockingSelected();if(!shot||!block)return;
+  shot.blocking_sketch=(shot.blocking_sketch||[]).filter(x=>x.block_id!==block.id);
+  renderStudioBlocking();scheduleStudioSave();
+}
 function renderStudioBlocking(){
   const p=studioProject(),shot=blockingShot(),dialog=$("#studioBlockingDialog");if(!p||!shot||!dialog)return;
-  const ratio=studioAspectRatioValue(p.aspect_ratio);
-  $("#studioBlockingFrame").style.aspectRatio=String(ratio);
+  const ratio=studioAspectRatioValue(p.aspect_ratio),frame=$("#studioBlockingFrame");
+  frame.style.aspectRatio=String(ratio);
+  frame.style.width='min(100%, calc(62vh * '+ratio+'))';
   $("#studioBlockingTitle").textContent="Shot "+((p.scene.shots||[]).findIndex(x=>x.id===shot.id)+1)+" blocking";
   $("#studioBlockingSubject").innerHTML='<option value="">Choose subject…</option>'+(p.scene.subjects||[]).map((s,i)=>'<option value="'+esc(s.id)+'">S'+(i+1)+' · '+esc(s.label||"Subject")+'</option>').join("");
   const blocks=shot.blocking||[];
-  $("#studioBlockingFrame").innerHTML=blocks.map((b,i)=>'<button type="button" class="studio-block '+(b.id===state.studioBlockingSelectedId?"selected":"")+'" data-block="'+esc(b.id)+'" style="left:'+(Number(b.x)*100)+'%;top:'+(Number(b.y)*100)+'%;width:'+(Number(b.width)*100)+'%;height:'+(Number(b.height)*100)+'%"><span>'+esc(b.label||("Block "+(i+1)))+'</span><small>'+esc(b.facing&&b.facing!=="unspecified"?"faces "+b.facing:"")+'</small></button>').join("");
-  $$(".studio-block",$("#studioBlockingFrame")).forEach(el=>{
-    el.onclick=e=>{e.stopPropagation();state.studioBlockingSelectedId=el.dataset.block;renderStudioBlocking();};
+  frame.innerHTML='<canvas id="studioBlockingCanvas" class="studio-blocking-canvas" aria-label="Freehand semantic blocking sketch"></canvas>'+blocks.map((b,i)=>'<button type="button" class="studio-block '+(b.id===state.studioBlockingSelectedId?"selected":"")+'" data-block="'+esc(b.id)+'" style="left:'+(Number(b.x)*100)+'%;top:'+(Number(b.y)*100)+'%;width:'+(Number(b.width)*100)+'%;height:'+(Number(b.height)*100)+'%"><span>'+esc(b.label||("Block "+(i+1)))+'</span><small>'+esc(b.facing&&b.facing!=="unspecified"?"faces "+b.facing:"")+'</small></button>').join("");
+  $$(".studio-block",frame).forEach(el=>{
+    el.onclick=e=>{e.stopPropagation();if(state.studioBlockingDrawMode)return;state.studioBlockingSelectedId=el.dataset.block;renderStudioBlocking();};
     let start=null;
     el.onpointerdown=e=>{
+      if(state.studioBlockingDrawMode)return;
       if(e.button!==undefined&&e.button!==0)return;
       const b=blocks.find(x=>x.id===el.dataset.block);if(!b)return;
       state.studioBlockingSelectedId=b.id;el.setPointerCapture?.(e.pointerId);
-      const frame=$("#studioBlockingFrame").getBoundingClientRect();
-      start={px:e.clientX,py:e.clientY,x:Number(b.x),y:Number(b.y),fw:frame.width,fh:frame.height};
+      const bounds=frame.getBoundingClientRect();
+      const strokeBases=studioSketchesForBlock(b.id).map(stroke=>({stroke,points:(stroke.points||[]).map(p=>[Number(p[0]),Number(p[1])])}));
+      start={px:e.clientX,py:e.clientY,x:Number(b.x),y:Number(b.y),fw:bounds.width,fh:bounds.height,strokeBases};
       e.preventDefault();
     };
     el.onpointermove=e=>{
@@ -1117,28 +1211,39 @@ function renderStudioBlocking(){
       const b=blocks.find(x=>x.id===el.dataset.block);if(!b)return;
       b.x=Math.max(0,Math.min(1-Number(b.width),(start.x+(e.clientX-start.px)/start.fw)));
       b.y=Math.max(0,Math.min(1-Number(b.height),(start.y+(e.clientY-start.py)/start.fh)));
-      el.style.left=(b.x*100)+"%";el.style.top=(b.y*100)+"%";
+      const dx=b.x-start.x,dy=b.y-start.y;
+      start.strokeBases.forEach(base=>{base.stroke.points=base.points.map(p=>[Math.max(0,Math.min(1,p[0]+dx)),Math.max(0,Math.min(1,p[1]+dy))]);});
+      el.style.left=(b.x*100)+"%";el.style.top=(b.y*100)+"%";renderStudioSketchCanvas();
     };
     el.onpointerup=()=>{if(start){start=null;renderStudioBlockingControls();scheduleStudioSave();}};
   });
   renderStudioBlockingControls();
+  requestAnimationFrame(()=>{renderStudioSketchCanvas();wireStudioSketchCanvas();});
 }
 function renderStudioBlockingControls(){
   const b=blockingSelected(),panel=$("#studioBlockingControls");if(!panel)return;
-  if(!b){panel.innerHTML='<div class="muted">Tap a block to edit its size, facing, or note. Drag blocks directly in the frame.</div>';return;}
-  panel.innerHTML='<div class="labelrow"><strong>'+esc(b.label||"Block")+'</strong><button id="studioRemoveBlock" class="danger ghost small" type="button">Remove</button></div>'+
+  const draw=$("#studioBlockingDrawToggle"),undo=$("#studioBlockingUndoSketch"),clear=$("#studioBlockingClearSketch");
+  if(draw){draw.textContent=state.studioBlockingDrawMode?"Stop drawing":"Draw selected";draw.classList.toggle("primary",state.studioBlockingDrawMode);}
+  if(undo)undo.disabled=!b||!studioSketchesForBlock(b.id).length;
+  if(clear)clear.disabled=!b||!studioSketchesForBlock(b.id).length;
+  if(!b){panel.innerHTML='<div class="muted">Tap a block to edit it. Then choose Draw selected to sketch that subject freehand.</div>';return;}
+  const strokeCount=studioSketchesForBlock(b.id).length;
+  panel.innerHTML='<div class="labelrow"><div><strong>'+esc(b.label||"Block")+'</strong><div class="muted">'+strokeCount+' sketch stroke'+(strokeCount===1?"":"s")+' tagged to this block</div></div><button id="studioRemoveBlock" class="danger ghost small" type="button">Remove</button></div>'+
     '<div class="grid2"><div><label>Width</label><input id="studioBlockWidth" type="range" min=".05" max=".8" step=".01" value="'+Number(b.width)+'"></div><div><label>Height</label><input id="studioBlockHeight" type="range" min=".05" max=".95" step=".01" value="'+Number(b.height)+'"></div></div>'+
     '<label>Facing</label><select id="studioBlockFacing"><option value="unspecified">Unspecified</option><option value="left">Left</option><option value="right">Right</option><option value="camera">Camera</option><option value="away">Away from camera</option></select>'+
-    '<label>Blocking note</label><input id="studioBlockNote" value="'+esc(b.note||"")+'" placeholder="e.g. leaning against wall, foreground">';
+    '<label>Blocking note</label><input id="studioBlockNote" value="'+esc(b.note||"")+'" placeholder="e.g. leaning against wall, foreground">'+
+    (strokeCount?'<button id="studioFitBlockSketch" class="ghost small studio-fit-sketch" type="button">Fit block to sketch</button>':'');
   $("#studioBlockFacing").value=b.facing||"unspecified";
-  $("#studioBlockWidth").oninput=e=>{b.width=Number(e.target.value);b.x=Math.min(b.x,1-b.width);const el=$('[data-block="'+CSS.escape(b.id)+'"]',$("#studioBlockingFrame"));if(el){el.style.width=(b.width*100)+"%";el.style.left=(b.x*100)+"%";}scheduleStudioSave();};
-  $("#studioBlockHeight").oninput=e=>{b.height=Number(e.target.value);b.y=Math.min(b.y,1-b.height);const el=$('[data-block="'+CSS.escape(b.id)+'"]',$("#studioBlockingFrame"));if(el){el.style.height=(b.height*100)+"%";el.style.top=(b.y*100)+"%";}scheduleStudioSave();};
+  $("#studioBlockWidth").oninput=e=>{b.width=Number(e.target.value);b.x=Math.min(b.x,1-b.width);const el=$('[data-block="'+CSS.escape(b.id)+'"]',frameOrBlocking());if(el){el.style.width=(b.width*100)+"%";el.style.left=(b.x*100)+"%";}scheduleStudioSave();};
+  $("#studioBlockHeight").oninput=e=>{b.height=Number(e.target.value);b.y=Math.min(b.y,1-b.height);const el=$('[data-block="'+CSS.escape(b.id)+'"]',frameOrBlocking());if(el){el.style.height=(b.height*100)+"%";el.style.top=(b.y*100)+"%";}scheduleStudioSave();};
   $("#studioBlockWidth").onchange=renderStudioBlocking;
   $("#studioBlockHeight").onchange=renderStudioBlocking;
   $("#studioBlockFacing").onchange=e=>{b.facing=e.target.value;renderStudioBlocking();scheduleStudioSave();};
   $("#studioBlockNote").oninput=e=>{b.note=e.target.value;scheduleStudioSave();};
-  $("#studioRemoveBlock").onclick=()=>{const shot=blockingShot();shot.blocking=(shot.blocking||[]).filter(x=>x.id!==b.id);state.studioBlockingSelectedId=null;renderStudioBlocking();scheduleStudioSave();};
+  const fit=$("#studioFitBlockSketch");if(fit)fit.onclick=()=>{fitStudioBlockToSketch(b.id);renderStudioBlocking();scheduleStudioSave();};
+  $("#studioRemoveBlock").onclick=()=>{const shot=blockingShot();shot.blocking=(shot.blocking||[]).filter(x=>x.id!==b.id);shot.blocking_sketch=(shot.blocking_sketch||[]).filter(x=>x.block_id!==b.id);state.studioBlockingSelectedId=null;state.studioBlockingDrawMode=false;renderStudioBlocking();scheduleStudioSave();};
 }
+function frameOrBlocking(){return $("#studioBlockingFrame");}
 
 async function saveStudioSubject(subject){
   const label=prompt("Saved subject name",subject.label||"Subject");if(label===null)return;
@@ -1262,6 +1367,9 @@ function wireStudio(){
   $("#studioEvenTiming").onclick=studioEvenTiming;
   $("#studioCloseBlocking").onclick=closeStudioBlocking;
   $("#studioAddBlockingSubject").onclick=addStudioBlockingSubject;
+  $("#studioBlockingDrawToggle").onclick=toggleStudioSketchDrawing;
+  $("#studioBlockingUndoSketch").onclick=undoStudioSketch;
+  $("#studioBlockingClearSketch").onclick=()=>{if(blockingSelected()&&confirm("Clear the freehand sketch for this selected block?"))clearStudioSketch();};
   $("#studioBlockingDialog").addEventListener("click",e=>{if(e.target===$("#studioBlockingDialog"))closeStudioBlocking();});
   $("#studioApplyEdit").onclick=()=>{const instruction=$("#studioEditInstruction").value.trim();if(!instruction){toast("Describe the requested change.");return;}studioAIEdit($("#studioEditScope").value,"",instruction);};
   $("#studioCompile").onclick=studioCompile;

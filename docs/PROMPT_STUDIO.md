@@ -122,6 +122,22 @@ This board is **not** an H3 reference image and does not consume a `<Picture N>`
 
 AI scene edits may read blocking as context but cannot silently erase or replace user blocking data.
 
+
+### Freehand subject-tagged sketching
+
+A semantic block can also be selected as the active drawing target.
+
+While drawing:
+
+1. every stroke is tagged to the selected semantic block/subject
+2. stroke coordinates are stored only as persistent Studio UI metadata
+3. MMH3 derives a normalized semantic bounding region from the strokes
+4. the compiler uses that compact semantic region rather than the raw drawing
+
+Raw sketch strokes are removed from planner/editor/compiler OpenRouter payloads. They therefore do not consume model context, do not become an H3 `<Picture N>`, and cannot accidentally be interpreted as a video reference.
+
+Dragging a semantic block also translates its tagged strokes so the saved sketch and semantic placement remain aligned.
+
 ## Scoped AI edits
 
 Prompt Studio can edit:

@@ -244,6 +244,7 @@ def empty_shot(index: int = 1) -> dict[str, Any]:
         "dialogue": "",
         "sound": "",
         "blocking": [],
+        "blocking_sketch": [],
         "locks": [],
     }
 
@@ -370,6 +371,28 @@ def _clean_shot(value: Any, index: int, duration: float) -> dict[str, Any]:
             "note": str(item.get("note") or ""),
         })
     base["blocking"] = blocking
+    sketch = []
+    for stroke in base.get("blocking_sketch") or []:
+        if not isinstance(stroke, dict):
+            continue
+        points = []
+        for point in stroke.get("points") or []:
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                continue
+            try:
+                px = min(1.0, max(0.0, float(point[0])))
+                py = min(1.0, max(0.0, float(point[1])))
+            except (TypeError, ValueError):
+                continue
+            points.append([px, py])
+        if len(points) < 2:
+            continue
+        sketch.append({
+            "id": str(stroke.get("id") or _id("stroke")),
+            "block_id": str(stroke.get("block_id") or ""),
+            "points": points[:400],
+        })
+    base["blocking_sketch"] = sketch[:200]
     base["locks"] = [str(x) for x in (base.get("locks") or [])]
     return base
 
@@ -493,6 +516,7 @@ def preserve_locks(old_scene: dict[str, Any], new_scene: dict[str, Any]) -> dict
             # Blocking is user-authored director metadata. AI edits may use it
             # as context but never silently replace or erase the board.
             shot["blocking"] = copy.deepcopy(old.get("blocking") or [])
+            shot["blocking_sketch"] = copy.deepcopy(old.get("blocking_sketch") or [])
         shots.append(shot)
     out["shots"] = shots
     return out

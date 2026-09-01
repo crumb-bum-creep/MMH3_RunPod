@@ -88,3 +88,15 @@ def test_prompt_studio_director_controls_and_collection_selectors():
     assert '$$("[data-studio-scene-lock]").forEach' in APP
     assert '$$("[data-studio-edit-field]").forEach' in APP
     assert '.studio-blocking-frame' in CSS
+
+
+def test_prompt_studio_freehand_sketch_is_subject_tagged_and_ui_only():
+    assert 'id="studioBlockingDrawToggle"' in HTML
+    assert 'id="studioBlockingUndoSketch"' in HTML
+    assert 'id="studioBlockingClearSketch"' in HTML
+    assert 'function renderStudioSketchCanvas' in APP
+    assert 'function wireStudioSketchCanvas' in APP
+    assert 'block_id:block.id' in APP
+    assert 'fitStudioBlockToSketch' in APP
+    assert '.studio-blocking-canvas.drawing' in CSS
+    assert '_studio_llm_scene' in SERVER
