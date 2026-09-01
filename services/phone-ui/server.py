@@ -1274,6 +1274,26 @@ async def api_studio_projects_get(request: web.Request) -> web.Response:
     })
 
 
+async def api_studio_model_check(request: web.Request) -> web.Response:
+    project = _studio_project(request.match_info["project_id"])
+    started = time.monotonic()
+    result = await _studio_openrouter(
+        model=project["model"],
+        system_prompt="This is an MMH3 Prompt Studio connectivity check. Return exactly MMH3_STUDIO_OK and nothing else.",
+        user_text="Connectivity check.",
+        temperature=0.0,
+    )
+    elapsed_ms = round((time.monotonic() - started) * 1000)
+    ok = "MMH3_STUDIO_OK" in str(result)
+    if not ok:
+        raise web.HTTPBadGateway(text=f"Model responded, but did not complete the expected Studio check: {str(result)[:180]}")
+    return web.json_response({
+        "ok": True,
+        "model": project["model"],
+        "elapsed_ms": elapsed_ms,
+    })
+
+
 async def api_studio_preflight(request: web.Request) -> web.Response:
     project = _studio_project(request.match_info["project_id"])
     return web.json_response({"preflight": _studio_preflight(project)})
@@ -1731,6 +1751,7 @@ def make_app(comfy_url: str) -> web.Application:
         web.post("/api/prompt-studio/projects", api_studio_project_post),
         web.get("/api/prompt-studio/projects/{project_id}", api_studio_project_get),
         web.get("/api/prompt-studio/projects/{project_id}/preflight", api_studio_preflight),
+        web.post("/api/prompt-studio/projects/{project_id}/model-check", api_studio_model_check),
         web.put("/api/prompt-studio/projects/{project_id}", api_studio_project_put),
         web.delete("/api/prompt-studio/projects/{project_id}", api_studio_project_delete),
         web.post("/api/prompt-studio/projects/{project_id}/plan", api_studio_plan),
