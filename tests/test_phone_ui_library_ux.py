@@ -122,3 +122,13 @@ def test_prompt_studio_model_check_is_project_scoped_and_text_only():
     assert 'web.post("/api/prompt-studio/projects/{project_id}/model-check", api_studio_model_check)' in SERVER
     assert 'Connectivity check.' in SERVER
     assert '.studio-model-row' in CSS
+
+
+def test_generation_sampler_and_output_lora_weights_are_visible():
+    assert 'id="samplerName"' in HTML
+    assert 'sampler_name:$("#samplerName")' in APP
+    assert 'function loadSamplers' in APP
+    assert 'function outputRunChips' in APP
+    assert 'output-lora-chip' in APP
+    assert '.output-lora-chip' in CSS
+    assert 'web.get("/api/samplers", api_samplers)' in SERVER
