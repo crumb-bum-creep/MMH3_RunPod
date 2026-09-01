@@ -54,6 +54,7 @@ The runtime architecture was also validated on a real RTX 5090 with CUDA availab
 
 See:
 
+- `docs/DEVELOPMENT_HANDOFF.md` — fresh-thread development continuity, production snapshot, optimization history, branch guidance, and next-step guardrails
 - `docs/FIRST_RUNPOD_DEPLOY.md` — exact RunPod setup
 - `docs/OPERATIONS.md` — daily commands/recovery
 - `scripts/first_boot_check.sh` — one-command first-pod health check
