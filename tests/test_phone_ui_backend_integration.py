@@ -232,3 +232,36 @@ def test_prompt_studio_llm_scene_strips_raw_sketch_but_keeps_semantic_blocking()
     assert "blocking_sketch" not in llm_scene["shots"][0]
     assert llm_scene["shots"][0]["blocking"][0]["id"] == "block_1"
     assert "blocking_sketch" in scene["shots"][0]
+
+
+def test_prompt_studio_preflight_endpoint_uses_persistent_asset_inventory(tmp_path):
+    server = load_server_module()
+    server.PROMPT_PROJECT_FILE = tmp_path / "projects.json"
+    server.INPUT_DIR = tmp_path / "input"
+    server.INPUT_DIR.mkdir(parents=True)
+
+    project = server.prompt_studio.new_project(mode="r2v")
+    subject = server.prompt_studio.empty_subject(1)
+    subject["reference"] = {
+        "mode": "asset",
+        "picture_number": 1,
+        "asset_file": "hero.png",
+        "analyze": True,
+    }
+    project["scene"]["subjects"] = [subject]
+    server._save_json(server.PROMPT_PROJECT_FILE, {project["id"]: project})
+
+    missing = asyncio.run(
+        server.api_studio_preflight(
+            JsonRequest(match_info={"project_id": project["id"]})
+        )
+    )
+    assert response_json(missing)["preflight"]["valid"] is False
+
+    Image.new("RGB", (64, 64), (1, 2, 3)).save(server.INPUT_DIR / "hero.png")
+    present = asyncio.run(
+        server.api_studio_preflight(
+            JsonRequest(match_info={"project_id": project["id"]})
+        )
+    )
+    assert response_json(present)["preflight"]["valid"] is True
