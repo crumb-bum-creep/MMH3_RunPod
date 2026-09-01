@@ -55,3 +55,19 @@ def test_queue_identifies_running_and_pending_positions():
     assert 'f"NEXT #{position}"' in SERVER
     assert 'class="queue-badge' in APP
     assert '"Stop":"Cancel"' in APP
+
+
+def test_prompt_studio_is_separate_from_generation_and_phone_friendly():
+    assert 'data-tab="studio"' in HTML
+    assert 'id="tab-studio"' in HTML
+    assert 'id="studioProjectSelect"' in HTML
+    assert 'id="studioSubjects"' in HTML
+    assert 'id="studioShots"' in HTML
+    assert 'id="studioUseCustom"' in HTML
+    assert 'web.get("/api/prompt-studio/projects", api_studio_projects_get)' in SERVER
+    assert 'web.post("/api/prompt-studio/projects/{project_id}/plan", api_studio_plan)' in SERVER
+    assert 'web.post("/api/prompt-studio/projects/{project_id}/edit", api_studio_edit)' in SERVER
+    assert 'web.post("/api/prompt-studio/projects/{project_id}/compile", api_studio_compile)' in SERVER
+    assert 'google/gemini-3-flash-preview' in APP
+    assert 'reference.mode=picture_slot' in (ROOT / "runtime" / "mmh3" / "prompt_studio.py").read_text()
+    assert 'nav{grid-template-columns:repeat(4,1fr)}' in CSS

@@ -24,6 +24,12 @@ const state = {
   restoringDraft: false,
   assetPickerMode: null,
   assetPickerKind: "all",
+  studioProjects: [],
+  studioProject: null,
+  studioMeta: {subject_types:[],camera_motions:[],framing_presets:[]},
+  studioSavedSubjects: [],
+  studioSaveTimer: null,
+  studioLoading: false,
 };
 
 function esc(v=""){
@@ -191,6 +197,7 @@ function switchTab(name){
   if(name==="outputs") refreshOutputs(true);
   if(name==="loras") loadLoras();
   if(name==="assets") loadAssets();
+  if(name==="studio"){ loadAssets(false).then(()=>loadStudioIndex()).catch(()=>loadStudioIndex()); }
   if(name==="system"){ refreshInfo(); loadPrompts(); }
 }
 function setSegment(host, value){
@@ -733,6 +740,371 @@ async function loadPrompts(){
   }catch(e){msg($("#systemMsg"),e.message,"error");}
 }
 
+
+function studioId(prefix){
+  try{return prefix+"_"+crypto.randomUUID().replaceAll("-","").slice(0,10);}catch{return prefix+"_"+Date.now().toString(36)+Math.random().toString(36).slice(2,7);}
+}
+function studioProject(){ return state.studioProject; }
+function studioScene(){ return state.studioProject?.scene||null; }
+function studioSetSaveState(text){ const el=$("#studioSaveState"); if(el)el.textContent=text; }
+function studioImageOptions(selected=""){
+  const items=state.assetCatalog.filter(x=>x.kind==="image");
+  return '<option value="">No image selected</option>'+items.map(x=>'<option value="'+esc(x.file)+'" '+(x.file===selected?"selected":"")+'>'+esc(x.display_name||x.file)+'</option>').join("");
+}
+function studioOptions(values,current){
+  const arr=[...(values||[])];
+  if(current&&!arr.includes(current))arr.unshift(current);
+  return arr.map(x=>'<option value="'+esc(x)+'" '+(x===current?"selected":"")+'>'+esc(x)+'</option>').join("");
+}
+function studioToggleLock(list,key,on){
+  const set=new Set(list||[]);
+  if(on)set.add(key);else set.delete(key);
+  return [...set];
+}
+function studioToggleLockGroup(list,keys,on){
+  let out=[...(list||[])];
+  keys.forEach(k=>{out=studioToggleLock(out,k,on);});
+  return out;
+}
+function studioGroupLocked(list,keys){const set=new Set(list||[]);return keys.every(k=>set.has(k));}
+
+async function loadStudioIndex(selectId=null){
+  if(state.studioLoading)return;
+  state.studioLoading=true;
+  try{
+    const d=await api("/api/prompt-studio/projects");
+    state.studioProjects=d.projects||[];
+    state.studioSavedSubjects=d.saved_subjects||[];
+    state.studioMeta={
+      subject_types:d.subject_types||[],
+      camera_motions:d.camera_motions||[],
+      framing_presets:d.framing_presets||[]
+    };
+    const sel=$("#studioProjectSelect");
+    if(sel){
+      sel.innerHTML='<option value="">Project…</option>'+state.studioProjects.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+' · '+esc(String(x.mode||"").toUpperCase())+'</option>').join("");
+    }
+    renderStudioSavedSubjects();
+    const target=selectId||state.studioProject?.id||state.studioProjects[0]?.id;
+    if(target&&state.studioProjects.some(x=>x.id===target))await loadStudioProject(target);
+    else if(!state.studioProjects.length)await createStudioProject(false);
+  }catch(e){msg($("#studioMsg"),e.message,"error");}
+  finally{state.studioLoading=false;}
+}
+async function createStudioProject(askName=true){
+  const defaultName="Untitled Prompt";
+  const name=askName?prompt("Project name",defaultName):defaultName;
+  if(name===null)return;
+  const body={
+    name:name||defaultName,
+    mode:state.mode||"r2v",
+    duration:Number($("#duration")?.value||10),
+    aspect_ratio:$("#aspect")?.value||"9:16 (Portrait Widescreen)",
+    concept:$("#prompt")?.value||"",
+    model:"google/gemini-3-flash-preview"
+  };
+  const d=await api("/api/prompt-studio/projects",{method:"POST",body});
+  state.studioProject=d.project;
+  await loadStudioIndex(d.project.id);
+  toast("Prompt project created");
+}
+async function loadStudioProject(id){
+  if(!id)return;
+  studioSetSaveState("Loading…");
+  try{
+    const d=await api("/api/prompt-studio/projects/"+encodeURIComponent(id));
+    state.studioProject=d.project;
+    renderStudioProject();
+    studioSetSaveState("Saved");
+  }catch(e){msg($("#studioMsg"),e.message,"error");studioSetSaveState("Load failed");}
+}
+function pullStudioStatic(){
+  const p=studioProject(); if(!p)return;
+  p.name=$("#studioName").value.trim()||"Untitled Prompt";
+  p.mode=$("#studioMode").value;
+  p.duration=Math.max(1,Number($("#studioDuration").value||10));
+  p.aspect_ratio=$("#studioAspect").value;
+  p.model=$("#studioModel").value.trim()||"google/gemini-3-flash-preview";
+  p.scene.concept=$("#studioConcept").value;
+  p.scene.environment=$("#studioEnvironment").value;
+  p.scene.visual_style=$("#studioVisualStyle").value;
+  p.scene.soundscape=$("#studioSoundscape").value;
+  p.scene.music=$("#studioMusic").value;
+  p.starting_image={
+    asset_file:$("#studioStartingImage").value||"",
+    analyze:$("#studioStartingAnalyze").checked
+  };
+}
+function scheduleStudioSave(){
+  if(!studioProject())return;
+  studioSetSaveState("Unsaved…");
+  clearTimeout(state.studioSaveTimer);
+  state.studioSaveTimer=setTimeout(()=>saveStudioProject(false),650);
+}
+async function saveStudioProject(show=true){
+  const p=studioProject();if(!p)return null;
+  pullStudioStatic();
+  clearTimeout(state.studioSaveTimer);
+  studioSetSaveState("Saving…");
+  try{
+    const d=await api("/api/prompt-studio/projects/"+encodeURIComponent(p.id),{method:"PUT",body:{project:p}});
+    state.studioProject=d.project;
+    studioSetSaveState("Saved");
+    if(show)toast("Prompt project saved");
+    return d.project;
+  }catch(e){studioSetSaveState("Save failed");msg($("#studioMsg"),e.message,"error");throw e;}
+}
+function renderStudioSavedSubjects(){
+  const sel=$("#studioSavedSubjectSelect");if(!sel)return;
+  sel.innerHTML='<option value="">Saved subject…</option>'+state.studioSavedSubjects.map(x=>'<option value="'+esc(x.saved_id||x.id)+'">'+esc(x.label||"Saved subject")+'</option>').join("");
+}
+function renderStudioProject(){
+  const p=studioProject();if(!p)return;
+  $("#studioProjectSelect").value=p.id;
+  $("#studioName").value=p.name||"";
+  $("#studioMode").value=p.mode||"r2v";
+  $("#studioDuration").value=p.duration||10;
+  $("#studioAspect").value=p.aspect_ratio||"9:16 (Portrait Widescreen)";
+  $("#studioModel").value=p.model||"google/gemini-3-flash-preview";
+  $("#studioConcept").value=p.scene?.concept||"";
+  $("#studioEnvironment").value=p.scene?.environment||"";
+  $("#studioVisualStyle").value=p.scene?.visual_style||"";
+  $("#studioSoundscape").value=p.scene?.soundscape||"";
+  $("#studioMusic").value=p.scene?.music||"";
+  $("#studioI2VStartBlock").hidden=p.mode!=="i2v";
+  $("#studioStartingImage").innerHTML=studioImageOptions(p.starting_image?.asset_file||"");
+  $("#studioStartingAnalyze").checked=p.starting_image?.analyze!==false;
+  $("[data-studio-scene-lock]").forEach(el=>el.checked=(p.scene?.locks||[]).includes(el.dataset.studioSceneLock));
+  renderStudioSubjects();
+  renderStudioShots();
+  renderStudioCompiled();
+  msg($("#studioMsg"),"");
+}
+function renderStudioSubjects(){
+  const p=studioProject(),host=$("#studioSubjects");if(!p||!host)return;
+  const subjects=p.scene.subjects||[];
+  if(!subjects.length){host.innerHTML='<div class="muted">No subjects yet. Add one manually or let the planner create them.</div>';return;}
+  host.innerHTML=subjects.map((s,index)=>{
+    const ref=s.reference||{}, mode=ref.mode||"none";
+    const descLocked=(s.locks||[]).includes("description");
+    const perfLocked=(s.locks||[]).includes("performance_notes");
+    return '<div class="studio-subject-card" data-studio-subject="'+esc(s.id)+'">'+
+      '<div class="labelrow"><strong>&lt;Subject '+(index+1)+'&gt;</strong><div class="studio-mini-actions"><button class="ghost small studio-subject-ai" type="button">✨ Edit</button><button class="ghost small studio-subject-save" type="button">Save</button><button class="danger ghost small studio-subject-remove" type="button">×</button></div></div>'+
+      '<div class="grid2"><div><label>Label</label><input class="studio-subject-label" value="'+esc(s.label||"")+'"></div><div><label>Type</label><select class="studio-subject-type">'+studioOptions(state.studioMeta.subject_types,s.type||"person")+'</select></div></div>'+
+      '<div class="studio-field-head"><label>Description</label><label class="inline-lock"><input class="studio-subject-lock-desc" type="checkbox" '+(descLocked?"checked":"")+'> 🔒</label></div>'+
+      '<textarea class="studio-subject-description" rows="4">'+esc(s.description||"")+'</textarea>'+
+      '<div class="studio-field-head"><label>Performance / behavior notes</label><label class="inline-lock"><input class="studio-subject-lock-perf" type="checkbox" '+(perfLocked?"checked":"")+'> 🔒</label></div>'+
+      '<textarea class="studio-subject-performance" rows="3">'+esc(s.performance_notes||"")+'</textarea>'+
+      '<div class="grid2"><div><label>Reference mode</label><select class="studio-subject-refmode"><option value="none" '+(mode==="none"?"selected":"")+'>Text only</option><option value="asset" '+(mode==="asset"?"selected":"")+'>Actual asset</option><option value="picture_slot" '+(mode==="picture_slot"?"selected":"")+'>Opaque Picture slot</option></select></div>'+
+      '<div '+(mode==="none"?'hidden':'')+'><label>Picture #</label><input class="studio-subject-picture" type="number" min="1" max="9" value="'+Number(ref.picture_number||index+1)+'"></div></div>'+
+      (mode==="asset"?'<label>Asset</label><select class="studio-subject-asset">'+studioImageOptions(ref.asset_file||"")+'</select><label class="check compact-check"><input class="studio-subject-analyze" type="checkbox" '+(ref.analyze?"checked":"")+'> Let Gemini analyze this reference</label>':'')+
+      (mode==="picture_slot"?'<div class="studio-opaque-note">Opaque binding: the planner knows only that this subject is established by &lt;Picture '+Number(ref.picture_number||index+1)+'&gt;. It will not receive or invent the image contents.</div>':'')+
+      '</div>';
+  }).join("");
+
+  $(".studio-subject-card",host).forEach(card=>{
+    const id=card.dataset.studioSubject;
+    const s=subjects.find(x=>x.id===id);if(!s)return;
+    $(".studio-subject-label",card).oninput=e=>{s.label=e.target.value;scheduleStudioSave();};
+    $(".studio-subject-type",card).onchange=e=>{s.type=e.target.value;scheduleStudioSave();};
+    $(".studio-subject-description",card).oninput=e=>{s.description=e.target.value;scheduleStudioSave();};
+    $(".studio-subject-performance",card).oninput=e=>{s.performance_notes=e.target.value;scheduleStudioSave();};
+    $(".studio-subject-lock-desc",card).onchange=e=>{s.locks=studioToggleLock(s.locks,"description",e.target.checked);scheduleStudioSave();};
+    $(".studio-subject-lock-perf",card).onchange=e=>{s.locks=studioToggleLock(s.locks,"performance_notes",e.target.checked);scheduleStudioSave();};
+    $(".studio-subject-refmode",card).onchange=e=>{
+      s.reference=s.reference||{picture_number:1,asset_file:"",analyze:false};
+      s.reference.mode=e.target.value;
+      if(e.target.value==="none"){s.reference.asset_file="";s.reference.analyze=false;}
+      if(e.target.value==="picture_slot"){s.reference.asset_file="";s.reference.analyze=false;}
+      renderStudioSubjects();scheduleStudioSave();
+    };
+    const picture=$(".studio-subject-picture",card);if(picture)picture.oninput=e=>{s.reference.picture_number=Math.max(1,Math.min(9,Number(e.target.value||1)));scheduleStudioSave();};
+    const asset=$(".studio-subject-asset",card);if(asset)asset.onchange=e=>{s.reference.asset_file=e.target.value;scheduleStudioSave();};
+    const analyze=$(".studio-subject-analyze",card);if(analyze)analyze.onchange=e=>{s.reference.analyze=e.target.checked;scheduleStudioSave();};
+    $(".studio-subject-ai",card).onclick=()=>studioPromptEdit("subject",id,"Describe the change to this subject only");
+    $(".studio-subject-save",card).onclick=()=>saveStudioSubject(s);
+    $(".studio-subject-remove",card).onclick=()=>{if(confirm("Remove this subject from the prompt project?")){p.scene.subjects=p.scene.subjects.filter(x=>x.id!==id);p.scene.shots.forEach(sh=>sh.subjects=(sh.subjects||[]).filter(x=>x!==id));renderStudioSubjects();renderStudioShots();scheduleStudioSave();}};
+  });
+}
+function renderStudioShots(){
+  const p=studioProject(),host=$("#studioShots");if(!p||!host)return;
+  const shots=p.scene.shots||[];
+  host.innerHTML=shots.map((s,index)=>{
+    const cameraKeys=["framing","camera_motion","camera_custom","amplitude","speed"];
+    const cameraLocked=studioGroupLocked(s.locks,cameraKeys), actionLocked=(s.locks||[]).includes("action"), dialogueLocked=(s.locks||[]).includes("dialogue"), timingLocked=(s.locks||[]).includes("start_seconds");
+    const subjectChecks=(p.scene.subjects||[]).map((sub,si)=>'<label class="studio-chip"><input type="checkbox" data-shot-subject="'+esc(sub.id)+'" '+((s.subjects||[]).includes(sub.id)?"checked":"")+'> S'+(si+1)+' '+esc(sub.label||"")+'</label>').join("");
+    return '<div class="studio-shot-card" data-studio-shot="'+esc(s.id)+'">'+
+      '<div class="labelrow"><strong>Shot '+(index+1)+'</strong><div class="studio-mini-actions"><button class="ghost small studio-shot-ai" type="button">✨ Edit</button>'+(index?'<button class="danger ghost small studio-shot-remove" type="button">×</button>':'')+'</div></div>'+
+      '<div class="grid2"><div><div class="studio-field-head"><label>Start (sec)</label><label class="inline-lock"><input class="studio-shot-lock-time" type="checkbox" '+(timingLocked?"checked":"")+'> 🔒</label></div><input class="studio-shot-start" type="number" min="0" max="'+Math.max(0,Number(p.duration)-.001)+'" step=".1" value="'+Number(s.start_seconds||0)+'" '+(index===0?"disabled":"")+'></div>'+
+      '<div><div class="studio-field-head"><label>Framing</label><label class="inline-lock"><input class="studio-shot-lock-camera" type="checkbox" '+(cameraLocked?"checked":"")+'> 🔒 camera</label></div><select class="studio-shot-framing">'+studioOptions(state.studioMeta.framing_presets,s.framing||"Medium")+'</select></div></div>'+
+      '<div class="grid2"><div><label>Camera motion</label><select class="studio-shot-camera">'+studioOptions(state.studioMeta.camera_motions,s.camera_motion||"Static Shot")+'</select></div><div><label>Custom camera detail</label><input class="studio-shot-camera-custom" value="'+esc(s.camera_custom||"")+'" placeholder="optional"></div></div>'+
+      '<div class="grid2"><div><label>Amplitude</label><select class="studio-shot-amplitude"><option value="">Default</option><option '+(s.amplitude==="with small amplitude"?"selected":"")+'>with small amplitude</option><option '+(s.amplitude==="with large amplitude"?"selected":"")+'>with large amplitude</option></select></div><div><label>Speed</label><select class="studio-shot-speed"><option value="">Default</option><option '+(s.speed==="at slow speed"?"selected":"")+'>at slow speed</option><option '+(s.speed==="at fast speed"?"selected":"")+'>at fast speed</option></select></div></div>'+
+      '<label>Subjects in shot</label><div class="studio-chips">'+(subjectChecks||'<span class="muted">No defined subjects.</span>')+'</div>'+
+      '<div class="studio-field-head"><label>Action / performance</label><label class="inline-lock"><input class="studio-shot-lock-action" type="checkbox" '+(actionLocked?"checked":"")+'> 🔒</label></div><textarea class="studio-shot-action" rows="4">'+esc(s.action||"")+'</textarea>'+
+      '<div class="studio-field-head"><label>Dialogue</label><label class="inline-lock"><input class="studio-shot-lock-dialogue" type="checkbox" '+(dialogueLocked?"checked":"")+'> 🔒</label></div><textarea class="studio-shot-dialogue" rows="3">'+esc(s.dialogue||"")+'</textarea>'+
+      '<label>Shot-specific sound</label><textarea class="studio-shot-sound" rows="2">'+esc(s.sound||"")+'</textarea>'+
+      '</div>';
+  }).join("");
+  $(".studio-shot-card",host).forEach((card,index)=>{
+    const id=card.dataset.studioShot,s=shots.find(x=>x.id===id);if(!s)return;
+    const cameraKeys=["framing","camera_motion","camera_custom","amplitude","speed"];
+    const bind=(selector,key,event="input")=>{const el=$(selector,card);if(el)el.addEventListener(event,e=>{s[key]=e.target.value;scheduleStudioSave();});};
+    bind(".studio-shot-start","start_seconds");bind(".studio-shot-framing","framing","change");bind(".studio-shot-camera","camera_motion","change");bind(".studio-shot-camera-custom","camera_custom");bind(".studio-shot-amplitude","amplitude","change");bind(".studio-shot-speed","speed","change");bind(".studio-shot-action","action");bind(".studio-shot-dialogue","dialogue");bind(".studio-shot-sound","sound");
+    $(".studio-chip input",card).forEach(el=>el.onchange=e=>{const sid=e.target.dataset.shotSubject,set=new Set(s.subjects||[]);e.target.checked?set.add(sid):set.delete(sid);s.subjects=[...set];scheduleStudioSave();});
+    $(".studio-shot-lock-time",card).onchange=e=>{s.locks=studioToggleLock(s.locks,"start_seconds",e.target.checked);scheduleStudioSave();};
+    $(".studio-shot-lock-camera",card).onchange=e=>{s.locks=studioToggleLockGroup(s.locks,cameraKeys,e.target.checked);scheduleStudioSave();};
+    $(".studio-shot-lock-action",card).onchange=e=>{s.locks=studioToggleLock(s.locks,"action",e.target.checked);scheduleStudioSave();};
+    $(".studio-shot-lock-dialogue",card).onchange=e=>{s.locks=studioToggleLock(s.locks,"dialogue",e.target.checked);scheduleStudioSave();};
+    $(".studio-shot-ai",card).onclick=()=>studioPromptEdit("shot",id,"Describe the change to Shot "+(index+1)+" only");
+    const rm=$(".studio-shot-remove",card);if(rm)rm.onclick=()=>{if(confirm("Remove Shot "+(index+1)+"?")){p.scene.shots=p.scene.shots.filter(x=>x.id!==id);renderStudioShots();scheduleStudioSave();}};
+  });
+}
+function renderStudioCompiled(){
+  const p=studioProject();if(!p)return;
+  $("#studioFinalPrompt").value=p.final_prompt||"";
+  const v=p.validation||{},badge=$("#studioValidationBadge"),host=$("#studioValidation");
+  if(!p.final_prompt){badge.textContent="Not compiled";badge.className="pill";host.textContent="";}
+  else if(v.valid){badge.textContent="✓ Valid";badge.className="pill studio-valid";msg(host,"Compiler validation passed.","ok");}
+  else{badge.textContent="Needs review";badge.className="pill studio-invalid";msg(host,(v.errors||[]).map(x=>"• "+x).join("\n")||"Validation failed.","error");}
+  const revisions=p.revisions||[];
+  $("#studioRevisionSelect").innerHTML='<option value="">Revision…</option>'+revisions.map(r=>'<option value="'+esc(r.id)+'">'+new Date(Number(r.created_at||0)*1000).toLocaleString()+' · '+esc(r.label||"Revision")+'</option>').join("");
+}
+function addStudioSubject(subject=null){
+  const p=studioProject();if(!p)return;
+  const index=(p.scene.subjects||[]).length+1;
+  const s=subject?structuredClone(subject):{
+    id:studioId("subject"),label:"Subject "+index,type:"person",description:"",performance_notes:"",
+    reference:{mode:"none",picture_number:Math.min(index,9),asset_file:"",analyze:false},locks:[]
+  };
+  s.id=studioId("subject");delete s.saved_id;s.locks=[];
+  s.reference=s.reference||{mode:"none",picture_number:Math.min(index,9),asset_file:"",analyze:false};
+  p.scene.subjects.push(s);renderStudioSubjects();renderStudioShots();scheduleStudioSave();
+}
+function addStudioShot(){
+  const p=studioProject();if(!p)return;
+  const shots=p.scene.shots||[],last=shots[shots.length-1],start=Math.min(Math.max(0,Number(p.duration)-.001),Number(last?.start_seconds||0)+3);
+  shots.push({id:studioId("shot"),start_seconds:start,framing:"Medium",camera_motion:"Static Shot",camera_custom:"",amplitude:"",speed:"",subjects:[],action:"",dialogue:"",sound:"",locks:[]});
+  p.scene.shots=shots;renderStudioShots();scheduleStudioSave();
+}
+async function saveStudioSubject(subject){
+  const label=prompt("Saved subject name",subject.label||"Subject");if(label===null)return;
+  const copy=structuredClone(subject);copy.label=label||copy.label;
+  try{
+    await api("/api/prompt-studio/subjects",{method:"POST",body:{subject:copy}});
+    const d=await api("/api/prompt-studio/subjects");state.studioSavedSubjects=d.subjects||[];renderStudioSavedSubjects();toast("Subject saved for reuse");
+  }catch(e){toast(e.message);}
+}
+async function studioPlan(){
+  const p=await saveStudioProject(false);if(!p)return;
+  const button=$("#studioPlan");button.disabled=true;button.textContent="Planning…";msg($("#studioMsg"),"Gemini is building the editable scene plan…");
+  try{
+    const d=await api("/api/prompt-studio/projects/"+encodeURIComponent(p.id)+"/plan",{method:"POST",body:{}});
+    state.studioProject=d.project;renderStudioProject();studioSetSaveState("Saved");msg($("#studioMsg"),"Scene plan updated. Edit any field or shot independently.","ok");
+    await loadStudioIndex(p.id);
+  }catch(e){msg($("#studioMsg"),e.message,"error");}
+  finally{button.disabled=false;button.textContent="✨ Build / Rebuild Plan";}
+}
+async function studioPromptEdit(scope,targetId,title){
+  const instruction=prompt(title||"Describe the change");if(!instruction)return;
+  return studioAIEdit(scope,targetId,instruction);
+}
+async function studioAIEdit(scope,targetId,instruction){
+  const p=await saveStudioProject(false);if(!p)return;
+  msg($("#studioMsg"),"Applying scoped AI edit…");
+  try{
+    const d=await api("/api/prompt-studio/projects/"+encodeURIComponent(p.id)+"/edit",{method:"POST",body:{scope,target_id:targetId||"",instruction}});
+    state.studioProject=d.project;renderStudioProject();studioSetSaveState("Saved");msg($("#studioMsg"),d.summary||"Scoped edit applied.","ok");
+    await loadStudioIndex(p.id);
+  }catch(e){msg($("#studioMsg"),e.message,"error");}
+}
+async function studioCompile(){
+  const p=await saveStudioProject(false);if(!p)return;
+  const button=$("#studioCompile");button.disabled=true;button.textContent="Compiling…";msg($("#studioMsg"),"Compiling and validating the H3 prompt…");
+  try{
+    const d=await api("/api/prompt-studio/projects/"+encodeURIComponent(p.id)+"/compile",{method:"POST",body:{}});
+    state.studioProject=d.project;renderStudioProject();studioSetSaveState("Saved");
+    const valid=d.project.validation?.valid;msg($("#studioMsg"),valid?"Compiled prompt passed validation.":"Compiled, but the validator still found something to review.",valid?"ok":"error");
+    await loadStudioIndex(p.id);
+  }catch(e){msg($("#studioMsg"),e.message,"error");}
+  finally{button.disabled=false;button.textContent="Compile + Validate";}
+}
+async function studioCheckpoint(){
+  const p=await saveStudioProject(false);if(!p)return;
+  const label=prompt("Checkpoint label","Manual checkpoint");if(label===null)return;
+  try{
+    const d=await api("/api/prompt-studio/projects/"+encodeURIComponent(p.id)+"/revisions",{method:"POST",body:{label}});
+    state.studioProject=d.project;renderStudioCompiled();toast("Checkpoint saved");
+  }catch(e){toast(e.message);}
+}
+async function studioRestoreRevision(){
+  const p=studioProject(),rid=$("#studioRevisionSelect").value;if(!p||!rid)return;
+  if(!confirm("Restore this revision? Current unsaved edits will be replaced."))return;
+  try{
+    const d=await api("/api/prompt-studio/projects/"+encodeURIComponent(p.id)+"/revisions/"+encodeURIComponent(rid)+"/restore",{method:"POST",body:{}});
+    state.studioProject=d.project;renderStudioProject();toast("Revision restored");
+  }catch(e){toast(e.message);}
+}
+function studioReferenceTransfer(project){
+  if(project.mode!=="r2v")return [];
+  const subjects=project.scene?.subjects||[], used=new Set(), byPicture=new Map();
+  subjects.forEach(s=>{
+    const r=s.reference||{};
+    if(["asset","picture_slot"].includes(r.mode))used.add(Number(r.picture_number||1));
+    if(r.mode==="asset"&&r.asset_file)byPicture.set(Number(r.picture_number||1),r.asset_file);
+  });
+  if(!used.size)return [];
+  const max=Math.max(...used);
+  for(let n=1;n<=max;n++){if(!used.has(n)||!byPicture.has(n))return null;}
+  return [...Array(max)].map((_,i)=>({kind:"image",file:byPicture.get(i+1)}));
+}
+function studioUseInCustom(){
+  const p=studioProject();if(!p?.final_prompt){toast("Compile the prompt first.");return;}
+  const refs=studioReferenceTransfer(p);
+  const currentLoras=selectedLoraArray();
+  const snap={
+    mode:p.mode,prompt_mode:"custom",prompt:p.final_prompt,
+    aspect_ratio:p.aspect_ratio,duration:p.duration,
+    megapixels:Number($("#mp")?.value||.7),seed:Number($("#seed")?.value||1),
+    randomize_seed:$("#randomSeed")?.checked!==false,
+    starting_image:p.mode==="i2v"?(p.starting_image?.asset_file||null):null,
+    refs:Array.isArray(refs)?refs:[],loras:currentLoras
+  };
+  applySnapshot(snap);
+  switchTab("generate");
+  if(refs===null)toast("Prompt loaded. Picture slots are mixed/opaque, so add the R2V references in Picture order before generating.");
+  else toast("Prompt loaded into "+p.mode.toUpperCase()+" Custom.");
+}
+function wireStudio(){
+  $("#studioProjectSelect").onchange=e=>{if(e.target.value)loadStudioProject(e.target.value);};
+  $("#studioNewProject").onclick=()=>createStudioProject(true);
+  $("#studioDeleteProject").onclick=async()=>{
+    const p=studioProject();if(!p)return;
+    if(!confirm('Delete Prompt Studio project "'+p.name+'"?'))return;
+    try{await api("/api/prompt-studio/projects/"+encodeURIComponent(p.id),{method:"DELETE"});state.studioProject=null;await loadStudioIndex();toast("Prompt project deleted");}catch(e){toast(e.message);}
+  };
+  ["studioName","studioDuration","studioModel","studioConcept","studioEnvironment","studioVisualStyle","studioSoundscape","studioMusic"].forEach(id=>$("#"+id).addEventListener("input",scheduleStudioSave));
+  ["studioMode","studioAspect","studioStartingImage","studioStartingAnalyze"].forEach(id=>$("#"+id).addEventListener("change",()=>{
+    pullStudioStatic();
+    if(id==="studioMode")renderStudioProject();
+    scheduleStudioSave();
+  }));
+  $("[data-studio-scene-lock]").forEach(el=>el.onchange=e=>{
+    const scene=studioScene();if(!scene)return;
+    scene.locks=studioToggleLock(scene.locks,e.target.dataset.studioSceneLock,e.target.checked);scheduleStudioSave();
+  });
+  $("[data-studio-edit-field]").forEach(el=>el.onclick=()=>studioPromptEdit(el.dataset.studioEditField,"","Describe the change to this field only"));
+  $("#studioPlan").onclick=studioPlan;
+  $("#studioCheckpoint").onclick=studioCheckpoint;
+  $("#studioAddSubject").onclick=()=>addStudioSubject();
+  $("#studioAddSavedSubject").onclick=()=>{const id=$("#studioSavedSubjectSelect").value,s=state.studioSavedSubjects.find(x=>(x.saved_id||x.id)===id);if(s)addStudioSubject(s);};
+  $("#studioAddShot").onclick=addStudioShot;
+  $("#studioApplyEdit").onclick=()=>{const instruction=$("#studioEditInstruction").value.trim();if(!instruction){toast("Describe the requested change.");return;}studioAIEdit($("#studioEditScope").value,"",instruction);};
+  $("#studioCompile").onclick=studioCompile;
+  $("#studioCopyPrompt").onclick=async()=>{const text=$("#studioFinalPrompt").value;if(!text)return;try{await navigator.clipboard.writeText(text);toast("Prompt copied");}catch{toast("Copy failed");}};
+  $("#studioUseCustom").onclick=studioUseInCustom;
+  $("#studioRestoreRevision").onclick=studioRestoreRevision;
+}
+
 function wire(){
   $$("#tabs button").forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
   $$("#modeSeg button").forEach(b=>b.onclick=()=>setMode(b.dataset.value));
@@ -858,7 +1230,8 @@ function wire(){
     }catch(e){msg($("#systemMsg"),e.message,"error");}
   };
 
-  window.addEventListener("pagehide",()=>{stashCurrentDraft();});
+  wireStudio();
+  window.addEventListener("pagehide",()=>{stashCurrentDraft(); if(studioProject())saveStudioProject(false).catch(()=>{});});
 }
 
 async function init(){

@@ -16,6 +16,8 @@ Everything below survives image/container replacement when the same RunPod volum
 - `/workspace/mmh3/data/ui_state.json` — six independent autosaved T2V/I2V/R2V × Auto/Custom drafts
 - `/workspace/mmh3/data/assets.json` — reusable asset nicknames/metadata
 - `/workspace/mmh3/data/input_thumbs/` — generated image thumbnails for the asset picker
+- `/workspace/mmh3/data/prompt_projects.json` — Prompt Studio projects, compiled prompts, validation state, and revision checkpoints
+- `/workspace/mmh3/data/prompt_subjects.json` — reusable Prompt Studio subject definitions/reference defaults
 - `/workspace/mmh3/data/*.json` — catalogs and generation metadata
 
 The application source itself remains image-local under `/opt/mmh3` and `/ComfyUI`.
@@ -52,5 +54,7 @@ The Generate page autosaves a separate draft for each of:
 - R2V Auto / R2V Custom
 
 Those drafts include prompt text, generation parameters, starting image, ordered R2V references, and selected LoRAs/strengths. The browser also keeps a local mirror so a page refresh can recover immediately; the persistent `/workspace` copy is authoritative across container replacements.
+
+Prompt Studio uses the same persistence model. Its editable scene plans are stored separately from generation drafts, and saved subjects can be reused across prompt projects. Actual image bindings point to files already under `/workspace/ComfyUI/input`; Prompt Studio does not duplicate those assets.
 
 Large media files stay on the persistent volume rather than in Git. A future Git-backed profile sync can version small portable configuration separately without changing these paths.
