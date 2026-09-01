@@ -148,3 +148,60 @@ def test_ui_state_rejects_unknown_profile_keys(tmp_path):
     data = response_json(put)
     assert "t2v:auto" in data["profiles"]
     assert "bogus:profile" not in data["profiles"]
+
+
+def test_prompt_studio_planner_merge_preserves_ids_references_and_blocking():
+    server = load_server_module()
+    old = server.prompt_studio.new_project(mode="r2v", duration=12)["scene"]
+    old["shot_count_mode"] = "exact"
+    old["exact_shot_count"] = 2
+
+    subject = server.prompt_studio.empty_subject(1)
+    subject["id"] = "subject_stable"
+    subject["reference"] = {
+        "mode": "picture_slot",
+        "picture_number": 2,
+        "asset_file": "",
+        "analyze": False,
+    }
+    old["subjects"] = [subject]
+
+    first = server.prompt_studio.empty_shot(1)
+    first["id"] = "shot_stable_1"
+    first["blocking"] = [{
+        "id": "block_stable",
+        "subject_id": "subject_stable",
+        "kind": "subject",
+        "label": "Subject",
+        "x": 0.1,
+        "y": 0.2,
+        "width": 0.2,
+        "height": 0.6,
+        "facing": "right",
+        "note": "",
+    }]
+    second = server.prompt_studio.empty_shot(2)
+    second["id"] = "shot_stable_2"
+    old["shots"] = [first, second]
+
+    planned = {
+        **old,
+        "subjects": [{**subject, "id": "model_changed_subject", "description": "enriched"}],
+        "shots": [
+            {**first, "id": "model_changed_shot_1", "action": "new action", "blocking": []},
+            {**second, "id": "model_changed_shot_2", "action": "second action"},
+            server.prompt_studio.empty_shot(3),
+        ],
+        "shot_count_mode": "auto",
+        "exact_shot_count": 3,
+    }
+
+    merged = server._studio_merge_planner_scene(old, planned)
+    assert merged["shot_count_mode"] == "exact"
+    assert merged["exact_shot_count"] == 2
+    assert len(merged["shots"]) == 2
+    assert merged["subjects"][0]["id"] == "subject_stable"
+    assert merged["subjects"][0]["reference"]["picture_number"] == 2
+    assert merged["shots"][0]["id"] == "shot_stable_1"
+    assert merged["shots"][0]["blocking"][0]["id"] == "block_stable"
+    assert merged["shots"][0]["action"] == "new action"

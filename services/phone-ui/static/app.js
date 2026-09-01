@@ -30,6 +30,8 @@ const state = {
   studioSavedSubjects: [],
   studioSaveTimer: null,
   studioLoading: false,
+  studioBlockingShotId: null,
+  studioBlockingSelectedId: null,
 };
 
 function esc(v=""){
@@ -756,6 +758,35 @@ function studioOptions(values,current){
   if(current&&!arr.includes(current))arr.unshift(current);
   return arr.map(x=>'<option value="'+esc(x)+'" '+(x===current?"selected":"")+'>'+esc(x)+'</option>').join("");
 }
+function studioAspectRatioValue(label){
+  const m=String(label||"").match(/(\d+)\s*:\s*(\d+)/);
+  return m?Number(m[1])/Number(m[2]):16/9;
+}
+function framingIcon(name){
+  const n=String(name||"").toLowerCase();
+  let h=50,w=20,y=24;
+  if(n.includes("extreme wide")){h=24;w=9;y=40;}
+  else if(n==="wide"){h=32;w=11;y=34;}
+  else if(n==="full"){h=54;w=16;y=20;}
+  else if(n.includes("medium full")){h=66;w=22;y=12;}
+  else if(n==="medium"){h=78;w=28;y=5;}
+  else if(n.includes("medium close")){h=92;w=38;y=-3;}
+  else if(n==="close-up"){h=116;w=54;y=-14;}
+  else if(n.includes("extreme close")){h=150;w=78;y=-30;}
+  if(n.includes("two-shot"))return '<svg viewBox="0 0 100 70" aria-hidden="true"><rect x="1" y="1" width="98" height="68" rx="5"/><circle cx="35" cy="25" r="8"/><path d="M24 61 Q35 37 46 61"/><circle cx="65" cy="25" r="8"/><path d="M54 61 Q65 37 76 61"/></svg>';
+  if(n.includes("over-the-shoulder"))return '<svg viewBox="0 0 100 70" aria-hidden="true"><rect x="1" y="1" width="98" height="68" rx="5"/><circle cx="28" cy="31" r="13"/><path d="M5 70 Q27 42 48 70"/><circle cx="67" cy="24" r="8"/><path d="M55 61 Q67 38 79 61"/></svg>';
+  if(n==="pov")return '<svg viewBox="0 0 100 70" aria-hidden="true"><rect x="1" y="1" width="98" height="68" rx="5"/><path d="M7 64 Q22 46 36 56"/><path d="M93 64 Q78 46 64 56"/><circle cx="50" cy="33" r="4"/></svg>';
+  if(n==="custom")return '<svg viewBox="0 0 100 70" aria-hidden="true"><rect x="1" y="1" width="98" height="68" rx="5"/><path d="M26 48 L43 31 L54 41 L72 20"/><circle cx="25" cy="48" r="4"/><circle cx="72" cy="20" r="4"/></svg>';
+  const head=Math.max(5,w*.28), cx=50;
+  return '<svg viewBox="0 0 100 70" aria-hidden="true"><rect x="1" y="1" width="98" height="68" rx="5"/><circle cx="'+cx+'" cy="'+(y+head)+'" r="'+head+'"/><path d="M'+(cx-w)+' 70 Q'+cx+' '+(y+h*.38)+' '+(cx+w)+' 70"/></svg>';
+}
+function studioBlockingSummary(shot,project){
+  const blocks=shot.blocking||[];
+  if(!blocks.length)return "No blocking";
+  const names=new Map((project.scene.subjects||[]).map((s,i)=>[s.id,"S"+(i+1)+" "+(s.label||"")]));
+  return blocks.map(b=>names.get(b.subject_id)||b.label||b.kind).join(" · ");
+}
+
 function studioToggleLock(list,key,on){
   const set=new Set(list||[]);
   if(on)set.add(key);else set.delete(key);
@@ -874,8 +905,9 @@ function renderStudioProject(){
   $("#studioI2VStartBlock").hidden=p.mode!=="i2v";
   $("#studioStartingImage").innerHTML=studioImageOptions(p.starting_image?.asset_file||"");
   $("#studioStartingAnalyze").checked=p.starting_image?.analyze!==false;
-  $("[data-studio-scene-lock]").forEach(el=>el.checked=(p.scene?.locks||[]).includes(el.dataset.studioSceneLock));
+  $$("[data-studio-scene-lock]").forEach(el=>el.checked=(p.scene?.locks||[]).includes(el.dataset.studioSceneLock));
   renderStudioSubjects();
+  renderStudioTimeline();
   renderStudioShots();
   renderStudioCompiled();
   msg($("#studioMsg"),"");
@@ -902,7 +934,7 @@ function renderStudioSubjects(){
       '</div>';
   }).join("");
 
-  $(".studio-subject-card",host).forEach(card=>{
+  $$(".studio-subject-card",host).forEach(card=>{
     const id=card.dataset.studioSubject;
     const s=subjects.find(x=>x.id===id);if(!s)return;
     $(".studio-subject-label",card).oninput=e=>{s.label=e.target.value;scheduleStudioSave();};
@@ -926,6 +958,36 @@ function renderStudioSubjects(){
     $(".studio-subject-remove",card).onclick=()=>{if(confirm("Remove this subject from the prompt project?")){p.scene.subjects=p.scene.subjects.filter(x=>x.id!==id);p.scene.shots.forEach(sh=>sh.subjects=(sh.subjects||[]).filter(x=>x!==id));renderStudioSubjects();renderStudioShots();scheduleStudioSave();}};
   });
 }
+function renderStudioTimeline(){
+  const p=studioProject(),host=$("#studioTimeline");if(!p||!host)return;
+  const shots=[...(p.scene.shots||[])].sort((a,b)=>Number(a.start_seconds)-Number(b.start_seconds));
+  const duration=Math.max(.001,Number(p.duration||1));
+  const shotMode=p.scene.shot_count_mode||"auto";
+  $("#studioShotCountMode").value=shotMode;
+  $("#studioShotCount").value=shotMode==="exact"?(p.scene.exact_shot_count||shots.length):shots.length;
+  $("#studioShotCount").disabled=shotMode!=="exact";
+  $("#studioSetShotCount").disabled=shotMode!=="exact";
+  const segments=shots.map((s,i)=>{
+    const start=Number(s.start_seconds||0),end=i+1<shots.length?Number(shots[i+1].start_seconds||duration):duration;
+    const width=Math.max(1,(end-start)/duration*100);
+    return '<button class="studio-timeline-segment" data-shot="'+esc(s.id)+'" style="width:'+width+'%" title="Shot '+(i+1)+' · '+start.toFixed(1)+'–'+end.toFixed(1)+'s"><strong>S'+(i+1)+'</strong><span>'+Math.max(0,end-start).toFixed(1)+'s</span></button>';
+  }).join("");
+  const cuts=shots.slice(1).map((s,i)=>{
+    const previous=shots[i],next=shots[i+2];
+    const min=Number(previous.start_seconds||0)+.1;
+    const max=(next?Number(next.start_seconds):duration)-.1;
+    return '<div class="studio-cut-row"><span>Cut '+(i+2)+'</span><input type="range" min="'+min+'" max="'+Math.max(min,max)+'" step=".1" value="'+Number(s.start_seconds||0)+'" data-cut-shot="'+esc(s.id)+'"><strong>'+Number(s.start_seconds||0).toFixed(1)+'s</strong></div>';
+  }).join("");
+  host.innerHTML='<div class="studio-timeline-bar">'+segments+'</div>'+(cuts?'<div class="studio-cut-controls">'+cuts+'</div>':'');
+  $$(".studio-timeline-segment",host).forEach(el=>el.onclick=()=>document.querySelector('[data-studio-shot="'+CSS.escape(el.dataset.shot)+'"]')?.scrollIntoView({behavior:"smooth",block:"center"}));
+  $$("[data-cut-shot]",host).forEach(el=>el.oninput=e=>{
+    const shot=p.scene.shots.find(x=>x.id===e.target.dataset.cutShot);if(!shot)return;
+    shot.start_seconds=Number(e.target.value);
+    const label=e.target.nextElementSibling;if(label)label.textContent=Number(e.target.value).toFixed(1)+"s";
+    scheduleStudioSave();
+  });
+  $$("[data-cut-shot]",host).forEach(el=>el.onchange=()=>{renderStudioTimeline();renderStudioShots();});
+}
 function renderStudioShots(){
   const p=studioProject(),host=$("#studioShots");if(!p||!host)return;
   const shots=p.scene.shots||[];
@@ -933,42 +995,38 @@ function renderStudioShots(){
     const cameraKeys=["framing","camera_motion","camera_custom","amplitude","speed"];
     const cameraLocked=studioGroupLocked(s.locks,cameraKeys), actionLocked=(s.locks||[]).includes("action"), dialogueLocked=(s.locks||[]).includes("dialogue"), timingLocked=(s.locks||[]).includes("start_seconds");
     const subjectChecks=(p.scene.subjects||[]).map((sub,si)=>'<label class="studio-chip"><input type="checkbox" data-shot-subject="'+esc(sub.id)+'" '+((s.subjects||[]).includes(sub.id)?"checked":"")+'> S'+(si+1)+' '+esc(sub.label||"")+'</label>').join("");
+    const framingButtons=(state.studioMeta.framing_presets||[]).map(name=>'<button class="studio-framing-card '+(name===s.framing?"active":"")+'" type="button" data-framing="'+esc(name)+'">'+framingIcon(name)+'<span>'+esc(name)+'</span></button>').join("");
     return '<div class="studio-shot-card" data-studio-shot="'+esc(s.id)+'">'+
       '<div class="labelrow"><strong>Shot '+(index+1)+'</strong><div class="studio-mini-actions"><button class="ghost small studio-shot-ai" type="button">✨ Edit</button>'+(index?'<button class="danger ghost small studio-shot-remove" type="button">×</button>':'')+'</div></div>'+
       '<div class="grid2"><div><div class="studio-field-head"><label>Start (sec)</label><label class="inline-lock"><input class="studio-shot-lock-time" type="checkbox" '+(timingLocked?"checked":"")+'> 🔒</label></div><input class="studio-shot-start" type="number" min="0" max="'+Math.max(0,Number(p.duration)-.001)+'" step=".1" value="'+Number(s.start_seconds||0)+'" '+(index===0?"disabled":"")+'></div>'+
       '<div><div class="studio-field-head"><label>Framing</label><label class="inline-lock"><input class="studio-shot-lock-camera" type="checkbox" '+(cameraLocked?"checked":"")+'> 🔒 camera</label></div><select class="studio-shot-framing">'+studioOptions(state.studioMeta.framing_presets,s.framing||"Medium")+'</select></div></div>'+
+      '<details class="studio-framing-picker"><summary>Visual framing presets</summary><div class="studio-framing-grid">'+framingButtons+'</div></details>'+
       '<div class="grid2"><div><label>Camera motion</label><select class="studio-shot-camera">'+studioOptions(state.studioMeta.camera_motions,s.camera_motion||"Static Shot")+'</select></div><div><label>Custom camera detail</label><input class="studio-shot-camera-custom" value="'+esc(s.camera_custom||"")+'" placeholder="optional"></div></div>'+
       '<div class="grid2"><div><label>Amplitude</label><select class="studio-shot-amplitude"><option value="">Default</option><option '+(s.amplitude==="with small amplitude"?"selected":"")+'>with small amplitude</option><option '+(s.amplitude==="with large amplitude"?"selected":"")+'>with large amplitude</option></select></div><div><label>Speed</label><select class="studio-shot-speed"><option value="">Default</option><option '+(s.speed==="at slow speed"?"selected":"")+'>at slow speed</option><option '+(s.speed==="at fast speed"?"selected":"")+'>at fast speed</option></select></div></div>'+
       '<label>Subjects in shot</label><div class="studio-chips">'+(subjectChecks||'<span class="muted">No defined subjects.</span>')+'</div>'+
+      '<div class="studio-blocking-row"><div><strong>Blocking</strong><div class="muted">'+esc(studioBlockingSummary(s,p))+'</div></div><button class="secondary small studio-open-blocking" type="button">Block Shot</button></div>'+
       '<div class="studio-field-head"><label>Action / performance</label><label class="inline-lock"><input class="studio-shot-lock-action" type="checkbox" '+(actionLocked?"checked":"")+'> 🔒</label></div><textarea class="studio-shot-action" rows="4">'+esc(s.action||"")+'</textarea>'+
       '<div class="studio-field-head"><label>Dialogue</label><label class="inline-lock"><input class="studio-shot-lock-dialogue" type="checkbox" '+(dialogueLocked?"checked":"")+'> 🔒</label></div><textarea class="studio-shot-dialogue" rows="3">'+esc(s.dialogue||"")+'</textarea>'+
       '<label>Shot-specific sound</label><textarea class="studio-shot-sound" rows="2">'+esc(s.sound||"")+'</textarea>'+
       '</div>';
   }).join("");
-  $(".studio-shot-card",host).forEach((card,index)=>{
+  $$$(".studio-shot-card",host).forEach((card,index)=>{
     const id=card.dataset.studioShot,s=shots.find(x=>x.id===id);if(!s)return;
     const cameraKeys=["framing","camera_motion","camera_custom","amplitude","speed"];
-    const bind=(selector,key,event="input")=>{const el=$(selector,card);if(el)el.addEventListener(event,e=>{s[key]=e.target.value;scheduleStudioSave();});};
+    const bind=(selector,key,event="input")=>{const el=$(selector,card);if(el)el.addEventListener(event,e=>{s[key]=e.target.value;if(key==="start_seconds")renderStudioTimeline();scheduleStudioSave();});};
     bind(".studio-shot-start","start_seconds");bind(".studio-shot-framing","framing","change");bind(".studio-shot-camera","camera_motion","change");bind(".studio-shot-camera-custom","camera_custom");bind(".studio-shot-amplitude","amplitude","change");bind(".studio-shot-speed","speed","change");bind(".studio-shot-action","action");bind(".studio-shot-dialogue","dialogue");bind(".studio-shot-sound","sound");
-    $(".studio-chip input",card).forEach(el=>el.onchange=e=>{const sid=e.target.dataset.shotSubject,set=new Set(s.subjects||[]);e.target.checked?set.add(sid):set.delete(sid);s.subjects=[...set];scheduleStudioSave();});
+    $$(".studio-framing-card",card).forEach(el=>el.onclick=()=>{s.framing=el.dataset.framing;$(".studio-shot-framing",card).value=s.framing;renderStudioShots();scheduleStudioSave();});
+    $$$(".studio-chip input",card).forEach(el=>el.onchange=e=>{const sid=e.target.dataset.shotSubject,set=new Set(s.subjects||[]);e.target.checked?set.add(sid):set.delete(sid);s.subjects=[...set];scheduleStudioSave();});
     $(".studio-shot-lock-time",card).onchange=e=>{s.locks=studioToggleLock(s.locks,"start_seconds",e.target.checked);scheduleStudioSave();};
     $(".studio-shot-lock-camera",card).onchange=e=>{s.locks=studioToggleLockGroup(s.locks,cameraKeys,e.target.checked);scheduleStudioSave();};
     $(".studio-shot-lock-action",card).onchange=e=>{s.locks=studioToggleLock(s.locks,"action",e.target.checked);scheduleStudioSave();};
     $(".studio-shot-lock-dialogue",card).onchange=e=>{s.locks=studioToggleLock(s.locks,"dialogue",e.target.checked);scheduleStudioSave();};
     $(".studio-shot-ai",card).onclick=()=>studioPromptEdit("shot",id,"Describe the change to Shot "+(index+1)+" only");
-    const rm=$(".studio-shot-remove",card);if(rm)rm.onclick=()=>{if(confirm("Remove Shot "+(index+1)+"?")){p.scene.shots=p.scene.shots.filter(x=>x.id!==id);renderStudioShots();scheduleStudioSave();}};
+    $(".studio-open-blocking",card).onclick=()=>openStudioBlocking(id);
+    const rm=$(".studio-shot-remove",card);if(rm)rm.onclick=()=>{if(confirm("Remove Shot "+(index+1)+"?")){p.scene.shots=p.scene.shots.filter(x=>x.id!==id);if(p.scene.shot_count_mode==="exact")p.scene.exact_shot_count=p.scene.shots.length;renderStudioTimeline();renderStudioShots();scheduleStudioSave();}};
   });
 }
-function renderStudioCompiled(){
-  const p=studioProject();if(!p)return;
-  $("#studioFinalPrompt").value=p.final_prompt||"";
-  const v=p.validation||{},badge=$("#studioValidationBadge"),host=$("#studioValidation");
-  if(!p.final_prompt){badge.textContent="Not compiled";badge.className="pill";host.textContent="";}
-  else if(v.valid){badge.textContent="✓ Valid";badge.className="pill studio-valid";msg(host,"Compiler validation passed.","ok");}
-  else{badge.textContent="Needs review";badge.className="pill studio-invalid";msg(host,(v.errors||[]).map(x=>"• "+x).join("\n")||"Validation failed.","error");}
-  const revisions=p.revisions||[];
-  $("#studioRevisionSelect").innerHTML='<option value="">Revision…</option>'+revisions.map(r=>'<option value="'+esc(r.id)+'">'+new Date(Number(r.created_at||0)*1000).toLocaleString()+' · '+esc(r.label||"Revision")+'</option>').join("");
-}
+
 function addStudioSubject(subject=null){
   const p=studioProject();if(!p)return;
   const index=(p.scene.subjects||[]).length+1;
@@ -980,12 +1038,108 @@ function addStudioSubject(subject=null){
   s.reference=s.reference||{mode:"none",picture_number:Math.min(index,9),asset_file:"",analyze:false};
   p.scene.subjects.push(s);renderStudioSubjects();renderStudioShots();scheduleStudioSave();
 }
+function studioNewShot(start=0){
+  return {id:studioId("shot"),start_seconds:start,framing:"Medium",camera_motion:"Static Shot",camera_custom:"",amplitude:"",speed:"",subjects:[],action:"",dialogue:"",sound:"",blocking:[],locks:[]};
+}
 function addStudioShot(){
   const p=studioProject();if(!p)return;
   const shots=p.scene.shots||[],last=shots[shots.length-1],start=Math.min(Math.max(0,Number(p.duration)-.001),Number(last?.start_seconds||0)+3);
-  shots.push({id:studioId("shot"),start_seconds:start,framing:"Medium",camera_motion:"Static Shot",camera_custom:"",amplitude:"",speed:"",subjects:[],action:"",dialogue:"",sound:"",locks:[]});
-  p.scene.shots=shots;renderStudioShots();scheduleStudioSave();
+  shots.push(studioNewShot(start));
+  p.scene.shots=shots;
+  p.scene.shot_count_mode="exact";
+  p.scene.exact_shot_count=shots.length;
+  renderStudioTimeline();renderStudioShots();scheduleStudioSave();
 }
+function studioSetShotCount(){
+  const p=studioProject();if(!p)return;
+  const count=Math.max(1,Math.min(12,Number($("#studioShotCount").value||1)));
+  p.scene.shot_count_mode="exact";
+  p.scene.exact_shot_count=count;
+  const shots=p.scene.shots||[];
+  while(shots.length<count)shots.push(studioNewShot(0));
+  if(shots.length>count)shots.splice(count);
+  p.scene.shots=shots;
+  studioEvenTiming();
+}
+function studioEvenTiming(){
+  const p=studioProject();if(!p)return;
+  const shots=p.scene.shots||[],duration=Number(p.duration||1);
+  shots.forEach((s,i)=>{if(i===0)s.start_seconds=0;else if(!(s.locks||[]).includes("start_seconds"))s.start_seconds=Number((duration*i/shots.length).toFixed(3));});
+  renderStudioTimeline();renderStudioShots();scheduleStudioSave();
+}
+function blockingShot(){
+  const p=studioProject();return p?.scene?.shots?.find(x=>x.id===state.studioBlockingShotId)||null;
+}
+function blockingSelected(){
+  const shot=blockingShot();return shot?.blocking?.find(x=>x.id===state.studioBlockingSelectedId)||null;
+}
+function openStudioBlocking(shotId){
+  state.studioBlockingShotId=shotId;state.studioBlockingSelectedId=null;
+  renderStudioBlocking();
+  const d=$("#studioBlockingDialog");if(d.showModal)d.showModal();else d.setAttribute("open","");
+}
+function closeStudioBlocking(){
+  const d=$("#studioBlockingDialog");if(d.close&&d.open)d.close();else d.removeAttribute("open");
+  state.studioBlockingShotId=null;state.studioBlockingSelectedId=null;
+  renderStudioShots();scheduleStudioSave();
+}
+function addStudioBlockingSubject(){
+  const p=studioProject(),shot=blockingShot(),sid=$("#studioBlockingSubject").value;if(!p||!shot||!sid)return;
+  const subject=p.scene.subjects.find(x=>x.id===sid);if(!subject)return;
+  shot.blocking=shot.blocking||[];
+  const existing=shot.blocking.find(x=>x.subject_id===sid&&x.kind==="subject");
+  if(existing){state.studioBlockingSelectedId=existing.id;renderStudioBlocking();return;}
+  const block={id:studioId("block"),subject_id:sid,kind:"subject",label:subject.label||"Subject",x:.4,y:.2,width:.2,height:.6,facing:"unspecified",note:""};
+  shot.blocking.push(block);if(!(shot.subjects||[]).includes(sid))shot.subjects.push(sid);
+  state.studioBlockingSelectedId=block.id;renderStudioBlocking();scheduleStudioSave();
+}
+function renderStudioBlocking(){
+  const p=studioProject(),shot=blockingShot(),dialog=$("#studioBlockingDialog");if(!p||!shot||!dialog)return;
+  const ratio=studioAspectRatioValue(p.aspect_ratio);
+  $("#studioBlockingFrame").style.aspectRatio=String(ratio);
+  $("#studioBlockingTitle").textContent="Shot "+((p.scene.shots||[]).findIndex(x=>x.id===shot.id)+1)+" blocking";
+  $("#studioBlockingSubject").innerHTML='<option value="">Choose subject…</option>'+(p.scene.subjects||[]).map((s,i)=>'<option value="'+esc(s.id)+'">S'+(i+1)+' · '+esc(s.label||"Subject")+'</option>').join("");
+  const blocks=shot.blocking||[];
+  $("#studioBlockingFrame").innerHTML=blocks.map((b,i)=>'<button type="button" class="studio-block '+(b.id===state.studioBlockingSelectedId?"selected":"")+'" data-block="'+esc(b.id)+'" style="left:'+(Number(b.x)*100)+'%;top:'+(Number(b.y)*100)+'%;width:'+(Number(b.width)*100)+'%;height:'+(Number(b.height)*100)+'%"><span>'+esc(b.label||("Block "+(i+1)))+'</span><small>'+esc(b.facing&&b.facing!=="unspecified"?"faces "+b.facing:"")+'</small></button>').join("");
+  $$(".studio-block",$("#studioBlockingFrame")).forEach(el=>{
+    el.onclick=e=>{e.stopPropagation();state.studioBlockingSelectedId=el.dataset.block;renderStudioBlocking();};
+    let start=null;
+    el.onpointerdown=e=>{
+      if(e.button!==undefined&&e.button!==0)return;
+      const b=blocks.find(x=>x.id===el.dataset.block);if(!b)return;
+      state.studioBlockingSelectedId=b.id;el.setPointerCapture?.(e.pointerId);
+      const frame=$("#studioBlockingFrame").getBoundingClientRect();
+      start={px:e.clientX,py:e.clientY,x:Number(b.x),y:Number(b.y),fw:frame.width,fh:frame.height};
+      e.preventDefault();
+    };
+    el.onpointermove=e=>{
+      if(!start)return;
+      const b=blocks.find(x=>x.id===el.dataset.block);if(!b)return;
+      b.x=Math.max(0,Math.min(1-Number(b.width),(start.x+(e.clientX-start.px)/start.fw)));
+      b.y=Math.max(0,Math.min(1-Number(b.height),(start.y+(e.clientY-start.py)/start.fh)));
+      el.style.left=(b.x*100)+"%";el.style.top=(b.y*100)+"%";
+    };
+    el.onpointerup=()=>{if(start){start=null;renderStudioBlockingControls();scheduleStudioSave();}};
+  });
+  renderStudioBlockingControls();
+}
+function renderStudioBlockingControls(){
+  const b=blockingSelected(),panel=$("#studioBlockingControls");if(!panel)return;
+  if(!b){panel.innerHTML='<div class="muted">Tap a block to edit its size, facing, or note. Drag blocks directly in the frame.</div>';return;}
+  panel.innerHTML='<div class="labelrow"><strong>'+esc(b.label||"Block")+'</strong><button id="studioRemoveBlock" class="danger ghost small" type="button">Remove</button></div>'+
+    '<div class="grid2"><div><label>Width</label><input id="studioBlockWidth" type="range" min=".05" max=".8" step=".01" value="'+Number(b.width)+'"></div><div><label>Height</label><input id="studioBlockHeight" type="range" min=".05" max=".95" step=".01" value="'+Number(b.height)+'"></div></div>'+
+    '<label>Facing</label><select id="studioBlockFacing"><option value="unspecified">Unspecified</option><option value="left">Left</option><option value="right">Right</option><option value="camera">Camera</option><option value="away">Away from camera</option></select>'+
+    '<label>Blocking note</label><input id="studioBlockNote" value="'+esc(b.note||"")+'" placeholder="e.g. leaning against wall, foreground">';
+  $("#studioBlockFacing").value=b.facing||"unspecified";
+  $("#studioBlockWidth").oninput=e=>{b.width=Number(e.target.value);b.x=Math.min(b.x,1-b.width);const el=$('[data-block="'+CSS.escape(b.id)+'"]',$("#studioBlockingFrame"));if(el){el.style.width=(b.width*100)+"%";el.style.left=(b.x*100)+"%";}scheduleStudioSave();};
+  $("#studioBlockHeight").oninput=e=>{b.height=Number(e.target.value);b.y=Math.min(b.y,1-b.height);const el=$('[data-block="'+CSS.escape(b.id)+'"]',$("#studioBlockingFrame"));if(el){el.style.height=(b.height*100)+"%";el.style.top=(b.y*100)+"%";}scheduleStudioSave();};
+  $("#studioBlockWidth").onchange=renderStudioBlocking;
+  $("#studioBlockHeight").onchange=renderStudioBlocking;
+  $("#studioBlockFacing").onchange=e=>{b.facing=e.target.value;renderStudioBlocking();scheduleStudioSave();};
+  $("#studioBlockNote").oninput=e=>{b.note=e.target.value;scheduleStudioSave();};
+  $("#studioRemoveBlock").onclick=()=>{const shot=blockingShot();shot.blocking=(shot.blocking||[]).filter(x=>x.id!==b.id);state.studioBlockingSelectedId=null;renderStudioBlocking();scheduleStudioSave();};
+}
+
 async function saveStudioSubject(subject){
   const label=prompt("Saved subject name",subject.label||"Subject");if(label===null)return;
   const copy=structuredClone(subject);copy.label=label||copy.label;
@@ -1088,16 +1242,27 @@ function wireStudio(){
     if(id==="studioMode")renderStudioProject();
     scheduleStudioSave();
   }));
-  $("[data-studio-scene-lock]").forEach(el=>el.onchange=e=>{
+  $$("[data-studio-scene-lock]").forEach(el=>el.onchange=e=>{
     const scene=studioScene();if(!scene)return;
     scene.locks=studioToggleLock(scene.locks,e.target.dataset.studioSceneLock,e.target.checked);scheduleStudioSave();
   });
-  $("[data-studio-edit-field]").forEach(el=>el.onclick=()=>studioPromptEdit(el.dataset.studioEditField,"","Describe the change to this field only"));
+  $$("[data-studio-edit-field]").forEach(el=>el.onclick=()=>studioPromptEdit(el.dataset.studioEditField,"","Describe the change to this field only"));
   $("#studioPlan").onclick=studioPlan;
   $("#studioCheckpoint").onclick=studioCheckpoint;
   $("#studioAddSubject").onclick=()=>addStudioSubject();
   $("#studioAddSavedSubject").onclick=()=>{const id=$("#studioSavedSubjectSelect").value,s=state.studioSavedSubjects.find(x=>(x.saved_id||x.id)===id);if(s)addStudioSubject(s);};
   $("#studioAddShot").onclick=addStudioShot;
+  $("#studioShotCountMode").onchange=e=>{
+    const p=studioProject();if(!p)return;
+    p.scene.shot_count_mode=e.target.value;
+    if(e.target.value==="exact")p.scene.exact_shot_count=(p.scene.shots||[]).length||1;
+    renderStudioTimeline();scheduleStudioSave();
+  };
+  $("#studioSetShotCount").onclick=studioSetShotCount;
+  $("#studioEvenTiming").onclick=studioEvenTiming;
+  $("#studioCloseBlocking").onclick=closeStudioBlocking;
+  $("#studioAddBlockingSubject").onclick=addStudioBlockingSubject;
+  $("#studioBlockingDialog").addEventListener("click",e=>{if(e.target===$("#studioBlockingDialog"))closeStudioBlocking();});
   $("#studioApplyEdit").onclick=()=>{const instruction=$("#studioEditInstruction").value.trim();if(!instruction){toast("Describe the requested change.");return;}studioAIEdit($("#studioEditScope").value,"",instruction);};
   $("#studioCompile").onclick=studioCompile;
   $("#studioCopyPrompt").onclick=async()=>{const text=$("#studioFinalPrompt").value;if(!text)return;try{await navigator.clipboard.writeText(text);toast("Prompt copied");}catch{toast("Copy failed");}};

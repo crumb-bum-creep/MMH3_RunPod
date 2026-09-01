@@ -94,6 +94,34 @@ Each shot stores:
 
 Shot 1 is always normalized to start at 0. Later shot times are normalized to remain inside project duration.
 
+## Director controls
+
+The shot editor includes director-oriented controls beyond plain text fields:
+
+- exact shot-count control (1–12)
+- even timing distribution
+- visual timeline with per-cut range controls
+- visual framing preset cards
+- semantic shot blocking
+
+### Semantic blocking
+
+Each shot can open a frame whose shape follows the project's selected aspect ratio.
+
+Subjects can be added to the frame as labeled semantic blocks. A block stores:
+
+- the project subject ID
+- normalized frame position
+- normalized size
+- facing direction
+- an optional blocking note
+
+Blocks can be dragged directly on the frame and resized from the editor controls.
+
+This board is **not** an H3 reference image and does not consume a `<Picture N>` slot. During compilation MMH3 translates the semantic placement into natural composition language such as left/right/center, foreground/midground/background, relative scale, and facing.
+
+AI scene edits may read blocking as context but cannot silently erase or replace user blocking data.
+
 ## Scoped AI edits
 
 Prompt Studio can edit:

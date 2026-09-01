@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>MMH3</title>
-  <link rel="stylesheet" href="/static/styles.css?v=3">
+  <link rel="stylesheet" href="/static/styles.css?v=4">
 </head>
 <body>
 <header>
@@ -208,10 +208,22 @@
 
   <div class="card">
     <div class="labelrow">
-      <div><strong>Shots</strong><div class="muted">Configure timing, framing, camera, action, dialogue and sound independently.</div></div>
+      <div><strong>Shots</strong><div class="muted">Set exact shot count, drag cut timing, then configure each shot independently.</div></div>
       <button id="studioAddShot" class="secondary small" type="button">+ Shot</button>
     </div>
-    <div id="studioShots" class="stack"></div>
+    <div class="studio-shot-toolbar">
+      <label class="studio-shot-mode">Shot planning
+        <select id="studioShotCountMode">
+          <option value="auto">Auto</option>
+          <option value="exact">Exact</option>
+        </select>
+      </label>
+      <label class="studio-shot-count">Count <input id="studioShotCount" type="number" min="1" max="12" value="1"></label>
+      <button id="studioSetShotCount" class="secondary small" type="button">Apply count</button>
+      <button id="studioEvenTiming" class="ghost small" type="button">Even timing</button>
+    </div>
+    <div id="studioTimeline" class="studio-timeline"></div>
+    <div id="studioShots" class="stack padded-top"></div>
   </div>
 
   <div class="card">
@@ -345,7 +357,24 @@
   <div id="assetPickerList" class="stack picker-list"></div>
 </dialog>
 
+<dialog id="studioBlockingDialog">
+  <div class="picker-head">
+    <div><strong id="studioBlockingTitle">Shot blocking</strong><div class="muted">Drag labeled blocks to compose the frame. Placement becomes semantic prompt guidance, not an H3 reference image.</div></div>
+    <button id="studioCloseBlocking" class="ghost small" type="button">Close</button>
+  </div>
+  <div class="studio-blocking-add">
+    <select id="studioBlockingSubject"><option value="">Choose subject…</option></select>
+    <button id="studioAddBlockingSubject" class="secondary small" type="button">Add to frame</button>
+  </div>
+  <div class="studio-blocking-stage-wrap">
+    <div id="studioBlockingFrame" class="studio-blocking-frame" aria-label="Semantic shot blocking frame"></div>
+  </div>
+  <div id="studioBlockingControls" class="studio-blocking-controls">
+    <div class="muted">Add a subject to begin blocking.</div>
+  </div>
+</dialog>
+
 <div id="toast" role="status"></div>
-<script src="/static/app.js?v=3"></script>
+<script src="/static/app.js?v=4"></script>
 </body>
 </html>

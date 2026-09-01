@@ -103,6 +103,37 @@ def subject_schema() -> dict[str, Any]:
     }
 
 
+def blocking_item_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"},
+            "subject_id": {"type": "string"},
+            "kind": {"type": "string", "enum": ["subject", "object", "environment", "note"]},
+            "label": {"type": "string"},
+            "x": {"type": "number", "minimum": 0, "maximum": 1},
+            "y": {"type": "number", "minimum": 0, "maximum": 1},
+            "width": {"type": "number", "minimum": 0.02, "maximum": 1},
+            "height": {"type": "number", "minimum": 0.02, "maximum": 1},
+            "facing": {"type": "string", "enum": ["unspecified", "left", "right", "camera", "away"]},
+            "note": {"type": "string"},
+        },
+        "required": [
+            "id",
+            "subject_id",
+            "kind",
+            "label",
+            "x",
+            "y",
+            "width",
+            "height",
+            "facing",
+            "note",
+        ],
+        "additionalProperties": False,
+    }
+
+
 def shot_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -118,6 +149,7 @@ def shot_schema() -> dict[str, Any]:
             "action": {"type": "string"},
             "dialogue": {"type": "string"},
             "sound": {"type": "string"},
+            "blocking": {"type": "array", "items": blocking_item_schema()},
             "locks": {"type": "array", "items": {"type": "string"}},
         },
         "required": [
@@ -132,6 +164,7 @@ def shot_schema() -> dict[str, Any]:
             "action",
             "dialogue",
             "sound",
+            "blocking",
             "locks",
         ],
         "additionalProperties": False,
@@ -147,6 +180,8 @@ def scene_schema() -> dict[str, Any]:
             "visual_style": {"type": "string"},
             "soundscape": {"type": "string"},
             "music": {"type": "string"},
+            "shot_count_mode": {"type": "string", "enum": ["auto", "exact"]},
+            "exact_shot_count": {"type": "integer", "minimum": 1, "maximum": 12},
             "subjects": {"type": "array", "items": subject_schema()},
             "shots": {"type": "array", "items": shot_schema()},
             "locks": {"type": "array", "items": {"type": "string"}},
@@ -157,6 +192,8 @@ def scene_schema() -> dict[str, Any]:
             "visual_style",
             "soundscape",
             "music",
+            "shot_count_mode",
+            "exact_shot_count",
             "subjects",
             "shots",
             "locks",
@@ -206,6 +243,7 @@ def empty_shot(index: int = 1) -> dict[str, Any]:
         "action": "",
         "dialogue": "",
         "sound": "",
+        "blocking": [],
         "locks": [],
     }
 
@@ -235,6 +273,8 @@ def new_project(
             "visual_style": "",
             "soundscape": "",
             "music": "",
+            "shot_count_mode": "auto",
+            "exact_shot_count": 1,
             "subjects": [],
             "shots": [empty_shot(1)],
             "locks": [],
@@ -296,6 +336,40 @@ def _clean_shot(value: Any, index: int, duration: float) -> dict[str, Any]:
     for key in ("framing", "camera_motion", "camera_custom", "amplitude", "speed", "action", "dialogue", "sound"):
         base[key] = str(base.get(key) or "")
     base["subjects"] = [str(x) for x in (base.get("subjects") or [])]
+    blocking = []
+    for item in base.get("blocking") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            x = min(1.0, max(0.0, float(item.get("x", 0.4))))
+            y = min(1.0, max(0.0, float(item.get("y", 0.25))))
+            width = min(1.0, max(0.02, float(item.get("width", 0.2))))
+            height = min(1.0, max(0.02, float(item.get("height", 0.5))))
+        except (TypeError, ValueError):
+            x, y, width, height = 0.4, 0.25, 0.2, 0.5
+        if x + width > 1:
+            x = max(0.0, 1 - width)
+        if y + height > 1:
+            y = max(0.0, 1 - height)
+        facing = str(item.get("facing") or "unspecified")
+        if facing not in {"unspecified", "left", "right", "camera", "away"}:
+            facing = "unspecified"
+        kind = str(item.get("kind") or "subject")
+        if kind not in {"subject", "object", "environment", "note"}:
+            kind = "note"
+        blocking.append({
+            "id": str(item.get("id") or _id("block")),
+            "subject_id": str(item.get("subject_id") or ""),
+            "kind": kind,
+            "label": str(item.get("label") or ""),
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+            "facing": facing,
+            "note": str(item.get("note") or ""),
+        })
+    base["blocking"] = blocking
     base["locks"] = [str(x) for x in (base.get("locks") or [])]
     return base
 
@@ -324,6 +398,12 @@ def normalize_project(value: Any) -> dict[str, Any]:
     scene = base["scene"]
     for key in ("concept", "environment", "visual_style", "soundscape", "music"):
         scene[key] = str(scene_in.get(key) or "")
+    shot_count_mode = str(scene_in.get("shot_count_mode") or "auto")
+    scene["shot_count_mode"] = shot_count_mode if shot_count_mode in {"auto", "exact"} else "auto"
+    try:
+        scene["exact_shot_count"] = min(12, max(1, int(scene_in.get("exact_shot_count") or 1)))
+    except (TypeError, ValueError):
+        scene["exact_shot_count"] = 1
     scene["locks"] = [str(x) for x in (scene_in.get("locks") or [])]
     scene["subjects"] = [
         _clean_subject(x, i)
@@ -334,6 +414,14 @@ def normalize_project(value: Any) -> dict[str, Any]:
         for i, x in enumerate(scene_in.get("shots") or [], start=1)
     ] or [empty_shot(1)]
     scene["shots"].sort(key=lambda x: x["start_seconds"])
+    if scene["shot_count_mode"] == "exact":
+        desired = scene["exact_shot_count"]
+        scene["shots"] = scene["shots"][:desired]
+        while len(scene["shots"]) < desired:
+            index = len(scene["shots"]) + 1
+            shot = empty_shot(index)
+            shot["start_seconds"] = base["duration"] * (index - 1) / desired
+            scene["shots"].append(shot)
     scene["shots"][0]["start_seconds"] = 0.0
     base["updated_at"] = _now()
     return base
@@ -402,6 +490,9 @@ def preserve_locks(old_scene: dict[str, Any], new_scene: dict[str, Any]) -> dict
         old = old_shots.get(str(shot.get("id")))
         if old:
             shot = _restore_locked_fields(old, shot)
+            # Blocking is user-authored director metadata. AI edits may use it
+            # as context but never silently replace or erase the board.
+            shot["blocking"] = copy.deepcopy(old.get("blocking") or [])
         shots.append(shot)
     out["shots"] = shots
     return out
@@ -419,10 +510,13 @@ Reference rules:
 - Existing text descriptions are user-authored constraints, not suggestions.
 
 Shot rules:
+- If shot_count_mode=exact, return exactly exact_shot_count shots. Do not add or remove shots. Preserve existing shot IDs by order whenever possible.
+- If shot_count_mode=auto, choose the shot count that best serves the action and duration.
 - Shot 1 starts at 0.
 - Later shot start times must strictly increase and stay inside the duration.
 - Prefer continuity over excessive cuts.
 - Camera motion should use the supplied MiniMax-style vocabulary when it fits; use Custom plus camera_custom when it does not.
+- Blocking entries are semantic composition constraints using normalized frame coordinates. Treat them as authoritative placement/facing guidance and preserve them when present.
 - Dialogue is verbatim user-authored wording when quoted in the concept.
 - Keep spatial relationships, object states, wardrobe, and continuity consistent.
 
@@ -440,7 +534,9 @@ Return only the replacement component required by the schema."""
 def compiler_system_prompt(mode: str) -> str:
     common = """You are the final compiler for MMH3 Prompt Studio. Convert the supplied structured scene plan into one production-ready MiniMax H3 prompt. The scene plan is authoritative. Do not add plot beats, dialogue, characters, references, brands, or physical traits that are absent from it. Opaque picture-slot references must remain opaque. Return only the final prompt text with no Markdown fence or commentary.
 
-Use playback order. Shot 1 has no timestamp. Later cuts use [Shot N] At MM:SS.mmm and strictly increasing times inside the clip duration. Use camera vocabulary naturally rather than as a tag dump. Synchronize dialogue and event sounds with visible events."""
+Use playback order. Shot 1 has no timestamp. Later cuts use [Shot N] At MM:SS.mmm and strictly increasing times inside the clip duration. Use camera vocabulary naturally rather than as a tag dump. Synchronize dialogue and event sounds with visible events.
+
+When a shot includes semantic blocking, translate normalized placement into natural composition language such as left/right/center, foreground/midground/background, relative size, and facing. Blocking is authoritative over generic composition guesses. Do not mention coordinates, percentages, UI boards, or "blocking metadata" in the final prompt."""
     if mode == "r2v":
         return common + """
 

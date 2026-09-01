@@ -141,3 +141,48 @@ def test_revision_snapshot_and_restore_round_trip():
     restored = prompt_studio.restore_revision(project, revision["id"])
     assert restored["scene"]["concept"] == "Version one"
     assert restored["revisions"][0]["id"] == revision["id"]
+
+
+def test_blocking_is_normalized_and_preserved_across_ai_scene_edits():
+    project = prompt_studio.new_project(mode="r2v", duration=10)
+    subject = prompt_studio.empty_subject(1)
+    project["scene"]["subjects"] = [subject]
+    project["scene"]["shots"][0]["blocking"] = [{
+        "id": "block_one",
+        "subject_id": subject["id"],
+        "kind": "subject",
+        "label": "Hero",
+        "x": 0.9,
+        "y": 0.8,
+        "width": 0.4,
+        "height": 0.5,
+        "facing": "left",
+        "note": "foreground",
+    }]
+    project = prompt_studio.normalize_project(project)
+    block = project["scene"]["shots"][0]["blocking"][0]
+    assert block["x"] == 0.6
+    assert block["y"] == 0.5
+    assert block["facing"] == "left"
+
+    candidate = copy.deepcopy(project["scene"])
+    candidate["shots"][0]["blocking"] = []
+    result = prompt_studio.preserve_locks(project["scene"], candidate)
+    assert result["shots"][0]["blocking"][0]["id"] == "block_one"
+
+
+def test_compiler_contract_treats_blocking_as_semantic_not_coordinate_output():
+    prompt = prompt_studio.compiler_system_prompt("r2v")
+    assert "Blocking is authoritative" in prompt
+    assert "Do not mention coordinates" in prompt
+
+
+def test_exact_shot_count_is_enforced_during_normalization():
+    project = prompt_studio.new_project(duration=12)
+    project["scene"]["shot_count_mode"] = "exact"
+    project["scene"]["exact_shot_count"] = 4
+    project["scene"]["shots"] = [prompt_studio.empty_shot(1)]
+    project = prompt_studio.normalize_project(project)
+    assert len(project["scene"]["shots"]) == 4
+    assert [round(x["start_seconds"], 3) for x in project["scene"]["shots"]] == [0.0, 3.0, 6.0, 9.0]
+    assert "shot_count_mode=exact" in prompt_studio.planner_system_prompt()
