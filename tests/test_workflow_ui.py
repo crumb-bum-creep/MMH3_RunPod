@@ -85,12 +85,42 @@ def test_generated_workflow_uses_sequential_litegraph_input_slots():
     }
     ui = workflow_ui.api_graph_to_ui(graph, info)
     dest = next(node for node in ui["nodes"] if node["type"] == "Dest")
-    assert [x["name"] for x in dest["inputs"]] == ["first", "last"]
+    assert [x["name"] for x in dest["inputs"]] == ["first", "middle", "last"]
+    assert [x["link"] for x in dest["inputs"]] == [1, None, 2]
+    assert dest["inputs"][1]["widget"] == {"name": "middle"}
     target_slots = [link[4] for link in ui["links"]]
-    assert target_slots == [0, 1]
+    assert target_slots == [0, 2]
 
 
 def test_bootstrap_no_longer_installs_api_json_as_comfy_workflows():
     source = (ROOT / "runtime" / "mmh3" / "bootstrap.py").read_text()
     assert 'drawable workflows generated after Comfy startup' in source
     assert 'shutil.copy2(p, dst / p.name)' not in source
+
+
+def test_generated_nodes_serialize_declared_unlinked_widget_inputs():
+    graph = {
+        "1": {
+            "inputs": {"sampler_name": "euler"},
+            "class_type": "KSamplerSelect",
+            "_meta": {"title": "Sampler"},
+        }
+    }
+    info = {
+        "KSamplerSelect": {
+            "input": {"required": {"sampler_name": [["euler", "seeds_2"], {"default": "euler"}]}},
+            "input_order": {"required": ["sampler_name"]},
+            "output": ["SAMPLER"],
+            "output_name": ["sampler"],
+        }
+    }
+    ui = workflow_ui.api_graph_to_ui(graph, info)
+    sampler = ui["nodes"][0]
+    assert sampler["inputs"] == [{
+        "name": "sampler_name",
+        "type": "COMBO",
+        "link": None,
+        "slot_index": 0,
+        "widget": {"name": "sampler_name"},
+    }]
+    assert sampler["widgets_values"] == ["euler"]
