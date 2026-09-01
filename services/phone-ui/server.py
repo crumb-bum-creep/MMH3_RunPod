@@ -34,7 +34,7 @@ from mmh3.common import (
 from mmh3.hardware import detect
 from mmh3.loras import sync_loras
 
-APP_VERSION = "0.7.0-mmH3-prompt-studio"
+APP_VERSION = "0.7.1-mmH3-workflow-controls"
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 WORKFLOW_DIR = Path(os.environ.get("MMH3_WORKFLOW_DIR", IMAGE_ROOT / "workflows" / "api"))
