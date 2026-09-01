@@ -1477,7 +1477,7 @@ async def api_studio_edit(request: web.Request) -> web.Response:
     else:
         new_scene[scope] = str(value or "")
 
-    project["scene"] = prompt_studio.preserve_locks(scene, new_scene)
+    project["scene"] = _studio_merge_planner_scene(scene, new_scene) if scope == "whole" else prompt_studio.preserve_locks(scene, new_scene)
     project["final_prompt"] = ""
     project["validation"] = {"valid": False, "errors": [], "warnings": []}
     project = prompt_studio.normalize_project(project)
