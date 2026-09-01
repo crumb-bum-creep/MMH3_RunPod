@@ -180,6 +180,8 @@ def scene_schema() -> dict[str, Any]:
             "visual_style": {"type": "string"},
             "soundscape": {"type": "string"},
             "music": {"type": "string"},
+            "shot_count_mode": {"type": "string", "enum": ["auto", "exact"]},
+            "exact_shot_count": {"type": "integer", "minimum": 1, "maximum": 12},
             "subjects": {"type": "array", "items": subject_schema()},
             "shots": {"type": "array", "items": shot_schema()},
             "locks": {"type": "array", "items": {"type": "string"}},
@@ -190,6 +192,8 @@ def scene_schema() -> dict[str, Any]:
             "visual_style",
             "soundscape",
             "music",
+            "shot_count_mode",
+            "exact_shot_count",
             "subjects",
             "shots",
             "locks",
@@ -269,6 +273,8 @@ def new_project(
             "visual_style": "",
             "soundscape": "",
             "music": "",
+            "shot_count_mode": "auto",
+            "exact_shot_count": 1,
             "subjects": [],
             "shots": [empty_shot(1)],
             "locks": [],
@@ -392,6 +398,12 @@ def normalize_project(value: Any) -> dict[str, Any]:
     scene = base["scene"]
     for key in ("concept", "environment", "visual_style", "soundscape", "music"):
         scene[key] = str(scene_in.get(key) or "")
+    shot_count_mode = str(scene_in.get("shot_count_mode") or "auto")
+    scene["shot_count_mode"] = shot_count_mode if shot_count_mode in {"auto", "exact"} else "auto"
+    try:
+        scene["exact_shot_count"] = min(12, max(1, int(scene_in.get("exact_shot_count") or 1)))
+    except (TypeError, ValueError):
+        scene["exact_shot_count"] = 1
     scene["locks"] = [str(x) for x in (scene_in.get("locks") or [])]
     scene["subjects"] = [
         _clean_subject(x, i)
@@ -402,6 +414,14 @@ def normalize_project(value: Any) -> dict[str, Any]:
         for i, x in enumerate(scene_in.get("shots") or [], start=1)
     ] or [empty_shot(1)]
     scene["shots"].sort(key=lambda x: x["start_seconds"])
+    if scene["shot_count_mode"] == "exact":
+        desired = scene["exact_shot_count"]
+        scene["shots"] = scene["shots"][:desired]
+        while len(scene["shots"]) < desired:
+            index = len(scene["shots"]) + 1
+            shot = empty_shot(index)
+            shot["start_seconds"] = base["duration"] * (index - 1) / desired
+            scene["shots"].append(shot)
     scene["shots"][0]["start_seconds"] = 0.0
     base["updated_at"] = _now()
     return base
@@ -490,6 +510,8 @@ Reference rules:
 - Existing text descriptions are user-authored constraints, not suggestions.
 
 Shot rules:
+- If shot_count_mode=exact, return exactly exact_shot_count shots. Do not add or remove shots. Preserve existing shot IDs by order whenever possible.
+- If shot_count_mode=auto, choose the shot count that best serves the action and duration.
 - Shot 1 starts at 0.
 - Later shot start times must strictly increase and stay inside the duration.
 - Prefer continuity over excessive cuts.
