@@ -1107,6 +1107,20 @@ def _studio_project(project_id: str) -> dict[str, Any]:
     return prompt_studio.normalize_project(value)
 
 
+def _studio_available_assets() -> set[str]:
+    if not INPUT_DIR.exists():
+        return set()
+    return {
+        path.relative_to(INPUT_DIR).as_posix()
+        for path in INPUT_DIR.rglob("*")
+        if path.is_file() and path.suffix.lower() in MEDIA_EXT
+    }
+
+
+def _studio_preflight(project: dict[str, Any]) -> dict[str, Any]:
+    return prompt_studio.validate_project(project, _studio_available_assets())
+
+
 def _studio_project_summary(project: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": project["id"],
@@ -1260,6 +1274,31 @@ async def api_studio_projects_get(request: web.Request) -> web.Response:
     })
 
 
+async def api_studio_model_check(request: web.Request) -> web.Response:
+    project = _studio_project(request.match_info["project_id"])
+    started = time.monotonic()
+    result = await _studio_openrouter(
+        model=project["model"],
+        system_prompt="This is an MMH3 Prompt Studio connectivity check. Return exactly MMH3_STUDIO_OK and nothing else.",
+        user_text="Connectivity check.",
+        temperature=0.0,
+    )
+    elapsed_ms = round((time.monotonic() - started) * 1000)
+    ok = "MMH3_STUDIO_OK" in str(result)
+    if not ok:
+        raise web.HTTPBadGateway(text=f"Model responded, but did not complete the expected Studio check: {str(result)[:180]}")
+    return web.json_response({
+        "ok": True,
+        "model": project["model"],
+        "elapsed_ms": elapsed_ms,
+    })
+
+
+async def api_studio_preflight(request: web.Request) -> web.Response:
+    project = _studio_project(request.match_info["project_id"])
+    return web.json_response({"preflight": _studio_preflight(project)})
+
+
 async def api_studio_project_get(request: web.Request) -> web.Response:
     return web.json_response({"project": _studio_project(request.match_info["project_id"])})
 
@@ -1388,6 +1427,9 @@ def _studio_merge_planner_scene(old_scene: dict[str, Any], planned: dict[str, An
 async def api_studio_plan(request: web.Request) -> web.Response:
     body = await request.json()
     project = _studio_project(request.match_info["project_id"])
+    preflight = _studio_preflight(project)
+    if not preflight["valid"]:
+        raise web.HTTPBadRequest(text="Prompt Studio preflight failed:\n- " + "\n- ".join(preflight["errors"]))
     instruction = str(body.get("instruction") or "Create the best coherent scene plan from the current concept and constraints.").strip()
     old_scene = project["scene"]
     labels, images = _studio_image_attachments(project)
@@ -1498,6 +1540,9 @@ async def api_studio_edit(request: web.Request) -> web.Response:
 
 async def api_studio_compile(request: web.Request) -> web.Response:
     project = _studio_project(request.match_info["project_id"])
+    preflight = _studio_preflight(project)
+    if not preflight["valid"]:
+        raise web.HTTPBadRequest(text="Prompt Studio preflight failed:\n- " + "\n- ".join(preflight["errors"]))
     user_text = (
         f"Mode: {project['mode']}\n"
         f"Duration: {project['duration']} seconds\n"
@@ -1705,6 +1750,8 @@ def make_app(comfy_url: str) -> web.Application:
         web.get("/api/prompt-studio/projects", api_studio_projects_get),
         web.post("/api/prompt-studio/projects", api_studio_project_post),
         web.get("/api/prompt-studio/projects/{project_id}", api_studio_project_get),
+        web.get("/api/prompt-studio/projects/{project_id}/preflight", api_studio_preflight),
+        web.post("/api/prompt-studio/projects/{project_id}/model-check", api_studio_model_check),
         web.put("/api/prompt-studio/projects/{project_id}", api_studio_project_put),
         web.delete("/api/prompt-studio/projects/{project_id}", api_studio_project_delete),
         web.post("/api/prompt-studio/projects/{project_id}/plan", api_studio_plan),

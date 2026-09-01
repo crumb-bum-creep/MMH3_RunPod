@@ -34,6 +34,8 @@ google/gemini-3-flash-preview
 
 The model is stored per project and can be changed in the Studio UI without changing the six canonical Comfy workflows.
 
+**Test model** makes a tiny text-only request through the selected project model. It verifies the configured OpenRouter key, model slug, and provider path without loading Comfy, sending reference images, or starting a video generation.
+
 OpenRouter calls happen in the MMH3 backend. The browser never receives the OpenRouter API key.
 
 ## Reference modes
@@ -150,6 +152,25 @@ Prompt Studio can edit:
 Structured output is used for planner/editor responses. Broad edits restore locked fields after the model response, so locks are enforced by MMH3 rather than relying only on prompt wording.
 
 Subject reference bindings are always preserved across AI edits.
+
+## Local project preflight
+
+Prompt Studio can validate the editable project structure before making an OpenRouter request.
+
+The **Check project** control verifies locally:
+
+- referenced persistent assets still exist
+- actual Picture slots have selected assets
+- one Picture number is not accidentally assigned to two different concrete images
+- subject and shot IDs remain unique
+- shot timing is structurally valid
+- shot subject references point to defined subjects
+- semantic blocking points to defined subjects
+- freehand sketch strokes still point to existing blocking items
+
+Incomplete-but-useful states are warnings rather than hard failures. For example, an I2V prompt project may be drafted without choosing its final starting image yet.
+
+Build/Rebuild Plan and Compile + Validate run this preflight automatically. Structural errors stop before any OpenRouter call, while warnings remain visible and allow the operation to continue.
 
 ## Compilation and validation
 

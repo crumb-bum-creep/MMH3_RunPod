@@ -618,6 +618,106 @@ def reference_contract(project: dict[str, Any]) -> str:
     return "\n".join(lines) or "No external reference contract."
 
 
+def validate_project(
+    project: dict[str, Any],
+    available_assets: set[str] | None = None,
+) -> dict[str, Any]:
+    """Validate Studio structure before spending an OpenRouter call."""
+    project = normalize_project(project)
+    scene = project["scene"]
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if not str(scene.get("concept") or "").strip():
+        warnings.append("Concept/direction is empty.")
+
+    if project["mode"] == "i2v":
+        starting_asset = str((project.get("starting_image") or {}).get("asset_file") or "").strip()
+        if not starting_asset:
+            warnings.append("I2V has no starting image yet; add one before sending the prompt to a Custom generation.")
+        elif available_assets is not None and starting_asset not in available_assets:
+            errors.append(f"I2V starting image is missing: {starting_asset}")
+
+    subjects = list(scene.get("subjects") or [])
+    subject_ids = [str(x.get("id") or "") for x in subjects]
+    if len(subject_ids) != len(set(subject_ids)):
+        errors.append("Subject IDs are not unique.")
+
+    concrete_picture_assets: dict[int, str] = {}
+    for index, subject in enumerate(subjects, start=1):
+        label = str(subject.get("label") or f"Subject {index}")
+        ref = subject.get("reference") or {}
+        mode = str(ref.get("mode") or "none")
+        if mode == "asset":
+            asset = str(ref.get("asset_file") or "").strip()
+            number = int(ref.get("picture_number") or index)
+            if not asset:
+                errors.append(f"{label} uses an actual asset reference but no image is selected.")
+            elif available_assets is not None and asset not in available_assets:
+                errors.append(f"{label} references missing asset: {asset}")
+            prior = concrete_picture_assets.get(number)
+            if prior and asset and prior != asset:
+                errors.append(
+                    f"<Picture {number}> is assigned to multiple different actual assets: {prior} and {asset}"
+                )
+            elif asset:
+                concrete_picture_assets[number] = asset
+        elif mode == "picture_slot":
+            if ref.get("asset_file"):
+                warnings.append(f"{label} is an opaque Picture slot but still contains an asset filename; it will be ignored.")
+            if ref.get("analyze"):
+                warnings.append(f"{label} is an opaque Picture slot but image analysis is enabled; it will be ignored.")
+
+    shots = list(scene.get("shots") or [])
+    if not shots:
+        errors.append("Scene has no shots.")
+    shot_ids = [str(x.get("id") or "") for x in shots]
+    if len(shot_ids) != len(set(shot_ids)):
+        errors.append("Shot IDs are not unique.")
+
+    if scene.get("shot_count_mode") == "exact":
+        expected = int(scene.get("exact_shot_count") or 1)
+        if len(shots) != expected:
+            errors.append(f"Exact shot count is {expected}, but the scene contains {len(shots)} shots.")
+
+    duration = float(project.get("duration") or 0)
+    starts = [float(x.get("start_seconds") or 0) for x in shots]
+    if starts and abs(starts[0]) > 1e-9:
+        errors.append("Shot 1 must start at 0 seconds.")
+    if starts != sorted(starts) or len(starts) != len(set(starts)):
+        errors.append("Shot start times must strictly increase.")
+    if any(x < 0 or x >= duration for x in starts[1:]):
+        errors.append("A shot start time is outside the configured duration.")
+
+    subject_id_set = set(subject_ids)
+    for index, shot in enumerate(shots, start=1):
+        dangling = sorted(set(str(x) for x in (shot.get("subjects") or [])) - subject_id_set)
+        if dangling:
+            errors.append(f"Shot {index} references unknown subject ID(s): {', '.join(dangling)}")
+
+        blocks = list(shot.get("blocking") or [])
+        block_ids = [str(x.get("id") or "") for x in blocks]
+        if len(block_ids) != len(set(block_ids)):
+            errors.append(f"Shot {index} has duplicate blocking IDs.")
+        block_id_set = set(block_ids)
+        for block in blocks:
+            sid = str(block.get("subject_id") or "")
+            if block.get("kind") == "subject" and sid not in subject_id_set:
+                errors.append(
+                    f"Shot {index} blocking item {block.get('label') or block.get('id')} points to an unknown subject."
+                )
+        for stroke in shot.get("blocking_sketch") or []:
+            block_id = str(stroke.get("block_id") or "")
+            if block_id not in block_id_set:
+                errors.append(f"Shot {index} has a sketch stroke attached to a missing blocking item.")
+
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
 def validate_prompt(project: dict[str, Any], prompt: str) -> dict[str, Any]:
     mode = project.get("mode")
     errors: list[str] = []

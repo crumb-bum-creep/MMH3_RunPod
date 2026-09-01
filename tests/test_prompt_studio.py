@@ -200,3 +200,62 @@ def test_blocking_sketch_strokes_are_normalized_as_ui_only_metadata():
     stroke = project["scene"]["shots"][0]["blocking_sketch"][0]
     assert stroke["block_id"] == "block_1"
     assert stroke["points"] == [[0.0, 0.25], [0.5, 1.0], [0.7, 0.8]]
+
+
+def test_project_preflight_catches_missing_assets_and_dangling_scene_links():
+    project = prompt_studio.new_project(mode="r2v", duration=10)
+    subject = prompt_studio.empty_subject(1)
+    subject["id"] = "subject_1"
+    subject["label"] = "Hero"
+    subject["reference"] = {
+        "mode": "asset",
+        "picture_number": 1,
+        "asset_file": "missing.png",
+        "analyze": True,
+    }
+    project["scene"]["subjects"] = [subject]
+    project["scene"]["shots"][0]["subjects"] = ["unknown_subject"]
+    project["scene"]["shots"][0]["blocking"] = [{
+        "id": "block_1",
+        "subject_id": "unknown_subject",
+        "kind": "subject",
+        "label": "Ghost",
+        "x": 0.1,
+        "y": 0.1,
+        "width": 0.2,
+        "height": 0.4,
+        "facing": "camera",
+        "note": "",
+    }]
+    project["scene"]["shots"][0]["blocking_sketch"] = [{
+        "id": "stroke_1",
+        "block_id": "missing_block",
+        "points": [[0.1, 0.1], [0.2, 0.2]],
+    }]
+
+    result = prompt_studio.validate_project(project, available_assets={"other.png"})
+    assert result["valid"] is False
+    assert any("missing asset" in x for x in result["errors"])
+    assert any("unknown subject ID" in x for x in result["errors"])
+    assert any("unknown subject" in x for x in result["errors"])
+    assert any("missing blocking item" in x for x in result["errors"])
+
+
+def test_project_preflight_warns_for_incomplete_i2v_without_blocking_draft_work():
+    project = prompt_studio.new_project(mode="i2v")
+    project["scene"]["concept"] = "A person turns toward camera."
+    result = prompt_studio.validate_project(project, available_assets=set())
+    assert result["valid"] is True
+    assert any("no starting image" in x for x in result["warnings"])
+
+
+def test_project_preflight_rejects_two_different_assets_for_same_picture_slot():
+    project = prompt_studio.new_project(mode="r2v")
+    a = prompt_studio.empty_subject(1)
+    b = prompt_studio.empty_subject(2)
+    a["reference"] = {"mode": "asset", "picture_number": 1, "asset_file": "a.png", "analyze": True}
+    b["reference"] = {"mode": "asset", "picture_number": 1, "asset_file": "b.png", "analyze": True}
+    project["scene"]["subjects"] = [a, b]
+    result = prompt_studio.validate_project(project, available_assets={"a.png", "b.png"})
+    assert result["valid"] is False
+    assert any("multiple different actual assets" in x for x in result["errors"])
