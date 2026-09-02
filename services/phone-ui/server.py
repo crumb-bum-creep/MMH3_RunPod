@@ -353,6 +353,8 @@ def patch_workflow(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
                 raise web.HTTPBadRequest(text="OPENROUTER_API_KEY is not configured")
             inp["prompt_provider"] = "openrouter"
             inp["job_type"] = "auto"
+            inp["openrouter_model"] = "google/gemini-3.7-flash"
+            inp["reasoning_effort"] = "low"
             inp["system_prompt"] = prompts.get("r2v_auto", "")
             # MiniMaxH3ReferencePack's IS_CHANGED cache key includes
             # local_model_slug even when OpenRouter is selected, while its OpenRouter
