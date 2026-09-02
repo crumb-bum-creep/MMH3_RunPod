@@ -225,3 +225,61 @@ def test_reusable_reference_selector_exposes_upload_controls():
     assert '"image_upload": True' in source
     assert '"video_upload": True' in source
     assert '"audio_upload": True' in source
+
+
+def test_direct_comfy_auto_graph_embeds_configured_system_prompt():
+    prompts = {
+        "t2v_auto": "T2V CONFIGURED PROMPT",
+        "i2v_auto": "I2V CONFIGURED PROMPT",
+        "r2v_auto": "R2V CONFIGURED PROMPT",
+    }
+    for name, expected, cls in (
+        ("t2v_auto.json", prompts["t2v_auto"], "OpenRouterNode"),
+        ("i2v_auto.json", prompts["i2v_auto"], "OpenRouterNode"),
+        ("r2v_auto.json", prompts["r2v_auto"], "MiniMaxH3ReferencePack"),
+    ):
+        graph = json.loads((ROOT / "workflows" / "api" / name).read_text())
+        prepared = workflow_ui.prepare_graph_for_ui(name, graph, prompts)
+        target = next(node for node in prepared.values() if node.get("class_type") == cls)
+        assert target["inputs"]["system_prompt"] == expected
+        assert "MMH3 runtime injects" not in target["inputs"]["system_prompt"]
+
+
+def test_direct_comfy_r2v_auto_adds_prompt_generation_debug_display():
+    graph = json.loads((ROOT / "workflows" / "api" / "r2v_auto.json").read_text())
+    prepared = workflow_ui.prepare_graph_for_ui(
+        "r2v_auto.json", graph, {"r2v_auto": "configured"}
+    )
+    pack_id = next(
+        str(node_id)
+        for node_id, node in prepared.items()
+        if node.get("class_type") == "MiniMaxH3ReferencePack"
+    )
+    debug = next(
+        node for node in prepared.values()
+        if (node.get("_meta") or {}).get("title") == "Prompt Generation Debug"
+    )
+    assert debug["class_type"] == "Display Any (rgthree)"
+    assert debug["inputs"]["source"] == [pack_id, 19]
+
+
+def test_direct_comfy_custom_graphs_do_not_get_auto_system_prompts():
+    graph = json.loads((ROOT / "workflows" / "api" / "r2v_custom.json").read_text())
+    prepared = workflow_ui.prepare_graph_for_ui(
+        "r2v_custom.json", graph, {"r2v_auto": "should not appear"}
+    )
+    pack = next(
+        node for node in prepared.values()
+        if node.get("class_type") == "MiniMaxH3ReferencePack"
+    )
+    assert pack["inputs"]["system_prompt"] == ""
+    assert not any(
+        (node.get("_meta") or {}).get("title") == "Prompt Generation Debug"
+        for node in prepared.values()
+    )
+
+
+def test_bootstrap_removes_stale_generated_workflows_before_comfy_starts():
+    source = (ROOT / "runtime" / "mmh3" / "bootstrap.py").read_text()
+    assert 'value["extra"].get("mmh3_generated") is True' in source
+    assert "removed stale=" in source
