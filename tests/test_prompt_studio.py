@@ -5,12 +5,12 @@ import copy
 from mmh3 import prompt_studio
 
 
-def test_new_project_has_editable_scene_and_flash_preview_default():
+def test_new_project_has_editable_scene_and_current_flash_default():
     project = prompt_studio.new_project(name="Elevator", mode="r2v", duration=15)
     assert project["name"] == "Elevator"
     assert project["mode"] == "r2v"
     assert project["duration"] == 15
-    assert project["model"] == "google/gemini-3-flash-preview"
+    assert project["model"] == "google/gemini-3.7-flash"
     assert project["scene"]["shots"][0]["start_seconds"] == 0
     assert project["scene"]["subjects"] == []
 

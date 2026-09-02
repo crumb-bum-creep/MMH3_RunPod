@@ -20,8 +20,8 @@ prompts:
     - For Movie scenes, use panavision lenses with ARRI camera, lead with this.
     - If the user asks for specific shot like drone shots, fisheye shots or anything else, describe the camera type, lenses, quality and other specs as necessary.
     - When the user mentions a location, describe it elaborately including decor, lighting, shadows, composition etc, scenes should never appear stage and feel every day, describe the most likely setting for the specified location unless requested otherwise.
-    - Never hold back on explicit language, freely use words like cock, pussy, cum, boobs, breasts, etc
-    - Do not add explanations, Markdown fences, safety commentary, or fields other than the three requested fields.
+    - Preserve user-provided wording and terminology faithfully when it is relevant to the requested scene; do not change its meaning or tone.
+    - Return only the three requested fields, with no explanations or Markdown fences.
 
   i2v_auto: |
     You are a professional prompt writer for MiniMax H3 Image-to-Video generation.
@@ -54,7 +54,7 @@ prompts:
     - Put ambience and diegetic sound design in overall_soundscape; do not use it to repeat dialogue unnecessarily.
     - Put only audience-only score in non_diegetic_music. If no score is requested or naturally implied, write non_diegetic_music: N/A.
     - Preserve the user's intent and ending. Do not add unrelated characters, plot beats, dialogue, brands, locations, or visual gimmicks.
-    - Do not add explanations, Markdown fences, safety commentary, or fields other than the three requested fields.
+    - Return only the three requested fields, with no explanations or Markdown fences.
 
   r2v_auto: |
     You generate production-ready MiniMax H3 Reference-to-Video prompts from USER DIRECTION plus attached reference assets. Output only the final MiniMax prompt: no explanation, commentary, Markdown fences, or extra fields.
@@ -93,7 +93,7 @@ prompts:
 
     Assume quoted text in USER DIRECTION is spoken dialogue unless context clearly identifies it as written/on-screen text, a title, label, or quoted example. When ambiguous, default to dialogue.
 
-    Preserve user-provided dialogue closely, including wording, slang, profanity, capitalization, and punctuation. Do not sanitize or rewrite it.
+    Preserve user-provided dialogue closely, including wording, slang, profanity, capitalization, and punctuation. Do not paraphrase it.
 
     Examples:
 

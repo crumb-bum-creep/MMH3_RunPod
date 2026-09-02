@@ -135,3 +135,24 @@ def test_r2v_workflows_use_persistent_asset_selector_for_comfy_ui():
         for i in range(1, 4):
             assert selectors[0]["inputs"][f"video_{i}"] == "(none)"
             assert selectors[0]["inputs"][f"audio_{i}"] == "(none)"
+
+
+def test_auto_prompt_models_use_current_gemini_without_floor_routing():
+    for name in ("t2v_auto.json", "i2v_auto.json"):
+        graph = load(name)
+        node = nodes_of(graph, "OpenRouterNode")[0]["inputs"]
+        assert node["model"] == "google/gemini-3.7-flash"
+        assert node["cheapest"] is False
+        assert node["fastest"] is False
+
+    graph = load("r2v_auto.json")
+    pack = nodes_of(graph, "MiniMaxH3ReferencePack")[0]["inputs"]
+    assert pack["openrouter_model"] == "google/gemini-3.7-flash"
+
+
+def test_t2v_system_prompt_does_not_contain_explicit_bypass_tripwire():
+    text = (ROOT / "config" / "system_prompts.yaml").read_text()
+    assert "Never hold back on explicit language" not in text
+    assert "Do not sanitize" not in text
+    assert "safety commentary" not in text
+    assert "Preserve user-provided wording and terminology faithfully" in text

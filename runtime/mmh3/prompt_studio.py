@@ -7,7 +7,7 @@ import uuid
 from typing import Any
 
 
-DEFAULT_MODEL = "google/gemini-3-flash-preview"
+DEFAULT_MODEL = "google/gemini-3.7-flash"
 
 SUBJECT_TYPES = [
     "person",
