@@ -70,7 +70,7 @@ def _is_widget_spec(spec: Any) -> bool:
     if options.get("forceInput"):
         return False
     first = spec[0]
-    return isinstance(first, (list, tuple)) or first in {"INT", "FLOAT", "STRING", "BOOLEAN"}
+    return isinstance(first, (list, tuple)) or first in {"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"}
 
 
 def _default_widget(spec: Any) -> Any:
@@ -82,6 +82,9 @@ def _default_widget(spec: Any) -> Any:
         return options["default"]
     if isinstance(first, (list, tuple)):
         return first[0] if first else ""
+    if first == "COMBO":
+        values = options.get("options") or []
+        return values[0] if values else ""
     return {"INT": 0, "FLOAT": 0.0, "STRING": "", "BOOLEAN": False}.get(first)
 
 
