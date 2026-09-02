@@ -332,6 +332,8 @@ def patch_workflow(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
                     inp["value"] = api_key
             for _, node in find_nodes(graph, "OpenRouterNode"):
                 inp = node.setdefault("inputs", {})
+                inp["model"] = "google/gemini-3.7-flash"
+                inp["reasoning_effort"] = "auto"
                 inp["system_prompt"] = prompts.get(f"{mode}_auto", "")
                 inp["aspect_ratio"] = "auto"
                 inp["image_resolution"] = "1K"
@@ -354,7 +356,7 @@ def patch_workflow(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
             inp["prompt_provider"] = "openrouter"
             inp["job_type"] = "auto"
             inp["openrouter_model"] = "google/gemini-3.7-flash"
-            inp["reasoning_effort"] = "low"
+            inp["reasoning_effort"] = "medium"
             inp["system_prompt"] = prompts.get("r2v_auto", "")
             # MiniMaxH3ReferencePack's IS_CHANGED cache key includes
             # local_model_slug even when OpenRouter is selected, while its OpenRouter
