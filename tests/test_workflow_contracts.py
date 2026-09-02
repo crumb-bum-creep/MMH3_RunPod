@@ -99,6 +99,8 @@ def test_r2v_auto_uses_referencepack_openrouter():
     pack = nodes_of(graph, "MiniMaxH3ReferencePack")[0]["inputs"]
     assert pack["prompt_provider"] == "openrouter"
     assert pack["job_type"] == "auto"
+    assert pack["openrouter_model"] == "google/gemini-3.7-flash"
+    assert pack["reasoning_effort"] == "medium"
     assert titles(graph, "OpenRouter API Key")
 
 
@@ -165,3 +167,31 @@ def test_t2v_system_prompt_does_not_contain_explicit_bypass_tripwire():
     assert "Do not sanitize" not in text
     assert "safety commentary" not in text
     assert "Preserve user-provided wording and terminology faithfully" in text
+
+
+def test_phone_ui_enforces_supported_r2v_auto_reasoning():
+    source = (ROOT / "services" / "phone-ui" / "server.py").read_text()
+    assert 'inp["openrouter_model"] = "google/gemini-3.7-flash"' in source
+    assert 'inp["reasoning_effort"] = "medium"' in source
+    assert 'inp["model"] = "google/gemini-3.7-flash"' in source
+    assert 'inp["reasoning_effort"] = "auto"' in source
+
+
+def test_auto_prompt_workflows_do_not_disable_reasoning_on_gemini_37():
+    for name in ("t2v_auto.json", "i2v_auto.json"):
+        graph = load(name)
+        node = nodes_of(graph, "OpenRouterNode")[0]["inputs"]
+        assert node["model"] == "google/gemini-3.7-flash"
+        assert node["reasoning_effort"] != "none"
+
+    graph = load("r2v_auto.json")
+    pack = nodes_of(graph, "MiniMaxH3ReferencePack")[0]["inputs"]
+    assert pack["openrouter_model"] == "google/gemini-3.7-flash"
+    assert pack["reasoning_effort"] != "none"
+
+
+def test_image_patches_refpack_default_away_from_preview():
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    assert 'DEFAULT_MODEL = "google/gemini-3.7-flash"' in dockerfile
+    assert "gemini-3-flash-preview" in dockerfile
+    assert "sed -i" in dockerfile
