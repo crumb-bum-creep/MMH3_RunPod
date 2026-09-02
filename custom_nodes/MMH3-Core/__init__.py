@@ -31,12 +31,33 @@ class MMH3AssetReferenceSelector:
         audios = _files(AUDIO_EXT)
         optional = {}
         for i in range(1, 10):
-            optional[f"picture_{i}"] = (images, {"default": NONE})
+            optional[f"picture_{i}"] = (
+                images,
+                {
+                    "default": NONE,
+                    "image_upload": True,
+                    "tooltip": "Select an existing image from ComfyUI/input or upload a new one.",
+                },
+            )
         for i in range(1, 4):
-            optional[f"video_{i}"] = (videos, {"default": NONE})
+            optional[f"video_{i}"] = (
+                videos,
+                {
+                    "default": NONE,
+                    "video_upload": True,
+                    "tooltip": "Select an existing video from ComfyUI/input or upload a new one.",
+                },
+            )
             optional[f"video_{i}_soundtrack"] = ("BOOLEAN", {"default": True})
         for i in range(1, 4):
-            optional[f"audio_{i}"] = (audios, {"default": NONE})
+            optional[f"audio_{i}"] = (
+                audios,
+                {
+                    "default": NONE,
+                    "audio_upload": True,
+                    "tooltip": "Select an existing audio file from ComfyUI/input or upload a new one.",
+                },
+            )
         return {"optional": optional}
 
     RETURN_TYPES = ("STRING",)
@@ -44,8 +65,8 @@ class MMH3AssetReferenceSelector:
     FUNCTION = "build"
     CATEGORY = "MMH3/References"
     DESCRIPTION = (
-        "Select persistent assets already present in ComfyUI/input. "
-        "Wire references_json into MiniMax References Manager."
+        "Select reusable assets already present in ComfyUI/input or upload new ones. "
+        "The selected files are converted into references_json for MiniMax References Manager."
     )
 
     @classmethod

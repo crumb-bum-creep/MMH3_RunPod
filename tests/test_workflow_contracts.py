@@ -122,19 +122,28 @@ def test_all_workflows_expose_ksampler_select():
         assert isinstance(samplers[0]["inputs"]["sampler_name"], str)
 
 
-def test_r2v_workflows_use_persistent_asset_selector_for_comfy_ui():
+def test_r2v_workflows_keep_native_reference_manager_and_optional_asset_selector():
     for name in ("r2v_auto.json", "r2v_custom.json"):
         graph = load(name)
         selectors = nodes_of(graph, "MMH3AssetReferenceSelector")
         assert len(selectors) == 1, name
-        selector_id = next(nid for nid, node in graph.items() if node is selectors[0])
         pack = nodes_of(graph, "MiniMaxH3ReferencePack")[0]
-        assert pack["inputs"]["references_json"] == [selector_id, 0]
+        assert pack["inputs"]["references_json"] == '{"references":[]}'
         for i in range(1, 10):
             assert selectors[0]["inputs"][f"picture_{i}"] == "(none)"
         for i in range(1, 4):
             assert selectors[0]["inputs"][f"video_{i}"] == "(none)"
             assert selectors[0]["inputs"][f"audio_{i}"] == "(none)"
+
+
+def test_resolution_selector_api_defaults_are_not_shifted():
+    for name in EXPECTED:
+        graph = load(name)
+        resolution = nodes_of(graph, "ResolutionSelector")[0]["inputs"]
+        assert isinstance(resolution["aspect_ratio"], str)
+        assert ":" in resolution["aspect_ratio"]
+        assert 0.1 <= float(resolution["megapixels"]) <= 2.0
+        assert resolution["multiple"] == 32
 
 
 def test_auto_prompt_models_use_current_gemini_without_floor_routing():
