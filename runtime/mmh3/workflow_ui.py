@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import math
 import urllib.request
@@ -7,7 +8,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
-from .common import COMFY_PERSIST, IMAGE_ROOT
+from .common import CONFIG_ROOT, COMFY_PERSIST, IMAGE_ROOT, load_yaml
 
 CANONICAL = (
     "t2v_auto.json",
@@ -17,6 +18,70 @@ CANONICAL = (
     "r2v_auto.json",
     "r2v_custom.json",
 )
+
+AUTO_PROMPT_KEYS = {
+    "t2v_auto.json": "t2v_auto",
+    "i2v_auto.json": "i2v_auto",
+    "r2v_auto.json": "r2v_auto",
+}
+
+
+def _configured_system_prompts() -> dict[str, str]:
+    persistent = load_yaml(CONFIG_ROOT / "system_prompts.yaml", {}) or {}
+    prompts = persistent.get("prompts") or {}
+    if prompts:
+        return {str(k): str(v) for k, v in prompts.items()}
+    bundled = load_yaml(IMAGE_ROOT / "config" / "system_prompts.yaml", {}) or {}
+    return {str(k): str(v) for k, v in (bundled.get("prompts") or {}).items()}
+
+
+def prepare_graph_for_ui(
+    name: str,
+    graph: dict[str, Any],
+    prompts: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Materialize runtime-only values for a directly runnable Comfy workflow.
+
+    API graphs intentionally carry queue-time placeholders because the phone UI
+    injects its configured prompt immediately before submission. A drawable Comfy
+    workflow has no such patch step, so leaving the placeholder in place makes the
+    placeholder sentence become the LLM's literal system prompt.
+    """
+    out = copy.deepcopy(graph)
+    prompt_key = AUTO_PROMPT_KEYS.get(name)
+    if not prompt_key:
+        return out
+
+    prompt_text = str((prompts if prompts is not None else _configured_system_prompts()).get(prompt_key) or "")
+    if not prompt_text.strip():
+        return out
+
+    if name in {"t2v_auto.json", "i2v_auto.json"}:
+        for node in out.values():
+            if isinstance(node, dict) and node.get("class_type") == "OpenRouterNode":
+                node.setdefault("inputs", {})["system_prompt"] = prompt_text
+    elif name == "r2v_auto.json":
+        pack_id = None
+        for node_id, node in out.items():
+            if isinstance(node, dict) and node.get("class_type") == "MiniMaxH3ReferencePack":
+                pack_id = str(node_id)
+                node.setdefault("inputs", {})["system_prompt"] = prompt_text
+        # Surface the RefPack's own debug output in direct Comfy. This records the
+        # resolved register, model, endpoint and rendered payload without exposing
+        # the API key, which makes prompt-generation failures diagnosable on-canvas.
+        if pack_id is not None and not any(
+            isinstance(node, dict)
+            and (node.get("_meta") or {}).get("title") == "Prompt Generation Debug"
+            for node in out.values()
+        ):
+            numeric = [int(str(k)) for k in out if str(k).isdigit()]
+            debug_id = str(max(numeric, default=0) + 1)
+            out[debug_id] = {
+                "inputs": {"output": "", "source": [pack_id, 19]},
+                "class_type": "Display Any (rgthree)",
+                "_meta": {"title": "Prompt Generation Debug"},
+            }
+    return out
 
 
 def _fetch_object_info(comfy_url: str) -> dict[str, Any]:
@@ -285,6 +350,7 @@ def install_ui_workflows(comfy_url: str) -> list[str]:
         if not path.exists():
             continue
         graph = json.loads(path.read_text(encoding="utf-8"))
+        graph = prepare_graph_for_ui(name, graph)
         ui = api_graph_to_ui(graph, object_info)
         pretty = name.replace("_", " ").replace(".json", "").title() + ".json"
         (dst / pretty).write_text(json.dumps(ui, indent=2), encoding="utf-8")
