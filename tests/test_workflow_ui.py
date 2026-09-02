@@ -147,3 +147,81 @@ def test_force_input_primitive_is_serialized_as_socket_not_widget():
     assert node["inputs"][0]["name"] == "text"
     assert "widget" not in node["inputs"][0]
     assert node["widgets_values"] == []
+
+
+def test_v3_combo_widgets_keep_resolution_values_in_position():
+    graph = {
+        "115": {
+            "inputs": {
+                "aspect_ratio": "9:16 (Portrait Widescreen)",
+                "megapixels": 0.7,
+                "multiple": 32,
+            },
+            "class_type": "ResolutionSelector",
+            "_meta": {"title": "Resolution Selector"},
+        }
+    }
+    info = {
+        "ResolutionSelector": {
+            "input": {
+                "required": {
+                    "aspect_ratio": [
+                        "COMBO",
+                        {
+                            "options": [
+                                "1:1 (Square)",
+                                "9:16 (Portrait Widescreen)",
+                                "16:9 (Widescreen)",
+                            ],
+                            "default": "1:1 (Square)",
+                        },
+                    ],
+                    "megapixels": ["FLOAT", {"default": 1.0}],
+                    "multiple": ["INT", {"default": 8}],
+                }
+            },
+            "input_order": {
+                "required": ["aspect_ratio", "megapixels", "multiple"]
+            },
+            "output": ["INT", "INT"],
+            "output_name": ["width", "height"],
+        }
+    }
+
+    ui = workflow_ui.api_graph_to_ui(graph, info)
+    node = ui["nodes"][0]
+    assert [item["name"] for item in node["inputs"]] == [
+        "aspect_ratio",
+        "megapixels",
+        "multiple",
+    ]
+    assert all(item.get("widget") for item in node["inputs"])
+    assert node["widgets_values"] == [
+        "9:16 (Portrait Widescreen)",
+        0.7,
+        32,
+    ]
+
+
+def test_r2v_selector_is_optional_and_native_reference_manager_is_not_bypassed():
+    for name in ("r2v_auto.json", "r2v_custom.json"):
+        graph = json.loads((ROOT / "workflows" / "api" / name).read_text())
+        selector = next(
+            node for node in graph.values()
+            if isinstance(node, dict)
+            and node.get("class_type") == "MMH3AssetReferenceSelector"
+        )
+        pack = next(
+            node for node in graph.values()
+            if isinstance(node, dict)
+            and node.get("class_type") == "MiniMaxH3ReferencePack"
+        )
+        assert pack["inputs"]["references_json"] == '{"references":[]}'
+        assert "Optional Reusable Reference Selector" in selector["_meta"]["title"]
+
+
+def test_reusable_reference_selector_exposes_upload_controls():
+    source = (ROOT / "custom_nodes" / "MMH3-Core" / "__init__.py").read_text()
+    assert '"image_upload": True' in source
+    assert '"video_upload": True' in source
+    assert '"audio_upload": True' in source
