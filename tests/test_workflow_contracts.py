@@ -153,4 +153,6 @@ def test_auto_prompt_models_use_current_gemini_without_floor_routing():
 def test_t2v_system_prompt_does_not_contain_explicit_bypass_tripwire():
     text = (ROOT / "config" / "system_prompts.yaml").read_text()
     assert "Never hold back on explicit language" not in text
+    assert "Do not sanitize" not in text
+    assert "safety commentary" not in text
     assert "Preserve user-provided wording and terminology faithfully" in text
