@@ -35,7 +35,103 @@ RUN set -eux; \
     install_node ComfyUI-Openrouter_node https://github.com/gabe-init/ComfyUI-Openrouter_node.git 45c67f94e335b978577773f05752e17ffe63a09e; \
     install_node ComfyUI-Spectrum-MiniMax-H3 https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git ac247efcc2c9b6324fa106b3bd8e148a583db4a9; \
     install_node ComfyUI-VideoHelperSuite https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git 4ee72c065db22c9d96c2427954dc69e7b908444b; \
-    install_node rgthree-comfy https://github.com/rgthree/rgthree-comfy.git 6b76ee6f2c5a007710b5a16f97c94330d6ecc871
+    install_node rgthree-comfy https://github.com/rgthree/rgthree-comfy.git 6b76ee6f2c5a007710b5a16f97c94330d6ecc871; \
+    sed -i 's#^DEFAULT_MODEL = "google/gemini-3-flash-preview"$#DEFAULT_MODEL = "google/gemini-3.7-flash"#' /ComfyUI/custom_nodes/ComfyUI-MiniMaxRefPack/minimax_refpack/prompt.py; \
+    grep -q '^DEFAULT_MODEL = "google/gemini-3.7-flash"
+RUN /opt/venv/bin/pip install --no-cache-dir \
+      'PyYAML==6.0.3' 'requests==2.34.2' 'psutil==7.2.2' \
+      'huggingface_hub==1.27.0'
+
+RUN /opt/venv/bin/pip uninstall -y onnxruntime onnxruntime-gpu 2>/dev/null || true; \
+    /opt/venv/bin/pip install --no-cache-dir onnxruntime-gpu $ORT_INDEX_ARGS; \
+    /opt/venv/bin/python -c "import onnxruntime as o; p=o.get_available_providers(); assert 'CUDAExecutionProvider' in p, p"
+
+# Prune build/cache artifacts before COPY --from so they never become final
+# runtime bytes. Keep git metadata for the existing pin/drift diagnostics.
+RUN set -eux; \
+    git -C /ComfyUI rev-parse HEAD > /ComfyUI/.mmh3_commit; \
+    for d in /ComfyUI/custom_nodes/*; do \
+      if [[ -d "$d/.git" ]]; then git -C "$d" rev-parse HEAD > "$d/.mmh3_commit"; fi; \
+    done; \
+    rm -rf /ComfyUI/custom_nodes/comfyui-manager; \
+    rm -rf /ComfyUI/.git /ComfyUI/custom_nodes/*/.git; \
+    rm -rf /root/.cache /tmp/* /var/tmp/*; \
+    find /opt/venv -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true; \
+    find /ComfyUI -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true
+
+
+# Repack the validated Python environment into balanced registry blobs. This
+# does not change a single final filesystem path; it only gives Docker's
+# concurrent layer downloader several similarly-sized units of work instead of
+# one 1.6+ GB compressed bottleneck.
+COPY scripts/split_runtime_layers.py /tmp/split_runtime_layers.py
+RUN /opt/venv/bin/python /tmp/split_runtime_layers.py \
+    && rm -f /tmp/split_runtime_layers.py \
+    && echo "=== venv skeleton after split ===" \
+    && du -sh /opt/venv /opt/mmh3-layer/*
+
+
+FROM ubuntu:24.04 AS runtime
+
+USER root
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Host NVIDIA drivers are injected by the NVIDIA container runtime. PyTorch's
+# cu130 wheel environment carries the CUDA userspace libraries it was built
+# against, so the image does not need a second copy from nvidia/cuda.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl ffmpeg git iproute2 jq libgl1 libglib2.0-0 \
+      libgomp1 libtcmalloc-minimal4 procps python3.12 python3.12-venv tini \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /opt/mmh3-layer/venv-1/ /
+COPY --from=builder /opt/mmh3-layer/venv-2/ /
+COPY --from=builder /opt/mmh3-layer/venv-3/ /
+COPY --from=builder /opt/mmh3-layer/torch/ /
+COPY --from=builder /opt/mmh3-layer/triton/ /
+COPY --from=builder /opt/mmh3-layer/onnxruntime/ /
+COPY --from=builder /opt/mmh3-layer/cudnn/ /
+COPY --from=builder /opt/mmh3-layer/nvidia-1/ /
+COPY --from=builder /opt/mmh3-layer/nvidia-2/ /
+COPY --from=builder /opt/mmh3-layer/nvidia-3/ /
+COPY --from=builder /ComfyUI /ComfyUI
+COPY custom_nodes/MMH3-Core /ComfyUI/custom_nodes/MMH3-Core
+
+RUN set -eux; \
+    sed -i -E 's#^home = .*#home = /usr/bin#; s#^executable = .*#executable = /usr/bin/python3.12#' /opt/venv/pyvenv.cfg; \
+    rm -f /opt/venv/bin/python /opt/venv/bin/python3 /opt/venv/bin/python3.12; \
+    ln -s /usr/bin/python3.12 /opt/venv/bin/python; \
+    ln -s /usr/bin/python3.12 /opt/venv/bin/python3; \
+    ln -s /usr/bin/python3.12 /opt/venv/bin/python3.12; \
+    /opt/venv/bin/python -c 'import sys, torch; print(sys.version); print(torch.__version__, torch.version.cuda)'
+
+COPY runtime /opt/mmh3/runtime
+COPY config /opt/mmh3/config
+COPY workflows /opt/mmh3/workflows
+COPY services /opt/mmh3/services
+COPY scripts /opt/mmh3/scripts
+
+RUN chmod +x /opt/mmh3/runtime/entrypoint.sh /opt/mmh3/scripts/mmh3 \
+    && ln -sfn /opt/mmh3/scripts/mmh3 /usr/local/bin/mmh3
+
+ENV PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PYTHONUNBUFFERED=1 \
+    MMH3_IMAGE_ROOT=/opt/mmh3 \
+    MMH3_WORKSPACE=/workspace \
+    MMH3_COMFY_DIR=/ComfyUI \
+    MMH3_COMFY_PORT=8188 \
+    MMH3_PHONE_UI_PORT=7860 \
+    MMH3_JUPYTER_PORT=8888 \
+    MMH3_MODEL_DOWNLOAD_WORKERS=3 \
+    MMH3_LORA_DOWNLOAD_WORKERS=3 \
+    MMH3_AUTO_DOWNLOAD_MODELS=true \
+    MMH3_AUTO_DOWNLOAD_LORAS=true
+
+EXPOSE 7860 8188 8888
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/opt/mmh3/runtime/entrypoint.sh"]
+ /ComfyUI/custom_nodes/ComfyUI-MiniMaxRefPack/minimax_refpack/prompt.py
 
 RUN /opt/venv/bin/pip install --no-cache-dir \
       'PyYAML==6.0.3' 'requests==2.34.2' 'psutil==7.2.2' \
