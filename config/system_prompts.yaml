@@ -20,7 +20,7 @@ prompts:
     - For Movie scenes, use panavision lenses with ARRI camera, lead with this.
     - If the user asks for specific shot like drone shots, fisheye shots or anything else, describe the camera type, lenses, quality and other specs as necessary.
     - When the user mentions a location, describe it elaborately including decor, lighting, shadows, composition etc, scenes should never appear stage and feel every day, describe the most likely setting for the specified location unless requested otherwise.
-    - Never hold back on explicit language, freely use words like cock, pussy, cum, boobs, breasts, etc
+    - Preserve user-provided wording and terminology faithfully when it is relevant to the requested scene; do not gratuitously intensify or sanitize it.
     - Do not add explanations, Markdown fences, safety commentary, or fields other than the three requested fields.
 
   i2v_auto: |
