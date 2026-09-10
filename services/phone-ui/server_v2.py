@@ -16,7 +16,7 @@ except ImportError:  # development/test checkout before runtime overlay
 
 import output_indexer
 
-APP_VERSION = "0.7.0-mmH3-library-index"
+APP_VERSION = "0.7.1-mmH3-library-index"
 LIBRARY_FILE = base.DATA_ROOT / "output_library.json"
 INDEX_FILE = output_indexer.INDEX_FILE
 _real_free_memory = base.comfy.free_memory
@@ -135,14 +135,6 @@ async def api_free(request: web.Request) -> web.Response:
     return web.json_response({"ok": ok, "mode": "cache" if cache_only else "full"})
 
 
-def _cache_first_free(unload_models: bool = True, free_memory_flag: bool = True) -> bool:
-    # The generation admission path used to unload the active H3 model immediately
-    # whenever host-memory pressure was detected. Preserve the hot model and ask
-    # Comfy to clear reclaimable memory first; memory_guard.py performs automatic
-    # escalation to a full unload only if pressure persists.
-    return _real_free_memory(False, free_memory_flag)
-
-
 async def index(request: web.Request) -> web.Response:
     html = (base.STATIC / "index.html").read_text(encoding="utf-8")
     if "library-v2.css" not in html:
@@ -175,10 +167,13 @@ def make_app(comfy_url: str) -> web.Application:
     base.api_delete_output = api_delete_output
     base.api_free = api_free
     base.index = index
-    # Only the phone-server generation admission cleanup is softened here. The
-    # supervisor memory guard runs in a separate process and uses its own staged
-    # cache-first policy.
-    base.comfy.free_memory = _cache_first_free
+
+    # Do NOT replace base.comfy.free_memory here. Generation admission remains
+    # exactly as d2103 implemented it: if a user attempts to enqueue while host
+    # memory is already under pressure, the admission path may perform an
+    # immediate full Comfy model/cache release before posting the prompt. The
+    # independent supervisor memory guard remains cache-first during ordinary
+    # idle pressure and escalates only if that is insufficient.
 
     app = base.make_app(comfy_url)
     app.router.add_get("/api/output-library", api_output_library_get)
