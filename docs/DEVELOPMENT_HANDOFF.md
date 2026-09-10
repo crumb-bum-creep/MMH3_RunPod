@@ -67,21 +67,14 @@ It intentionally does not show step numbers or consume significant screen height
 
 ### Cache-first memory protection
 
-The d2103 memory guard always sent both of these Comfy `/free` flags under memory pressure:
+The supervisor memory guard uses a staged cache-first policy during ordinary idle pressure:
 
-```text
-unload_models=true
-free_memory=true
-```
-
-That was unnecessarily expensive for repeated same-model H3 work when reclaimable cache was enough.
-
-The active policy is now staged:
-
-1. when memory pressure is detected and cleanup is allowed, request `unload_models=false, free_memory=true` first;
+1. request `unload_models=false, free_memory=true` first;
 2. keep the hot model loaded and allow a short grace period (`cache_grace_seconds`, default 15s);
 3. if pressure remains, escalate to `unload_models=true, free_memory=true`;
 4. critical-memory interrupt behavior remains governed by the existing hardware/runtime policy.
+
+The d2103 **generation-admission path is intentionally not monkey-patched**. If a user attempts to enqueue while host memory is already above the admission threshold, `/api/generate` retains the original d2103 behavior and may immediately request a full Comfy model/cache release before posting the prompt. This is deliberate: the background guard can optimize idle memory behavior, but enqueue must not stall on a cache-only cleanup and then reject the prompt before it reaches Comfy.
 
 The System tab separately exposes **Clear cache** and **Unload models + cache**.
 
@@ -111,7 +104,8 @@ This makes the d2103 server an explicit rollback/reference layer while allowing 
 - Secrets must never be committed to Git.
 - `MMH3Director` content must not be mixed into the normal generated-video library.
 - Do not reintroduce request-time recursive output scanning or a live `<video>` element for every generation card.
-- Prefer cache clearing before model unloading during ordinary memory pressure; retain full unload as escalation, not the first response.
+- Prefer cache clearing before model unloading during ordinary idle memory pressure; retain full unload as escalation.
+- Do not globally patch the d2103 Phone UI `comfy.free_memory` function; user-triggered generation admission must retain the baseline full-release escape path when already under pressure.
 
 ## Development rule from here
 
