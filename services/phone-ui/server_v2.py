@@ -84,13 +84,20 @@ async def api_outputs(request: web.Request) -> web.Response:
     if not isinstance(value, dict):
         value = {}
     items = value.get("items") if isinstance(value.get("items"), list) else []
-    return web.json_response({
-        "items": items,
+    updated_at = float(value.get("updated_at") or 0)
+    try:
+        since = float(request.query.get("since") or 0)
+    except (TypeError, ValueError):
+        since = 0.0
+    common = {
         "count": int(value.get("count") or len(items)),
-        "index_updated_at": float(value.get("updated_at") or 0),
+        "index_updated_at": updated_at,
         "indexing": not INDEX_FILE.exists(),
         "index_error": value.get("error"),
-    })
+    }
+    if since and updated_at and updated_at <= since:
+        return web.json_response({**common, "unchanged": True})
+    return web.json_response({**common, "unchanged": False, "items": items})
 
 
 async def api_output_library_get(request: web.Request) -> web.Response:
