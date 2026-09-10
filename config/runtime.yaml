@@ -29,6 +29,7 @@ memory:
   interrupt_running_on_critical: false
   cleanup_cooldown_seconds: 90
   cache_first: true
+  pressure_grace_seconds: 10
   cache_grace_seconds: 15
 
 provisioning:
