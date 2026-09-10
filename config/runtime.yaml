@@ -28,6 +28,8 @@ memory:
   cleanup_only_when_queue_idle: true
   interrupt_running_on_critical: false
   cleanup_cooldown_seconds: 90
+  cache_first: true
+  cache_grace_seconds: 15
 
 provisioning:
   download_models: true
