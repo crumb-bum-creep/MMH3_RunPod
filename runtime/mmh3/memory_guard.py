@@ -10,12 +10,14 @@ from .hardware import cgroup_current_bytes, cgroup_limit_bytes
 
 GIB = 1024 ** 3
 
+
 def _log(message: str) -> None:
     LOG_ROOT.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     with (LOG_ROOT / "memory-guard.log").open("a", encoding="utf-8") as f:
         f.write(f"[{stamp}] {message}\n")
     print("[memory-guard]", message, flush=True)
+
 
 def run(memory_cfg: dict[str, Any]) -> None:
     limit = cgroup_limit_bytes()
@@ -32,13 +34,19 @@ def run(memory_cfg: dict[str, Any]) -> None:
     idle_only = bool(memory_cfg.get("cleanup_only_when_queue_idle", True))
     interrupt_on_critical = bool(memory_cfg.get("interrupt_running_on_critical", False))
     cooldown = float(memory_cfg.get("cleanup_cooldown_seconds", 90))
-    last_cleanup = 0.0
+    cache_first = bool(memory_cfg.get("cache_first", True))
+    cache_grace = max(poll, float(memory_cfg.get("cache_grace_seconds", 15)))
+
+    last_cycle = 0.0
+    last_action = 0.0
+    cleanup_stage = "idle"
     hold = False
 
     STATE_ROOT.mkdir(parents=True, exist_ok=True)
     _log(
         f"limit={limit/GIB:.2f} GiB cleanup={cleanup:.0%} resume={resume:.0%} "
-        f"headroom={min_headroom/GIB:.0f} GiB resume_headroom={resume_headroom/GIB:.0f} GiB"
+        f"headroom={min_headroom/GIB:.0f} GiB resume_headroom={resume_headroom/GIB:.0f} GiB "
+        f"cache_first={cache_first} cache_grace={cache_grace:.0f}s"
     )
 
     while True:
@@ -52,6 +60,11 @@ def run(memory_cfg: dict[str, Any]) -> None:
         pressure = frac >= cleanup or free < min_headroom
         safe_to_resume = frac <= resume and free >= resume_headroom
 
+        if hold and safe_to_resume:
+            hold = False
+            cleanup_stage = "idle"
+            _log(f"memory hold cleared: {frac:.1%} used, {free/GIB:.1f} GiB free")
+
         state = {
             "limit_bytes": limit,
             "current_bytes": current,
@@ -61,6 +74,8 @@ def run(memory_cfg: dict[str, Any]) -> None:
             "pending": pending,
             "memory_hold": hold,
             "pressure": pressure,
+            "cleanup_stage": cleanup_stage,
+            "cache_first": cache_first,
             "cleanup_fraction": cleanup,
             "resume_fraction": resume,
             "critical_fraction": critical,
@@ -70,22 +85,48 @@ def run(memory_cfg: dict[str, Any]) -> None:
         }
         (STATE_ROOT / "memory.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
 
-        if hold and safe_to_resume:
-            hold = False
-            _log(f"memory hold cleared: {frac:.1%} used, {free/GIB:.1f} GiB free")
-
+        now = time.time()
         if frac >= critical and running and interrupt_on_critical:
             _log(f"critical memory {frac:.1%}; interrupting running job")
             comfy.interrupt()
             hold = True
+            cleanup_stage = "critical"
         elif pressure and (not idle_only or (not running and not pending)):
-            if time.time() - last_cleanup >= cooldown:
+            if cleanup_stage == "cache" and now - last_action >= cache_grace:
                 _log(
-                    f"memory pressure: {frac:.1%} used, {free/GIB:.1f} GiB free; "
-                    "requesting Comfy model/cache release"
+                    f"memory pressure persisted after cache clear: {frac:.1%} used, {free/GIB:.1f} GiB free; "
+                    "escalating to Comfy model unload + cache release"
                 )
                 comfy.free_memory(True, True)
-                last_cleanup = time.time()
+                last_action = now
+                last_cycle = now
+                cleanup_stage = "models"
                 hold = True
+            elif cleanup_stage in {"idle", "critical"} and now - last_cycle >= cooldown:
+                if cache_first:
+                    _log(
+                        f"memory pressure: {frac:.1%} used, {free/GIB:.1f} GiB free; "
+                        "clearing Comfy cache while keeping loaded models"
+                    )
+                    comfy.free_memory(False, True)
+                    cleanup_stage = "cache"
+                else:
+                    _log(
+                        f"memory pressure: {frac:.1%} used, {free/GIB:.1f} GiB free; "
+                        "requesting Comfy model/cache release"
+                    )
+                    comfy.free_memory(True, True)
+                    cleanup_stage = "models"
+                    last_cycle = now
+                last_action = now
+                hold = True
+            elif cleanup_stage == "models" and now - last_action >= cooldown:
+                _log(
+                    f"memory pressure remains after model unload: {frac:.1%} used, {free/GIB:.1f} GiB free; "
+                    "retrying full Comfy release"
+                )
+                comfy.free_memory(True, True)
+                last_action = now
+                last_cycle = now
 
         time.sleep(poll)
