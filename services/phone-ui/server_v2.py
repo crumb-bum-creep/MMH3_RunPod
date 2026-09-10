@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -182,8 +183,8 @@ def make_app(comfy_url: str) -> web.Application:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=int(base.os.environ.get("MMH3_PHONE_UI_PORT", "7860")))
-    parser.add_argument("--comfy", default=base.os.environ.get("MMH3_COMFY_URL", "http://127.0.0.1:8188"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("MMH3_PHONE_UI_PORT", "7860")))
+    parser.add_argument("--comfy", default=os.environ.get("MMH3_COMFY_URL", "http://127.0.0.1:8188"))
     args = parser.parse_args()
     web.run_app(make_app(args.comfy), host="0.0.0.0", port=args.port, access_log=None)
 
