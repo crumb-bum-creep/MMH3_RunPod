@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import time
 from pathlib import Path
@@ -16,7 +17,7 @@ except ImportError:  # development/test checkout before runtime overlay
 
 import output_indexer
 
-APP_VERSION = "0.7.1-mmH3-library-index"
+APP_VERSION = "0.7.2-mmH3-library-index"
 LIBRARY_FILE = base.DATA_ROOT / "output_library.json"
 INDEX_FILE = output_indexer.INDEX_FILE
 _real_free_memory = base.comfy.free_memory
@@ -135,6 +136,94 @@ async def api_free(request: web.Request) -> web.Response:
     return web.json_response({"ok": ok, "mode": "cache" if cache_only else "full"})
 
 
+async def api_generate(request: web.Request) -> web.Response:
+    """Queue a generation without performing memory cleanup inside the request.
+
+    The legacy d2103 endpoint coupled admission to the memory guard's ordinary
+    pressure threshold. A submit could therefore unload models, wait up to 45s,
+    and still reject before POSTing to Comfy. The supervisor already owns memory
+    cleanup, so this route now has one job: validate/patch and enqueue.
+
+    A *fresh* critical-memory reading may still reject the request as a final OOM
+    safety rail, but rejection is side-effect free: this endpoint never calls
+    /free and never waits for a cleanup cycle.
+    """
+    app = request.app
+    payload = await request.json()
+
+    requested_mode = str(payload.get("mode") or "t2v").lower()
+    requested_family = "ref2v" if requested_mode == "r2v" else "fl2v"
+
+    try:
+        async with app["session"].get(f"{app['comfy']}/queue") as r:
+            active_queue = await r.json()
+    except Exception:
+        active_queue = {"queue_running": [], "queue_pending": []}
+
+    active_families: set[str] = set()
+    for key in ("queue_running", "queue_pending"):
+        for row in active_queue.get(key) or []:
+            pid = str(row[1]) if isinstance(row, list) and len(row) > 1 else ""
+            rec = app["records"].get(pid) or {}
+            family = rec.get("model_family")
+            if not family and rec.get("mode"):
+                family = "ref2v" if rec.get("mode") == "r2v" else "fl2v"
+            if family:
+                active_families.add(str(family))
+
+    if active_families and requested_family not in active_families:
+        names = ", ".join(sorted(active_families))
+        raise web.HTTPConflict(
+            text=f"A {names} generation family is already running/queued. "
+                 f"Finish that family first so MMH3 gets a memory-cleanup window before switching to {requested_family}."
+        )
+
+    provisioning = base._load_json(base.STATE_ROOT / "provisioning.json", {})
+    if provisioning and not bool(provisioning.get("core_ready", False)):
+        status = str(provisioning.get("status") or "pending")
+        stage = str(provisioning.get("stage") or "models")
+        message = str(provisioning.get("message") or "Core MiniMax H3 models are still provisioning")
+        raise web.HTTPServiceUnavailable(
+            text=f"{message} (status={status}, stage={stage}). "
+                 "You can keep using the UI; generation will unlock automatically when core models are ready."
+        )
+
+    memory = base._load_json(base.STATE_ROOT / "memory.json", {})
+    try:
+        fraction = float(memory.get("fraction") or 0.0)
+        critical_fraction = float(memory.get("critical_fraction") or 0.92)
+        free_bytes = float(memory.get("free_bytes") or 0.0)
+        updated_at = float(memory.get("updated_at") or 0.0)
+    except (TypeError, ValueError):
+        fraction, critical_fraction, free_bytes, updated_at = 0.0, 0.92, 0.0, 0.0
+
+    memory_is_fresh = updated_at > 0 and (time.time() - updated_at) <= 15.0
+    if memory_is_fresh and fraction >= critical_fraction:
+        free_gib = free_bytes / (1024 ** 3)
+        raise web.HTTPServiceUnavailable(
+            text=f"MMH3 host memory is critically high ({fraction:.0%} used, {free_gib:.1f} GiB free). "
+                 "The prompt was not queued and no memory cleanup was triggered by this submission."
+        )
+
+    graph, record = base.patch_workflow(payload)
+    plan = base._make_plan(graph)
+    async with app["session"].post(
+        f"{app['comfy']}/prompt",
+        json={"client_id": app["client_id"], "prompt": graph},
+    ) as r:
+        body = await r.text()
+        if not r.ok:
+            raise web.HTTPBadGateway(text=body)
+        reply = json.loads(body)
+
+    pid = str(reply["prompt_id"])
+    app["plans"][pid] = plan
+    app["records"][pid] = record
+    base._touch(app, pid, status="queued", process_name="Waiting in queue")
+    base._save_json(base.RECORD_FILE, app["records"])
+    return web.json_response({"prompt_id": pid, "seed": record["seed"]})
+
+
 async def index(request: web.Request) -> web.Response:
     html = (base.STATIC / "index.html").read_text(encoding="utf-8")
     if "library-v2.css" not in html:
@@ -163,17 +252,11 @@ async def _stop_indexer(app: web.Application) -> None:
 
 def make_app(comfy_url: str) -> web.Application:
     base.APP_VERSION = APP_VERSION
+    base.api_generate = api_generate
     base.api_outputs = api_outputs
     base.api_delete_output = api_delete_output
     base.api_free = api_free
     base.index = index
-
-    # Do NOT replace base.comfy.free_memory here. Generation admission remains
-    # exactly as d2103 implemented it: if a user attempts to enqueue while host
-    # memory is already under pressure, the admission path may perform an
-    # immediate full Comfy model/cache release before posting the prompt. The
-    # independent supervisor memory guard remains cache-first during ordinary
-    # idle pressure and escalates only if that is insufficient.
 
     app = base.make_app(comfy_url)
     app.router.add_get("/api/output-library", api_output_library_get)
