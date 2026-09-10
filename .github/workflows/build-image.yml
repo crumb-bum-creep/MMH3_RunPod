@@ -86,6 +86,7 @@ jobs:
             test -f /ComfyUI/main.py
             test -x /opt/mmh3/runtime/entrypoint.sh
             test -f /opt/mmh3/services/phone-ui/server.py
+            test -f /opt/mmh3/services/phone-ui/server_v2.py
             test "$(find /opt/mmh3/workflows/api -maxdepth 1 -name "*.json" | wc -l)" -eq 6
             ACTUAL="$(cat /ComfyUI/.mmh3_commit)"
             test "$ACTUAL" = "c2bcbecd82ec5ae66594340b395c24ef0217b238"
@@ -94,6 +95,7 @@ jobs:
             python -c "import triton, sageattention; print(\"triton\",triton.__version__); print(\"sageattention import OK\")"
             python /ComfyUI/main.py --cpu --quick-test-for-ci --disable-auto-launch
             python /opt/mmh3/services/phone-ui/server.py --help >/dev/null
+            python /opt/mmh3/services/phone-ui/server_v2.py --help >/dev/null
           '
 
       - name: Save build log
