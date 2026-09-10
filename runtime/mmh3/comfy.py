@@ -63,15 +63,18 @@ def base_url() -> str:
     port = int(os.environ.get("MMH3_COMFY_PORT", "8188"))
     return f"http://127.0.0.1:{port}"
 
+def is_ready(timeout: float = 2.0) -> bool:
+    try:
+        r = requests.get(base_url() + "/system_stats", timeout=timeout)
+        return r.ok
+    except requests.RequestException:
+        return False
+
 def wait_ready(timeout: float = 180.0) -> bool:
     end = time.time() + timeout
     while time.time() < end:
-        try:
-            r = requests.get(base_url() + "/system_stats", timeout=2)
-            if r.ok:
-                return True
-        except requests.RequestException:
-            pass
+        if is_ready(timeout=2):
+            return True
         time.sleep(2)
     return False
 
