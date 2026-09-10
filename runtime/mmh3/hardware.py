@@ -15,6 +15,8 @@ class HardwareInfo:
     driver_version: str = "unknown"
     cgroup_memory_limit_bytes: int = 0
     cgroup_memory_current_bytes: int = 0
+    cgroup_memory_working_set_bytes: int = 0
+    cgroup_memory_inactive_file_bytes: int = 0
     host_mem_total_bytes: int = 0
     runpod_mem_gb: float = 0.0
 
@@ -59,6 +61,36 @@ def cgroup_current_bytes() -> int:
             return value
     return 0
 
+def cgroup_memory_stat() -> dict[str, int]:
+    for p in ("/sys/fs/cgroup/memory.stat", "/sys/fs/cgroup/memory/memory.stat"):
+        try:
+            values: dict[str, int] = {}
+            for line in Path(p).read_text().splitlines():
+                parts = line.split()
+                if len(parts) != 2:
+                    continue
+                try:
+                    values[parts[0]] = int(parts[1])
+                except ValueError:
+                    continue
+            if values:
+                return values
+        except OSError:
+            continue
+    return {}
+
+def cgroup_inactive_file_bytes() -> int:
+    stat = cgroup_memory_stat()
+    value = stat.get("inactive_file")
+    if value is None:
+        value = stat.get("total_inactive_file", 0)
+    return max(0, int(value or 0))
+
+def cgroup_working_set_bytes() -> int:
+    current = cgroup_current_bytes()
+    inactive_file = min(current, cgroup_inactive_file_bytes())
+    return max(0, current - inactive_file)
+
 def gpu_info() -> tuple[str, int, str]:
     cmd = [
         "nvidia-smi",
@@ -78,12 +110,16 @@ def detect() -> HardwareInfo:
         rp_mem = float(os.environ.get("RUNPOD_MEM_GB", "0") or 0)
     except ValueError:
         rp_mem = 0
+    current = cgroup_current_bytes()
+    inactive_file = min(current, cgroup_inactive_file_bytes())
     return HardwareInfo(
         gpu_name=name,
         vram_mib=vram,
         driver_version=driver,
         cgroup_memory_limit_bytes=cgroup_limit_bytes(),
-        cgroup_memory_current_bytes=cgroup_current_bytes(),
+        cgroup_memory_current_bytes=current,
+        cgroup_memory_working_set_bytes=max(0, current - inactive_file),
+        cgroup_memory_inactive_file_bytes=inactive_file,
         host_mem_total_bytes=host_mem_total_bytes(),
         runpod_mem_gb=rp_mem,
     )
