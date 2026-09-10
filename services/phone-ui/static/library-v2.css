@@ -38,7 +38,7 @@
 .output-actions-v2{margin-top:10px;display:flex;flex-wrap:wrap;gap:7px}
 .output-prompt-v2{margin-top:10px;max-height:140px;overflow:auto;font-size:12px;white-space:pre-wrap}
 
-.global-progress-hud{position:fixed;z-index:9998;left:50%;transform:translateX(-50%);bottom:max(8px,env(safe-area-inset-bottom));width:min(560px,calc(100vw - 16px));padding:7px 9px 8px;border:1px solid rgba(130,145,175,.28);border-radius:11px;background:rgba(12,15,22,.93);box-shadow:0 8px 30px rgba(0,0,0,.34);backdrop-filter:blur(10px);font-size:11px}
+.global-progress-hud{position:fixed;z-index:90;left:50%;transform:translateX(-50%);bottom:max(8px,env(safe-area-inset-bottom));width:min(560px,calc(100vw - 16px));padding:7px 9px 8px;border:1px solid rgba(130,145,175,.28);border-radius:11px;background:rgba(12,15,22,.93);box-shadow:0 8px 30px rgba(0,0,0,.34);backdrop-filter:blur(10px);font-size:11px}
 .global-progress-row{display:flex;justify-content:space-between;gap:10px;align-items:center;line-height:1.15}
 .global-progress-row span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .global-progress-row.overall{margin-top:5px;color:var(--muted,#929bad);font-size:10px}
