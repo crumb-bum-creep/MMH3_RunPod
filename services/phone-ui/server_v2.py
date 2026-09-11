@@ -17,11 +17,18 @@ except ImportError:  # development/test checkout before runtime overlay
 
 import output_indexer
 
-APP_VERSION = "0.7.2-mmH3-library-index"
+APP_VERSION = "0.8.0-mmH3-checkpoints-provisioning"
 LIBRARY_FILE = base.DATA_ROOT / "output_library.json"
 INDEX_FILE = output_indexer.INDEX_FILE
 _real_free_memory = base.comfy.free_memory
 _base_delete_output = base.api_delete_output
+_base_patch_workflow = base.patch_workflow
+
+STOCK_FL2VA = "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+STOCK_REF2VA = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+EROS_BETA5_INT8 = "10Eros_Max_h3_hybrid_beta5_int8.safetensors"
+CHECKPOINT_STOCK = "stock_convrot_int8"
+CHECKPOINT_EROS = "eros_beta5_int8"
 
 
 def _load_library() -> dict[str, Any]:
@@ -78,6 +85,83 @@ def _clean_library(body: Any) -> dict[str, Any]:
         "videos": videos,
         "updated_at": time.time(),
     }
+
+
+def _checkpoint_choice(payload: dict[str, Any]) -> str:
+    raw = str(payload.get("base_checkpoint") or CHECKPOINT_STOCK).strip().lower()
+    aliases = {
+        "stock": CHECKPOINT_STOCK,
+        "stock_int8": CHECKPOINT_STOCK,
+        CHECKPOINT_STOCK: CHECKPOINT_STOCK,
+        "eros": CHECKPOINT_EROS,
+        "eros_int8": CHECKPOINT_EROS,
+        CHECKPOINT_EROS: CHECKPOINT_EROS,
+    }
+    choice = aliases.get(raw)
+    if not choice:
+        raise web.HTTPBadRequest(text=f"unknown base checkpoint: {raw}")
+    return choice
+
+
+def _checkpoint_filename(mode: str, choice: str) -> str:
+    if choice == CHECKPOINT_EROS:
+        return EROS_BETA5_INT8
+    return STOCK_REF2VA if mode == "r2v" else STOCK_FL2VA
+
+
+def _checkpoint_path(filename: str) -> Path:
+    return base.COMFY_PERSIST / "models" / "diffusion_models" / filename
+
+
+def _next_node_id(graph: dict[str, Any], prefix: str) -> str:
+    candidate = prefix
+    suffix = 1
+    while candidate in graph:
+        suffix += 1
+        candidate = f"{prefix}_{suffix}"
+    return candidate
+
+
+def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Apply MMH3 v3 queue-time features on top of the d2103 workflow patcher."""
+    graph, record = _base_patch_workflow(payload)
+    mode = str(payload.get("mode") or "t2v").lower()
+    prompt_mode = str(payload.get("prompt_mode") or "custom").lower()
+    choice = _checkpoint_choice(payload)
+    checkpoint = _checkpoint_filename(mode, choice)
+
+    unets = base.find_nodes(graph, "UNETLoader")
+    if not unets:
+        raise web.HTTPServiceUnavailable(text="workflow has no UNETLoader node")
+    for _, node in unets:
+        node.setdefault("inputs", {})["unet_name"] = checkpoint
+
+    ending_image = str(payload.get("ending_image") or "").strip()
+    if ending_image and mode != "i2v":
+        raise web.HTTPBadRequest(text="ending_image is only supported for I2V")
+
+    if mode == "i2v" and ending_image:
+        i2v_nodes = base.find_nodes(graph, "MiniMaxH3ImageToVideo")
+        if not i2v_nodes:
+            raise web.HTTPServiceUnavailable(text="I2V workflow has no MiniMaxH3ImageToVideo node")
+        end_id = _next_node_id(graph, "mmh3_last_frame")
+        graph[end_id] = {
+            "inputs": {"image": ending_image},
+            "class_type": "LoadImage",
+            "_meta": {"title": "Load Last Frame"},
+        }
+        i2v_nodes[0][1].setdefault("inputs", {})["last_frame"] = [end_id, 0]
+
+        # Auto I2V should let the prompt writer see both endpoints, not only the
+        # starting frame. OpenRouterNode accepts multiple optional image inputs.
+        if prompt_mode == "auto":
+            for _, node in base.find_nodes(graph, "OpenRouterNode"):
+                node.setdefault("inputs", {})["image_2"] = [end_id, 0]
+
+    record["base_checkpoint"] = choice
+    record["base_checkpoint_file"] = checkpoint
+    record["ending_image"] = ending_image or None
+    return graph, record
 
 
 async def api_outputs(request: web.Request) -> web.Response:
@@ -137,22 +221,13 @@ async def api_free(request: web.Request) -> web.Response:
 
 
 async def api_generate(request: web.Request) -> web.Response:
-    """Queue a generation without performing memory cleanup inside the request.
-
-    The legacy d2103 endpoint coupled admission to the memory guard's ordinary
-    pressure threshold. A submit could therefore unload models, wait up to 45s,
-    and still reject before POSTing to Comfy. The supervisor already owns memory
-    cleanup, so this route now has one job: validate/patch and enqueue.
-
-    A *fresh* critical-memory reading may still reject the request as a final OOM
-    safety rail, but rejection is side-effect free: this endpoint never calls
-    /free and never waits for a cleanup cycle.
-    """
+    """Queue a generation without performing memory cleanup inside the request."""
     app = request.app
     payload = await request.json()
 
     requested_mode = str(payload.get("mode") or "t2v").lower()
     requested_family = "ref2v" if requested_mode == "r2v" else "fl2v"
+    checkpoint_choice = _checkpoint_choice(payload)
 
     try:
         async with app["session"].get(f"{app['comfy']}/queue") as r:
@@ -185,8 +260,20 @@ async def api_generate(request: web.Request) -> web.Response:
         message = str(provisioning.get("message") or "Core MiniMax H3 models are still provisioning")
         raise web.HTTPServiceUnavailable(
             text=f"{message} (status={status}, stage={stage}). "
-                 "You can keep using the UI; generation will unlock automatically when core models are ready."
+                 "You can keep using the UI; generation will unlock automatically when stock core models are ready."
         )
+
+    if checkpoint_choice == CHECKPOINT_EROS:
+        eros_path = _checkpoint_path(EROS_BETA5_INT8)
+        try:
+            eros_ready = eros_path.is_file() and eros_path.stat().st_size >= 1024**3
+        except OSError:
+            eros_ready = False
+        if not eros_ready:
+            raise web.HTTPServiceUnavailable(
+                text="Eros Max Beta5 INT8 is still provisioning. Stock H3 ConvRot is ready to use now; "
+                     "choose Stock H3 ConvRot INT8 or wait for the Eros addon download to finish."
+            )
 
     memory = base._load_json(base.STATE_ROOT / "memory.json", {})
     try:
@@ -228,10 +315,15 @@ async def index(request: web.Request) -> web.Response:
     html = (base.STATIC / "index.html").read_text(encoding="utf-8")
     if "library-v2.css" not in html:
         html = html.replace("</head>", '  <link rel="stylesheet" href="/static/library-v2.css?v=1">\n</head>')
+    if "features-v3.css" not in html:
+        html = html.replace("</head>", '  <link rel="stylesheet" href="/static/features-v3.css?v=1">\n</head>')
     legacy = '<script src="/static/app.js?v=2"></script>'
-    upgraded = legacy + '\n<script src="/static/library-v2.js?v=1"></script>'
-    if "library-v2.js" not in html:
-        html = html.replace(legacy, upgraded)
+    upgraded = legacy + '\n<script src="/static/library-v2.js?v=1"></script>\n<script src="/static/features-v3.js?v=1"></script>'
+    if "features-v3.js" not in html:
+        if "library-v2.js" in html:
+            html = html.replace('<script src="/static/library-v2.js?v=1"></script>', '<script src="/static/library-v2.js?v=1"></script>\n<script src="/static/features-v3.js?v=1"></script>')
+        else:
+            html = html.replace(legacy, upgraded)
     return web.Response(text=html, content_type="text/html", headers={"Cache-Control": "no-store"})
 
 
@@ -252,6 +344,7 @@ async def _stop_indexer(app: web.Application) -> None:
 
 def make_app(comfy_url: str) -> web.Application:
     base.APP_VERSION = APP_VERSION
+    base.patch_workflow = patch_workflow_v3
     base.api_generate = api_generate
     base.api_outputs = api_outputs
     base.api_delete_output = api_delete_output
