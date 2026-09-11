@@ -87,9 +87,14 @@ jobs:
             test -x /opt/mmh3/runtime/entrypoint.sh
             test -f /opt/mmh3/services/phone-ui/server.py
             test -f /opt/mmh3/services/phone-ui/server_v2.py
+            test -f /opt/mmh3/services/phone-ui/static/features-v3.js
+            test -f /opt/mmh3/services/phone-ui/static/features-v3.css
+            grep -q "10Eros_Max_h3_hybrid_beta5_int8.safetensors" /opt/mmh3/config/models.yaml
+            grep -q "features-v3.js" /opt/mmh3/services/phone-ui/server_v2.py
             test "$(find /opt/mmh3/workflows/api -maxdepth 1 -name "*.json" | wc -l)" -eq 6
             ACTUAL="$(cat /ComfyUI/.mmh3_commit)"
             test "$ACTUAL" = "c2bcbecd82ec5ae66594340b395c24ef0217b238"
+            python -m py_compile /opt/mmh3/runtime/mmh3/models.py /opt/mmh3/runtime/mmh3/provisioner.py /opt/mmh3/runtime/mmh3/memory_guard.py /opt/mmh3/services/phone-ui/server_v2.py
             python -c "import torch,yaml,requests,aiohttp,huggingface_hub; from PIL import Image; from mmh3.common import IMAGE_ROOT; assert torch.__version__.startswith(\"2.11.0\"), torch.__version__; assert torch.version.cuda == \"13.0\", torch.version.cuda; assert str(IMAGE_ROOT) == \"/opt/mmh3\"; print(\"torch\",torch.__version__,\"cuda\",torch.version.cuda); print(\"runtime imports OK\")"
             python -c "import onnxruntime as o; p=o.get_available_providers(); assert \"CUDAExecutionProvider\" in p, p; print(p)"
             python -c "import triton, sageattention; print(\"triton\",triton.__version__); print(\"sageattention import OK\")"
