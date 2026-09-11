@@ -85,6 +85,10 @@ def sync_models(
 
         class ProgressTqdm(tqdm):
             def __init__(self, *args, **kwargs):
+                # Hugging Face normally lets tqdm auto-disable itself when there is
+                # no TTY. Provisioning is deliberately a background process, so
+                # force callbacks to remain active for the Phone UI telemetry.
+                kwargs["disable"] = False
                 super().__init__(*args, **kwargs)
                 current = int(getattr(self, "n", 0) or 0)
                 total = int(getattr(self, "total", 0) or expected or 0) or expected
