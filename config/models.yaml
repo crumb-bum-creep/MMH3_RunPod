@@ -5,6 +5,9 @@ models:
     source_path: vae/minimax_h3_video_vae_fp16.safetensors
     destination: vae/minimax_h3_video_vae_fp16.safetensors
     min_size_mb: 100
+    phase: core
+    label: MiniMax H3 Video VAE
+    show_in_ui: true
 
   audio_vae:
     source: huggingface
@@ -12,6 +15,9 @@ models:
     source_path: vae/minimax_h3_audio_vae_fp32.safetensors
     destination: vae/minimax_h3_audio_vae_fp32.safetensors
     min_size_mb: 100
+    phase: core
+    label: MiniMax H3 Audio VAE
+    show_in_ui: true
 
   text_encoder_int8:
     source: huggingface
@@ -19,6 +25,9 @@ models:
     source_path: text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors
     destination: text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors
     min_size_mb: 1000
+    phase: core
+    label: Qwen3-VL H3 INT8 Text Encoder
+    show_in_ui: true
 
   fl2va_int8:
     source: huggingface
@@ -26,6 +35,9 @@ models:
     source_path: diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
     destination: diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
     min_size_mb: 1000
+    phase: core
+    label: Stock H3 FL2VA ConvRot INT8
+    show_in_ui: true
 
   ref2va_int8:
     source: huggingface
@@ -33,6 +45,9 @@ models:
     source_path: diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
     destination: diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
     min_size_mb: 1000
+    phase: core
+    label: Stock H3 Ref2VA ConvRot INT8
+    show_in_ui: true
 
   fl2v_turbo_4step:
     source: huggingface
@@ -40,6 +55,9 @@ models:
     source_path: loras/minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors
     destination: loras/minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors
     min_size_mb: 500
+    phase: core
+    label: FL2V Turbo LoRA
+    show_in_ui: false
 
   ref2v_turbo_4step:
     source: huggingface
@@ -47,6 +65,9 @@ models:
     source_path: minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
     destination: loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
     min_size_mb: 500
+    phase: core
+    label: Ref2V Turbo LoRA
+    show_in_ui: false
 
   taeh3_preview:
     source: huggingface
@@ -54,3 +75,16 @@ models:
     source_path: vae_approx/taeh3.safetensors
     destination: vae_approx/taeh3.safetensors
     min_size_mb: 5
+    phase: core
+    label: TAEH3 Preview Decoder
+    show_in_ui: true
+
+  eros_beta5_int8:
+    source: huggingface
+    repo_id: TenStrip/10Eros-Max
+    source_path: 10Eros_Max_h3_hybrid_beta5_int8.safetensors
+    destination: diffusion_models/10Eros_Max_h3_hybrid_beta5_int8.safetensors
+    min_size_mb: 1000
+    phase: addon
+    label: Eros Max Beta5 INT8
+    show_in_ui: true
