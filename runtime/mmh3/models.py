@@ -70,7 +70,6 @@ def sync_models(
             "destination": str(item.get("destination") or ""),
             "phase": str(item.get("phase") or "core"),
             "show_in_ui": bool(item.get("show_in_ui", not str(item.get("destination") or "").startswith("loras/"))),
-            "total_bytes": expected,
         }
 
         if _usable(dest, minimum):
@@ -81,7 +80,7 @@ def sync_models(
         dest.parent.mkdir(parents=True, exist_ok=True)
         started = time.monotonic()
         tracker = {"last_t": started, "last_n": 0, "last_emit": 0.0}
-        emit(name, **common, status="starting", downloaded_bytes=0, speed_bps=0.0)
+        emit(name, **common, status="starting", downloaded_bytes=0, total_bytes=expected, speed_bps=0.0)
 
         class ProgressTqdm(tqdm):
             def __init__(self, *args, **kwargs):
@@ -148,7 +147,7 @@ def sync_models(
             )
             return {"name": name, "status": "downloaded", "path": str(dest), "bytes": size}
         except Exception as exc:
-            emit(name, **common, status="error", error=repr(exc), speed_bps=0.0)
+            emit(name, **common, status="error", error=repr(exc), total_bytes=expected, speed_bps=0.0)
             return {"name": name, "status": "error", "error": repr(exc), "path": str(dest)}
 
     workers = _workers()
