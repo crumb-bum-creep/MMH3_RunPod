@@ -198,6 +198,10 @@
       closeAssetPicker();
     });
   };
+  // app.js wired the search box before this overlay existed. Point it at the
+  // upgraded renderer too so filtering an end-frame picker cannot fall back to
+  // the R2V-reference click handler.
+  $("#assetPickerSearch").oninput=renderAssetPicker;
 
   const originalRefreshInfo=refreshInfo;
   refreshInfo=async function(){
