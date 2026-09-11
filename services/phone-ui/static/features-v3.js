@@ -109,9 +109,14 @@
     }
     const p=state.info?.provisioning||{};
     const button=$("#generate");
-    if(button && p.core_ready && sel.value===EROS && !ready){
-      button.disabled=true;
-      button.textContent="Eros checkpoint provisioning…";
+    if(button && p.core_ready){
+      if(sel.value===EROS && !ready){
+        button.disabled=true;
+        button.textContent="Eros checkpoint provisioning…";
+      }else{
+        button.disabled=false;
+        button.textContent="Queue Generation";
+      }
     }
   }
 
