@@ -191,7 +191,9 @@ def run() -> int:
             ),
         )
         print("[mmh3] provisioner failed:", repr(exc), flush=True)
-        return 0 if core_ready else 1
+        if core_ready:
+            return 0
+        return 1
 
 
 if __name__ == "__main__":
