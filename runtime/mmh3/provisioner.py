@@ -3,10 +3,9 @@ from __future__ import annotations
 import json
 import threading
 import time
-from pathlib import Path
 
-from .common import COMFY_PERSIST, CONFIG_ROOT, DATA_ROOT, IMAGE_ROOT, STATE_ROOT, dump_json, env_bool, load_yaml
-from .models import sync_models
+from .common import CONFIG_ROOT, DATA_ROOT, IMAGE_ROOT, STATE_ROOT, dump_json, env_bool, load_yaml
+from .models import local_model_progress, phase_ready, sync_models
 from .loras import sync_loras
 
 _STATE_LOCK = threading.Lock()
@@ -23,34 +22,6 @@ def _state(**values):
         current.update(values)
         current["updated_at"] = time.time()
         dump_json(path, current)
-
-
-def _initial_model_progress(config_path: Path) -> dict[str, dict]:
-    cfg = load_yaml(config_path, {}) or {}
-    entries = (cfg.get("models") or {})
-    root = COMFY_PERSIST / "models"
-    out: dict[str, dict] = {}
-    for name, raw in entries.items():
-        item = raw or {}
-        dest_rel = str(item.get("destination") or "")
-        dest = root / dest_rel
-        minimum = int(float(item.get("min_size_mb", 1)) * 1024 * 1024)
-        try:
-            existing = dest.stat().st_size if dest.is_file() else 0
-        except OSError:
-            existing = 0
-        ready = existing >= minimum
-        out[str(name)] = {
-            "label": str(item.get("label") or name),
-            "destination": dest_rel,
-            "phase": str(item.get("phase") or "core"),
-            "show_in_ui": bool(item.get("show_in_ui", not dest_rel.startswith("loras/"))),
-            "status": "ready" if ready else "waiting",
-            "downloaded_bytes": existing if ready else 0,
-            "total_bytes": existing if ready else None,
-            "speed_bps": 0.0,
-        }
-    return out
 
 
 def _progress_callback(name: str, values: dict) -> None:
@@ -77,62 +48,101 @@ def run() -> int:
     do_loras = env_bool("MMH3_AUTO_DOWNLOAD_LORAS", bool(cfg.get("download_loras", True)))
     manifest = IMAGE_ROOT / "config" / "models.yaml"
 
+    local = local_model_progress(manifest)
+    local_core_ready = phase_ready(local, "core")
+    local_accelerator_ready = phase_ready(local, "accelerator")
+    local_addon_ready = phase_ready(local, "addon")
+
     _state(
         status="running",
         stage="starting",
         models_enabled=do_models,
         loras_enabled=do_loras,
-        core_ready=not do_models,
-        addon_ready=False,
+        core_ready=(local_core_ready if do_models else True),
+        accelerator_ready=(local_accelerator_ready if do_models else True),
+        addon_ready=(local_addon_ready if do_models else False),
         error=None,
-        model_progress=_initial_model_progress(manifest),
+        model_progress=local,
+        message=(
+            "Existing stock core detected; verifying persistent model files"
+            if local_core_ready
+            else "Checking persistent model files and provisioning missing core models"
+        ),
     )
 
     core_results = []
+    accelerator_results = []
     addon_results = []
     lora_results = {}
     core_ready = not do_models
+    accelerator_ready = not do_models
+    addon_ready = False
+
     try:
         if do_models:
             _state(stage="models", message="Checking/downloading stock MiniMax H3 core models")
             core_results = sync_models(manifest, phase="core", progress=_progress_callback)
-            failed = [x for x in core_results if x.get("status") == "error"]
-            core_ready = not failed
+            core_failed = [x for x in core_results if x.get("status") == "error"]
+            core_ready = not core_failed
             _state(
                 stage="core_ready" if core_ready else "models_complete",
                 models=core_results,
                 core_ready=core_ready,
                 message=(
-                    "Stock H3 core models ready; generation unlocked while optional provisioning continues"
+                    "Stock H3 core verified; generation unlocked while acceleration profiles finish provisioning"
                     if core_ready
-                    else f"{len(failed)} stock core model download(s) failed"
+                    else f"{len(core_failed)} stock core model check/download(s) failed"
+                ),
+            )
+
+            _state(
+                stage="accelerators",
+                core_ready=core_ready,
+                message=(
+                    "Stock core ready; checking/downloading Fast and Balanced Turbo profiles"
+                    if core_ready
+                    else "Checking/downloading Turbo profile files"
+                ),
+            )
+            accelerator_results = sync_models(manifest, phase="accelerator", progress=_progress_callback)
+            accelerator_failed = [x for x in accelerator_results if x.get("status") == "error"]
+            accelerator_ready = not accelerator_failed and bool(accelerator_results)
+            _state(
+                stage="accelerators_complete",
+                core_ready=core_ready,
+                accelerator_ready=accelerator_ready,
+                accelerator_models=accelerator_results,
+                message=(
+                    "Fast and Balanced Turbo profiles ready"
+                    if accelerator_ready
+                    else f"{len(accelerator_failed)} Turbo profile file(s) still need attention"
                 ),
             )
         else:
             core_ready = True
+            accelerator_ready = True
 
         if do_loras:
             _state(
                 stage="loras",
                 core_ready=core_ready,
-                message=(
-                    "Stock core ready; checking/downloading managed LoRAs"
-                    if core_ready
-                    else "Checking/downloading managed LoRAs"
-                ),
+                accelerator_ready=accelerator_ready,
+                message="Checking/downloading user-managed LoRAs",
             )
             lora_results = sync_loras(CONFIG_ROOT / "loras.yaml")
-            _state(stage="loras_complete", loras=lora_results, core_ready=core_ready)
+            _state(
+                stage="loras_complete",
+                loras=lora_results,
+                core_ready=core_ready,
+                accelerator_ready=accelerator_ready,
+            )
 
         if do_models:
             _state(
                 stage="addons",
                 core_ready=core_ready,
-                message=(
-                    "Stock core ready; downloading Eros Max Beta5 INT8 last"
-                    if core_ready
-                    else "Downloading optional checkpoint addons"
-                ),
+                accelerator_ready=accelerator_ready,
+                message="Downloading/checking Eros Max Beta5 INT8 last",
             )
             addon_results = sync_models(manifest, phase="addon", progress=_progress_callback)
             addon_failed = [x for x in addon_results if x.get("status") == "error"]
@@ -140,31 +150,43 @@ def run() -> int:
             _state(
                 stage="addons_complete",
                 core_ready=core_ready,
+                accelerator_ready=accelerator_ready,
                 addon_ready=addon_ready,
                 addon_models=addon_results,
                 message=(
                     "Eros Max Beta5 INT8 ready"
                     if addon_ready
-                    else (f"{len(addon_failed)} optional model download(s) failed" if addon_failed else "Optional model provisioning complete")
+                    else (f"{len(addon_failed)} optional checkpoint download(s) failed" if addon_failed else "Optional model provisioning complete")
                 ),
             )
-        else:
-            addon_ready = False
 
-        all_models = core_results + addon_results
+        all_models = core_results + accelerator_results + addon_results
+        core_failed = [x for x in core_results if x.get("status") == "error"]
+        accelerator_failed = [x for x in accelerator_results if x.get("status") == "error"]
         addon_failed = [x for x in addon_results if x.get("status") == "error"]
-        status = "ready" if core_ready and not addon_failed else "ready_with_addon_errors" if core_ready else "degraded"
+        optional_failed = accelerator_failed + addon_failed
+
+        if core_ready and not optional_failed:
+            status = "ready"
+        elif core_ready:
+            status = "ready_with_optional_errors"
+        else:
+            status = "degraded"
+
+        changed = any(x.get("status") == "downloaded" for x in all_models)
         _state(
             status=status,
             stage="complete",
             core_ready=core_ready,
+            accelerator_ready=accelerator_ready,
             addon_ready=addon_ready,
             models=all_models,
             loras=lora_results,
+            models_changed=changed,
             message=(
                 "Provisioning complete"
                 if status == "ready"
-                else "Stock core ready; one or more optional models failed"
+                else "Stock core ready; one or more profile/addon files will be retried"
                 if core_ready
                 else "Provisioning completed with core model errors"
             ),
@@ -172,28 +194,35 @@ def run() -> int:
         dump_json(DATA_ROOT / "provisioning_report.json", {
             "status": status,
             "core_ready": core_ready,
+            "accelerator_ready": accelerator_ready,
             "addon_ready": addon_ready,
             "models": all_models,
             "loras": lora_results,
+            "models_changed": changed,
             "completed_at": time.time(),
         })
-        return 0 if core_ready else 2
+
+        if not core_ready:
+            return 2
+        if optional_failed:
+            return 3
+        return 0
     except Exception as exc:
         _state(
             status="degraded" if core_ready else "error",
             stage="failed",
             core_ready=core_ready,
+            accelerator_ready=accelerator_ready,
+            addon_ready=addon_ready,
             error=repr(exc),
             message=(
-                "Optional provisioning failed after stock core became ready"
+                "Provisioning hit a transient error after stock core became ready; supervisor will retry"
                 if core_ready
-                else "Provisioning failed"
+                else "Provisioning failed; supervisor will retry"
             ),
         )
         print("[mmh3] provisioner failed:", repr(exc), flush=True)
-        if core_ready:
-            return 0
-        return 1
+        return 3 if core_ready else 1
 
 
 if __name__ == "__main__":
