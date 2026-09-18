@@ -14,7 +14,10 @@ def test_provisioner_module_executes_and_returns_status():
     source = (ROOT / "runtime" / "mmh3" / "provisioner.py").read_text()
     assert "def run() -> int:" in source
     assert "raise SystemExit(run())" in source
-    assert "return 0 if core_ready else 2" in source
+    assert "if not core_ready:" in source
+    assert "return 2" in source
+    assert "if optional_failed:" in source
+    assert "return 3" in source
     assert "return 1" in source
 
 
