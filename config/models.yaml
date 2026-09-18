@@ -49,26 +49,6 @@ models:
     label: Stock H3 Ref2VA ConvRot INT8
     show_in_ui: true
 
-  fl2v_turbo_4step:
-    source: huggingface
-    repo_id: Kijai/MiniMax-H3_comfy
-    source_path: loras/minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors
-    destination: loras/minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors
-    min_size_mb: 500
-    phase: core
-    label: FL2V Turbo LoRA
-    show_in_ui: false
-
-  ref2v_turbo_4step:
-    source: huggingface
-    repo_id: lightx2v/Minimax-h3-Turbo
-    source_path: minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
-    destination: loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
-    min_size_mb: 500
-    phase: core
-    label: Ref2V Turbo LoRA
-    show_in_ui: false
-
   taeh3_preview:
     source: huggingface
     repo_id: Hearmeman/comfyui-template-assets
@@ -78,6 +58,46 @@ models:
     phase: core
     label: TAEH3 Preview Decoder
     show_in_ui: true
+
+  fl2v_turbo_4step:
+    source: huggingface
+    repo_id: lightx2v/Minimax-h3-Turbo
+    source_path: minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors
+    destination: loras/minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors
+    min_size_mb: 500
+    phase: accelerator
+    label: FL2V Fast Turbo 4-step v1.2 768p
+    show_in_ui: false
+
+  fl2v_turbo_8step:
+    source: huggingface
+    repo_id: lightx2v/Minimax-h3-Turbo
+    source_path: minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
+    destination: loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
+    min_size_mb: 500
+    phase: accelerator
+    label: FL2V Balanced Turbo 8-step v1.0 768p
+    show_in_ui: false
+
+  ref2v_turbo_4step:
+    source: huggingface
+    repo_id: lightx2v/Minimax-h3-Turbo
+    source_path: minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
+    destination: loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
+    min_size_mb: 500
+    phase: accelerator
+    label: Ref2V Fast Legacy Turbo 4-step v0.1
+    show_in_ui: false
+
+  ref2v_turbo_8step:
+    source: huggingface
+    repo_id: lightx2v/Minimax-h3-Turbo
+    source_path: minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
+    destination: loras/minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
+    min_size_mb: 500
+    phase: accelerator
+    label: Ref2V Balanced Turbo 8-step v1.0 768p
+    show_in_ui: false
 
   eros_beta5_int8:
     source: huggingface
