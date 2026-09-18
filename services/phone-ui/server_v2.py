@@ -459,16 +459,28 @@ async def api_generate(request: web.Request) -> web.Response:
         )
 
     profile_spec = _profile_spec(requested_mode, generation_profile)
-    turbo_path = _profile_path(profile_spec["lora"])
-    try:
-        turbo_ready = turbo_path.is_file() and turbo_path.stat().st_size >= 500 * 1024**2
-    except OSError:
-        turbo_ready = False
-    if not turbo_ready:
-        raise web.HTTPServiceUnavailable(
-            text=f"{generation_profile.title()} generation profile is still provisioning "
-                 f"({profile_spec['lora']}). Choose another ready profile or wait for this Turbo file to finish."
-        )
+    progress_rows = provisioning.get("model_progress") if isinstance(provisioning, dict) else None
+    profile_row_id = (
+        "ref2v_turbo_4step" if requested_mode == "r2v" and generation_profile == PROFILE_FAST
+        else "ref2v_turbo_8step" if requested_mode == "r2v"
+        else "fl2v_turbo_4step" if generation_profile == PROFILE_FAST
+        else "fl2v_turbo_8step"
+    )
+    # New images publish accelerator rows during bootstrap. Older persisted
+    # provisioning state did not know about generation profiles, so don't turn
+    # that legacy state into a false 503 before bootstrap refreshes it.
+    profile_managed = isinstance(progress_rows, dict) and profile_row_id in progress_rows
+    if profile_managed:
+        turbo_path = _profile_path(profile_spec["lora"])
+        try:
+            turbo_ready = turbo_path.is_file() and turbo_path.stat().st_size >= 500 * 1024**2
+        except OSError:
+            turbo_ready = False
+        if not turbo_ready:
+            raise web.HTTPServiceUnavailable(
+                text=f"{generation_profile.title()} generation profile is still provisioning "
+                     f"({profile_spec['lora']}). Choose another ready profile or wait for this Turbo file to finish."
+            )
 
     if checkpoint_choice == CHECKPOINT_EROS:
         eros_path = _checkpoint_path(EROS_BETA5_INT8)
