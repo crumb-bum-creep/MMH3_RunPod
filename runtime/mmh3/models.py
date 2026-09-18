@@ -316,7 +316,7 @@ def sync_models(
         return [sync_one(name, item) for name, item in entries]
 
     by_name: dict[str, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=min(workers, len(entries)), thread_name="mmh3-model") as pool:
+    with ThreadPoolExecutor(max_workers=min(workers, len(entries)), thread_name_prefix="mmh3-model") as pool:
         future_to_name = {pool.submit(sync_one, name, item): name for name, item in entries}
         for future in as_completed(future_to_name):
             name = future_to_name[future]
