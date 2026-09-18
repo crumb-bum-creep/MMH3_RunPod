@@ -18,7 +18,7 @@ def test_provisioner_module_executes_and_returns_status():
     assert "return 2" in source
     assert "if optional_failed:" in source
     assert "return 3" in source
-    assert "return 1" in source
+    assert "else 1" in source
 
 
 def test_default_lora_seed_is_reconstructable():
