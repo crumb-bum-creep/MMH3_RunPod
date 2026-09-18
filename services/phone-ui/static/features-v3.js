@@ -5,6 +5,8 @@
 (function(){
   const STOCK="stock_convrot_int8";
   const EROS="eros_beta5_int8";
+  const BALANCED="balanced";
+  const FAST="fast";
   state.endingImage=state.endingImage||null;
 
   function ensureUi(){
@@ -19,7 +21,21 @@
           <option value="${EROS}">Eros Max Beta5 INT8</option>
         </select>`;
       promptModes.insertAdjacentElement("afterend",block);
-      $("#baseCheckpoint").onchange=()=>{stashCurrentDraft();updateCheckpointAvailability();};
+      $("#baseCheckpoint").onchange=()=>{stashCurrentDraft();updateGenerationAvailability();};
+    }
+
+    if(!$("#generationProfile")){
+      const checkpoint=$("#baseCheckpoint")?.closest(".checkpoint-block");
+      const block=document.createElement("div");
+      block.className="checkpoint-block profile-block";
+      block.innerHTML=`
+        <div class="labelrow"><label for="generationProfile">Generation Profile</label><span id="profileStatus" class="muted">Checking…</span></div>
+        <select id="generationProfile">
+          <option value="${BALANCED}">Balanced · 8-step</option>
+          <option value="${FAST}">Fast · 4-step</option>
+        </select>`;
+      checkpoint?.insertAdjacentElement("afterend",block);
+      $("#generationProfile").onchange=()=>{stashCurrentDraft();updateGenerationAvailability();};
     }
 
     if(!$("#endSelected")){
@@ -97,22 +113,61 @@
     return !!(state.info?.provisioning?.addon_ready || row?.status==="ready");
   }
 
-  function updateCheckpointAvailability(){
-    const sel=$("#baseCheckpoint"), status=$("#checkpointStatus");
+  function profileRowId(){
+    const profile=$("#generationProfile")?.value||BALANCED;
+    if(state.mode==="r2v") return profile===FAST?"ref2v_turbo_4step":"ref2v_turbo_8step";
+    return profile===FAST?"fl2v_turbo_4step":"fl2v_turbo_8step";
+  }
+
+  function profileReady(){
+    const p=state.info?.provisioning||{};
+    const row=(p.model_progress||{})[profileRowId()];
+    return !!(p.accelerator_ready || row?.status==="ready");
+  }
+
+  function updateProfileLabels(){
+    const sel=$("#generationProfile");
     if(!sel)return;
-    const ready=erosReady();
-    const option=[...sel.options].find(x=>x.value===EROS);
-    if(option)option.textContent=ready?"Eros Max Beta5 INT8":"Eros Max Beta5 INT8 · provisioning";
-    if(status){
-      if(sel.value===EROS) status.textContent=ready?"Eros ready":"Eros still downloading";
-      else status.textContent="Stock H3 ConvRot";
+    const balanced=[...sel.options].find(x=>x.value===BALANCED);
+    const fast=[...sel.options].find(x=>x.value===FAST);
+    if(state.mode==="r2v"){
+      if(balanced)balanced.textContent="Balanced · Ref2V 8-step v1.0";
+      if(fast)fast.textContent="Fast · Ref2V 4-step v0.1 legacy";
+    }else{
+      if(balanced)balanced.textContent="Balanced · FL2V 8-step v1.0";
+      if(fast)fast.textContent="Fast · FL2V 4-step v1.2";
     }
+  }
+
+  function updateGenerationAvailability(){
+    const checkpoint=$("#baseCheckpoint"), checkpointStatus=$("#checkpointStatus");
+    if(!checkpoint)return;
+    const erosOk=erosReady();
+    const erosOption=[...checkpoint.options].find(x=>x.value===EROS);
+    if(erosOption)erosOption.textContent=erosOk?"Eros Max Beta5 INT8":"Eros Max Beta5 INT8 · provisioning";
+    if(checkpointStatus){
+      if(checkpoint.value===EROS) checkpointStatus.textContent=erosOk?"Eros ready":"Eros still downloading";
+      else checkpointStatus.textContent="Stock H3 ConvRot";
+    }
+
+    updateProfileLabels();
+    const turboOk=profileReady();
+    const profile=$("#generationProfile");
+    const profileStatus=$("#profileStatus");
+    if(profileStatus){
+      const label=profile?.value===FAST?"Fast":"Balanced";
+      profileStatus.textContent=turboOk?label+" ready":label+" Turbo provisioning";
+    }
+
     const p=state.info?.provisioning||{};
     const button=$("#generate");
     if(button && p.core_ready){
-      if(sel.value===EROS && !ready){
+      if(checkpoint.value===EROS && !erosOk){
         button.disabled=true;
         button.textContent="Eros checkpoint provisioning…";
+      }else if(!turboOk){
+        button.disabled=true;
+        button.textContent=(profile?.value===FAST?"Fast":"Balanced")+" profile provisioning…";
       }else{
         button.disabled=false;
         button.textContent="Queue Generation";
@@ -139,10 +194,13 @@
       if(total>0){knownTotal+=total;knownDone+=Math.min(done,total);}else if(row.status!=="ready"){allKnown=false;}
     }
     const overall=knownTotal&&allKnown?Math.min(100,knownDone/knownTotal*100):null;
+    const accelRows=Object.values(p.model_progress||{}).filter(x=>x?.phase==="accelerator");
+    const accelReady=accelRows.filter(x=>x.status==="ready").length;
     $("#provisioningOverall").innerHTML=`
       <div class="progress-head"><span>${p.core_ready?"Stock core ready · generation unlocked":"Provisioning stock core"}</span><strong>${overall==null?"":pct(overall)}</strong></div>
       <div class="progress"><div style="width:${overall==null?0:overall}%"></div></div>
-      <div class="muted provision-message">${esc(p.message||"")}</div>`;
+      <div class="muted provision-message">${esc(p.message||"")}</div>
+      ${accelRows.length?`<div class="muted provision-message">Turbo profiles: ${accelReady}/${accelRows.length} files ready</div>`:""}`;
 
     host.innerHTML=rows.map(row=>{
       const total=Number(row.total_bytes||0), done=Number(row.downloaded_bytes||0);
@@ -164,6 +222,7 @@
   captureDraft=function(){
     const v=originalCapture();
     v.base_checkpoint=$("#baseCheckpoint")?.value||STOCK;
+    v.generation_profile=$("#generationProfile")?.value||BALANCED;
     v.ending_image=state.endingImage||null;
     return v;
   };
@@ -174,8 +233,10 @@
     state.endingImage=v.ending_image||null;
     const sel=$("#baseCheckpoint");
     if(sel)sel.value=[STOCK,EROS].includes(v.base_checkpoint)?v.base_checkpoint:STOCK;
+    const profile=$("#generationProfile");
+    if(profile)profile.value=[BALANCED,FAST].includes(v.generation_profile)?v.generation_profile:BALANCED;
     renderEndingImage();
-    updateCheckpointAvailability();
+    updateGenerationAvailability();
   };
 
   const originalLoadAssets=loadAssets;
@@ -207,11 +268,11 @@
   refreshInfo=async function(){
     await originalRefreshInfo();
     renderProvisioning();
-    updateCheckpointAvailability();
+    updateGenerationAvailability();
   };
 
   renderEndingImage();
   renderProvisioning();
-  updateCheckpointAvailability();
+  updateGenerationAvailability();
   setTimeout(()=>refreshInfo(),100);
 })();

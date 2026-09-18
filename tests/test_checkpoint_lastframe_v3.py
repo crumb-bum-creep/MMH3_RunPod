@@ -26,6 +26,22 @@ def base_graph(mode="i2v", prompt_mode="auto"):
         "10": {"class_type": "UNETLoader", "inputs": {"unet_name": "old.safetensors"}},
         "20": {"class_type": "MiniMaxH3ImageToVideo", "inputs": {"first_frame": ["30", 0]}},
         "30": {"class_type": "LoadImage", "inputs": {"image": "start.png"}},
+        "50": {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {"lora_name": "old-turbo.safetensors", "strength_model": 0.5, "model": ["10", 0]},
+            "_meta": {"title": "Generation Profile Turbo LoRA (Balanced default)"},
+        },
+        "51": {
+            "class_type": "MiniMaxH3SigmaShift",
+            "inputs": {"model": ["50", 0], "shift_video": 6.0, "shift_audio": 3.0},
+        },
+        "52": {
+            "class_type": "BasicScheduler",
+            "inputs": {"model": ["51", 0], "scheduler": "simple", "steps": 8, "denoise": 1.0},
+        },
+        "53": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "54": {"class_type": "BasicGuider", "inputs": {"model": ["51", 0]}},
+        "55": {"class_type": "SamplerCustomAdvanced", "inputs": {"sigmas": ["52", 0]}},
     }
     if prompt_mode == "auto":
         graph["40"] = {"class_type": "OpenRouterNode", "inputs": {"image_1": ["30", 0]}}
@@ -53,6 +69,13 @@ def test_eros_i2v_patches_unet_last_frame_and_openrouter(monkeypatch):
     assert graph["40"]["inputs"]["image_2"] == [last_id, 0]
     assert record["base_checkpoint"] == wrapper.CHECKPOINT_EROS
     assert record["base_checkpoint_file"] == wrapper.EROS_BETA5_INT8
+    assert record["generation_profile"] == wrapper.PROFILE_BALANCED
+    assert record["turbo_lora"] == wrapper.FL2V_BALANCED
+    assert graph["50"]["inputs"]["lora_name"] == wrapper.FL2V_BALANCED
+    assert graph["50"]["inputs"]["strength_model"] == 1.0
+    assert graph["51"]["inputs"]["shift_video"] == 6.0
+    assert graph["52"]["inputs"]["steps"] == 8
+    assert graph["53"]["inputs"]["sampler_name"] == "euler"
     assert record["ending_image"] == "ending.png"
 
 
@@ -84,3 +107,51 @@ def test_end_frame_rejected_outside_i2v(monkeypatch):
         assert "only supported for I2V" in exc.text
     else:
         raise AssertionError("expected I2V-only ending-image validation")
+
+
+def test_fast_fl2v_uses_v12_four_step_recipe(monkeypatch):
+    wrapper = load_wrapper()
+    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("t2v", "custom"))
+
+    graph, record = wrapper.patch_workflow_v3({
+        "mode": "t2v",
+        "prompt_mode": "custom",
+        "generation_profile": "fast",
+    })
+
+    assert record["generation_profile"] == wrapper.PROFILE_FAST
+    assert record["turbo_lora"] == wrapper.FL2V_FAST
+    assert graph["50"]["inputs"]["lora_name"] == wrapper.FL2V_FAST
+    assert graph["50"]["inputs"]["strength_model"] == 1.0
+    assert graph["51"]["inputs"]["shift_video"] == 6.0
+    assert graph["51"]["inputs"]["shift_audio"] == 3.0
+    assert graph["52"]["inputs"]["scheduler"] == "simple"
+    assert graph["52"]["inputs"]["steps"] == 4
+    assert graph["53"]["inputs"]["sampler_name"] == "euler"
+
+
+def test_fast_r2v_preserves_legacy_four_step_recipe(monkeypatch):
+    wrapper = load_wrapper()
+    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("r2v", "custom"))
+
+    graph, record = wrapper.patch_workflow_v3({
+        "mode": "r2v",
+        "prompt_mode": "custom",
+        "generation_profile": "fast",
+    })
+
+    assert record["generation_profile"] == wrapper.PROFILE_FAST
+    assert record["turbo_lora"] == wrapper.REF2V_FAST
+    assert graph["50"]["inputs"]["lora_name"] == wrapper.REF2V_FAST
+    assert graph["50"]["inputs"]["strength_model"] == 0.85
+    assert graph["53"]["inputs"]["sampler_name"] == "seeds_2"
+
+    beta = next((nid, n) for nid, n in graph.items() if n.get("class_type") == "BetaSamplingScheduler")
+    extend = next((nid, n) for nid, n in graph.items() if n.get("class_type") == "ExtendIntermediateSigmas")
+    assert beta[1]["inputs"]["steps"] == 4
+    assert beta[1]["inputs"]["alpha"] == 0.6
+    assert beta[1]["inputs"]["beta"] == 0.6
+    assert extend[1]["inputs"]["steps"] == 2
+    assert extend[1]["inputs"]["start_at_sigma"] == 0.8
+    assert graph["54"]["inputs"]["model"] == ["50", 0]
+    assert graph["55"]["inputs"]["sigmas"] == [extend[0], 0]

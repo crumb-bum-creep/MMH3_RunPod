@@ -149,7 +149,18 @@ def main() -> int:
 
     STOP.wait(3)
     provision_proc = start_provisioner()
-    startup_mark(provisioner_started=True)
+    provision_attempt = 1
+    provision_retry_at = 0.0
+    provision_cfg = runtime.get("provisioning") or {}
+    try:
+        provision_max_attempts = max(1, int(provision_cfg.get("retry_attempts", 3)))
+    except (TypeError, ValueError):
+        provision_max_attempts = 3
+    try:
+        provision_backoff = max(2.0, float(provision_cfg.get("retry_backoff_seconds", 8)))
+    except (TypeError, ValueError):
+        provision_backoff = 8.0
+    startup_mark(provisioner_started=True, provisioner_attempt=provision_attempt)
 
     comfy_ready = comfy.wait_ready(180)
     startup_mark(comfy_ready=comfy_ready, comfy_ready_seconds=round(time.time() - START_EPOCH, 3))
@@ -176,11 +187,36 @@ def main() -> int:
                 comfy_proc = start_comfy()
                 comfy.wait_ready(240)
         if provision_proc is not None and provision_proc.poll() is not None:
-            # Provisioning is a one-shot task. Successful completion stays stopped;
-            # failures are visible in the UI/log and can be retried with mmh3 sync-*.
-            if provision_proc.returncode != 0:
-                print(f"[mmh3] background provisioner exited rc={provision_proc.returncode}; see provisioning.log", flush=True)
+            rc = provision_proc.returncode
             provision_proc = None
+            if rc != 0 and provision_attempt < provision_max_attempts:
+                delay = min(60.0, provision_backoff * (2 ** (provision_attempt - 1)))
+                provision_retry_at = time.time() + delay
+                print(
+                    f"[mmh3] background provisioner exited rc={rc}; retry "
+                    f"{provision_attempt + 1}/{provision_max_attempts} in {delay:.0f}s",
+                    flush=True,
+                )
+                startup_mark(provisioner_retry_scheduled=True, provisioner_retry_in_seconds=delay)
+            elif rc != 0:
+                print(
+                    f"[mmh3] background provisioner exhausted {provision_max_attempts} attempt(s) rc={rc}; "
+                    "see provisioning.log",
+                    flush=True,
+                )
+                startup_mark(provisioner_retry_exhausted=True)
+            else:
+                provision_retry_at = 0.0
+                startup_mark(provisioner_complete=True)
+        if provision_proc is None and provision_retry_at and time.time() >= provision_retry_at:
+            provision_attempt += 1
+            provision_retry_at = 0.0
+            provision_proc = start_provisioner()
+            startup_mark(
+                provisioner_started=True,
+                provisioner_attempt=provision_attempt,
+                provisioner_retry_scheduled=False,
+            )
         if phone_proc is not None and phone_proc.poll() is not None:
             print(f"[mmh3] Phone UI exited rc={phone_proc.returncode}; restarting", flush=True)
             phone_proc = start_phone()

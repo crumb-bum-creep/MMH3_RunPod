@@ -110,3 +110,42 @@ This makes the d2103 server an explicit rollback/reference layer while allowing 
 ## Development rule from here
 
 Treat the d2103 continuation lineage as authoritative. Before bringing over any code from the former post-d2103 `main`, inspect the exact change and port only the desired behavior intentionally. Do not assume a numerically newer commit is a better MMH3 baseline.
+
+
+## 2026-09-18 resilient provisioning + generation profiles
+
+This iteration continues from the deployed `sha-d44f924e57fa` feature image plus the targeted `233700d` provisioning-telemetry fix. It does not reintroduce the discarded post-d2103 lineage wholesale.
+
+### Warm-start and migration-safe provisioning
+
+Bootstrap now performs a network-free inventory of the persistent model volume before starting services. If the stock core is already present, `core_ready` is restored immediately instead of being reset to false on every container start. The background provisioner still verifies the inventory and repairs missing files.
+
+Model verification is stronger than the old minimum-size check:
+
+- reuse the exact byte size recorded by the last successful provisioning report when available;
+- query Hugging Face metadata in the background and require the exact remote size when available;
+- detect broken symlinks and partial/truncated final files;
+- wait briefly before repairing a wrong-size existing file so an active RunPod volume restore is not deleted mid-transfer;
+- preserve Hugging Face's resumable local-download behavior;
+- touch model directories after verification/download so ComfyUI's directory-mtime model cache notices restored files without requiring a manual Comfy restart.
+
+The supervisor gives failed background provisioning a bounded retry window rather than permanently giving up after the first transient failure. Default: 3 attempts with exponential backoff starting at 8 seconds.
+
+### Accelerated generation profiles
+
+`base_checkpoint` and `generation_profile` are independent selectors. The base checkpoint remains Stock ConvRot INT8 or Eros Max Beta5 INT8; the generation profile chooses the LightX2V Turbo recipe.
+
+| Mode | Profile | Turbo file | Strength | Steps | Video/audio shift | Sampler / scheduler |
+| --- | --- | --- | ---: | ---: | --- | --- |
+| T2V / I2V | Balanced (default) | `minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` | 1.0 | 8 | 6 / 3 | Euler / Simple |
+| T2V / I2V | Fast | `minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors` | 1.0 | 4 | 6 / 3 | Euler / Simple |
+| R2V | Balanced (default) | `minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` | 1.0 | 8 | 12 / 3 | Euler / Simple |
+| R2V | Fast / legacy | `minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` | 0.85 | 4 | legacy v0.1 path | seeds_2 + Beta/Extend |
+
+The R2V Fast path intentionally preserves the old production recipe so Fast-v0.1 vs Balanced-v1.0 remains a meaningful comparison. The six bundled standalone Comfy workflows use Balanced defaults; Phone UI can queue either profile without rewriting the stored workflow files.
+
+Turbo files are provisioned in an `accelerator` phase after the stock core and before user-managed LoRAs. The stock core can unlock generation while accelerators continue; queue admission separately verifies the Turbo file required by the selected profile. Eros remains the final addon phase.
+
+The older FL2V 4-step v0.1 file is no longer a managed download. Existing persistent copies are not deleted automatically.
+
+The Alibaba PAI/Kijai Ref2VA PDD accelerator remains experimental and is not part of the default image.

@@ -17,6 +17,7 @@ from .common import (
 )
 from .hardware import detect, select_profile
 from .comfy import configure_persistent_paths
+from .models import local_model_progress, phase_ready
 
 
 def copy_default_configs() -> None:
@@ -77,19 +78,38 @@ def main() -> int:
     memory_cfg = dict(runtime.get("memory") or {})
     memory_cfg.update((profile.get("memory") or {}))
 
+    manifest = IMAGE_ROOT / "config" / "models.yaml"
+    model_progress = local_model_progress(manifest)
+    core_ready = phase_ready(model_progress, "core")
+    accelerator_ready = phase_ready(model_progress, "accelerator")
+    addon_ready = phase_ready(model_progress, "addon")
+
     dump_json(STATE_ROOT / "hardware.json", {**hardware.to_dict(), "profile": profile_name})
     dump_json(STATE_ROOT / "effective_memory_policy.json", memory_cfg)
     dump_json(STATE_ROOT / "provisioning.json", {
-        "status": "pending",
-        "stage": "waiting_for_background_provisioner",
-        "core_ready": False,
+        "status": "pending_verification",
+        "stage": "local_core_ready" if core_ready else "waiting_for_background_provisioner",
+        "core_ready": core_ready,
+        "accelerator_ready": accelerator_ready,
+        "addon_ready": addon_ready,
+        "model_progress": model_progress,
+        "message": (
+            "Existing stock core detected; generation may start while background verification runs"
+            if core_ready
+            else "Core models are missing or incomplete; background provisioning will repair them"
+        ),
     })
 
     results = {
         "hardware": {**hardware.to_dict(), "profile": profile_name},
         "custom_nodes": custom_node_report(),
         "workflows": install_workflows(),
-        "provisioning": "deferred_to_background",
+        "provisioning": {
+            "mode": "deferred_to_background",
+            "local_core_ready": core_ready,
+            "local_accelerator_ready": accelerator_ready,
+            "local_addon_ready": addon_ready,
+        },
     }
     dump_json(DATA_ROOT / "boot_report.json", results)
 
