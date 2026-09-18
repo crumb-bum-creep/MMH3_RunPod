@@ -17,7 +17,7 @@ except ImportError:  # development/test checkout before runtime overlay
 
 import output_indexer
 
-APP_VERSION = "0.8.0-mmH3-checkpoints-provisioning"
+APP_VERSION = "0.9.0-mmH3-profiles-resilient-provisioning"
 LIBRARY_FILE = base.DATA_ROOT / "output_library.json"
 INDEX_FILE = output_indexer.INDEX_FILE
 _real_free_memory = base.comfy.free_memory
@@ -29,6 +29,13 @@ STOCK_REF2VA = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
 EROS_BETA5_INT8 = "10Eros_Max_h3_hybrid_beta5_int8.safetensors"
 CHECKPOINT_STOCK = "stock_convrot_int8"
 CHECKPOINT_EROS = "eros_beta5_int8"
+
+PROFILE_BALANCED = "balanced"
+PROFILE_FAST = "fast"
+FL2V_FAST = "minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors"
+FL2V_BALANCED = "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
+REF2V_FAST = "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+REF2V_BALANCED = "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
 
 
 def _load_library() -> dict[str, Any]:
@@ -113,6 +120,183 @@ def _checkpoint_path(filename: str) -> Path:
     return base.COMFY_PERSIST / "models" / "diffusion_models" / filename
 
 
+def _generation_profile(payload: dict[str, Any]) -> str:
+    raw = str(payload.get("generation_profile") or PROFILE_BALANCED).strip().lower()
+    aliases = {
+        "balanced": PROFILE_BALANCED,
+        "quality": PROFILE_BALANCED,
+        "8step": PROFILE_BALANCED,
+        "fast": PROFILE_FAST,
+        "legacy": PROFILE_FAST,
+        "4step": PROFILE_FAST,
+    }
+    choice = aliases.get(raw)
+    if not choice:
+        raise web.HTTPBadRequest(text=f"unknown generation profile: {raw}")
+    return choice
+
+
+def _profile_spec(mode: str, profile: str) -> dict[str, Any]:
+    if mode == "r2v":
+        if profile == PROFILE_FAST:
+            return {
+                "lora": REF2V_FAST,
+                "strength": 0.85,
+                "steps": 4,
+                "sampler": "seeds_2",
+                "legacy": True,
+                "shift_video": 12.0,
+                "shift_audio": 3.0,
+                "scheduler": "legacy_beta",
+            }
+        return {
+            "lora": REF2V_BALANCED,
+            "strength": 1.0,
+            "steps": 8,
+            "sampler": "euler",
+            "legacy": False,
+            "shift_video": 12.0,
+            "shift_audio": 3.0,
+            "scheduler": "simple",
+        }
+
+    if profile == PROFILE_FAST:
+        return {
+            "lora": FL2V_FAST,
+            "strength": 1.0,
+            "steps": 4,
+            "sampler": "euler",
+            "legacy": False,
+            "shift_video": 6.0,
+            "shift_audio": 3.0,
+            "scheduler": "simple",
+        }
+    return {
+        "lora": FL2V_BALANCED,
+        "strength": 1.0,
+        "steps": 8,
+        "sampler": "euler",
+        "legacy": False,
+        "shift_video": 6.0,
+        "shift_audio": 3.0,
+        "scheduler": "simple",
+    }
+
+
+def _profile_path(filename: str) -> Path:
+    return base.COMFY_PERSIST / "models" / "loras" / filename
+
+
+def _profile_turbo_node(graph: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    nodes = base.find_nodes(graph, "LoraLoaderModelOnly")
+    if not nodes:
+        raise web.HTTPServiceUnavailable(text="workflow has no generation-profile Turbo LoRA node")
+    for nid, node in nodes:
+        title = str((node.get("_meta") or {}).get("title") or "").lower()
+        if "turbo" in title or "generation profile" in title:
+            return nid, node
+    return nodes[0]
+
+
+def _ensure_profile_node(
+    graph: dict[str, Any],
+    class_type: str,
+    prefix: str,
+    title: str,
+) -> tuple[str, dict[str, Any]]:
+    nodes = base.find_nodes(graph, class_type)
+    if nodes:
+        return nodes[0]
+    nid = _next_node_id(graph, prefix)
+    graph[nid] = {"inputs": {}, "class_type": class_type, "_meta": {"title": title}}
+    return nid, graph[nid]
+
+
+def _patch_generation_profile(
+    graph: dict[str, Any],
+    mode: str,
+    profile: str,
+) -> dict[str, Any]:
+    spec = _profile_spec(mode, profile)
+    turbo_id, turbo = _profile_turbo_node(graph)
+    inp = turbo.setdefault("inputs", {})
+    inp["lora_name"] = spec["lora"]
+    inp["strength_model"] = spec["strength"]
+    turbo.setdefault("_meta", {})["title"] = (
+        "Generation Profile Turbo LoRA · Fast"
+        if profile == PROFILE_FAST
+        else "Generation Profile Turbo LoRA · Balanced"
+    )
+
+    for _, node in base.find_nodes(graph, "KSamplerSelect"):
+        node.setdefault("inputs", {})["sampler_name"] = spec["sampler"]
+
+    guiders = base.find_nodes(graph, "BasicGuider")
+    samplers = base.find_nodes(graph, "SamplerCustomAdvanced")
+    if not guiders or not samplers:
+        raise web.HTTPServiceUnavailable(text="workflow is missing profile sampler/guider nodes")
+
+    if spec["legacy"]:
+        beta_id, beta = _ensure_profile_node(
+            graph, "BetaSamplingScheduler", "mmh3_fast_beta", "Fast Legacy Beta Scheduler"
+        )
+        beta["inputs"] = {
+            "steps": 4,
+            "alpha": 0.6,
+            "beta": 0.6,
+            "model": [turbo_id, 0],
+        }
+        extend_id, extend = _ensure_profile_node(
+            graph, "ExtendIntermediateSigmas", "mmh3_fast_sigmas", "Fast Legacy Sigma Extension"
+        )
+        extend["inputs"] = {
+            "steps": 2,
+            "start_at_sigma": 0.8,
+            "end_at_sigma": 0,
+            "spacing": "linear",
+            "sigmas": [beta_id, 0],
+        }
+        for _, node in guiders:
+            node.setdefault("inputs", {})["model"] = [turbo_id, 0]
+        for _, node in samplers:
+            node.setdefault("inputs", {})["sigmas"] = [extend_id, 0]
+    else:
+        shift_id, shift = _ensure_profile_node(
+            graph, "MiniMaxH3SigmaShift", "mmh3_profile_shift", "Generation Profile Sigma Shift"
+        )
+        shift["inputs"] = {
+            "model": [turbo_id, 0],
+            "shift_video": spec["shift_video"],
+            "shift_audio": spec["shift_audio"],
+        }
+        shift.setdefault("_meta", {})["title"] = (
+            "Generation Profile Sigma Shift · Fast"
+            if profile == PROFILE_FAST
+            else "Generation Profile Sigma Shift · Balanced"
+        )
+
+        scheduler_id, scheduler = _ensure_profile_node(
+            graph, "BasicScheduler", "mmh3_profile_scheduler", "Generation Profile Scheduler"
+        )
+        scheduler["inputs"] = {
+            "model": [shift_id, 0],
+            "scheduler": "simple",
+            "steps": spec["steps"],
+            "denoise": 1.0,
+        }
+        scheduler.setdefault("_meta", {})["title"] = (
+            "Generation Profile Scheduler · Fast"
+            if profile == PROFILE_FAST
+            else "Generation Profile Scheduler · Balanced"
+        )
+        for _, node in guiders:
+            node.setdefault("inputs", {})["model"] = [shift_id, 0]
+        for _, node in samplers:
+            node.setdefault("inputs", {})["sigmas"] = [scheduler_id, 0]
+
+    return spec
+
+
 def _next_node_id(graph: dict[str, Any], prefix: str) -> str:
     candidate = prefix
     suffix = 1
@@ -129,12 +313,15 @@ def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str
     prompt_mode = str(payload.get("prompt_mode") or "custom").lower()
     choice = _checkpoint_choice(payload)
     checkpoint = _checkpoint_filename(mode, choice)
+    generation_profile = _generation_profile(payload)
 
     unets = base.find_nodes(graph, "UNETLoader")
     if not unets:
         raise web.HTTPServiceUnavailable(text="workflow has no UNETLoader node")
     for _, node in unets:
         node.setdefault("inputs", {})["unet_name"] = checkpoint
+
+    profile_spec = _patch_generation_profile(graph, mode, generation_profile)
 
     ending_image = str(payload.get("ending_image") or "").strip()
     if ending_image and mode != "i2v":
@@ -160,6 +347,13 @@ def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str
 
     record["base_checkpoint"] = choice
     record["base_checkpoint_file"] = checkpoint
+    record["generation_profile"] = generation_profile
+    record["turbo_lora"] = profile_spec["lora"]
+    record["turbo_steps"] = profile_spec["steps"]
+    record["turbo_sampler"] = profile_spec["sampler"]
+    record["turbo_scheduler"] = profile_spec["scheduler"]
+    record["turbo_shift_video"] = profile_spec["shift_video"]
+    record["turbo_shift_audio"] = profile_spec["shift_audio"]
     record["ending_image"] = ending_image or None
     return graph, record
 
@@ -228,6 +422,7 @@ async def api_generate(request: web.Request) -> web.Response:
     requested_mode = str(payload.get("mode") or "t2v").lower()
     requested_family = "ref2v" if requested_mode == "r2v" else "fl2v"
     checkpoint_choice = _checkpoint_choice(payload)
+    generation_profile = _generation_profile(payload)
 
     try:
         async with app["session"].get(f"{app['comfy']}/queue") as r:
@@ -261,6 +456,18 @@ async def api_generate(request: web.Request) -> web.Response:
         raise web.HTTPServiceUnavailable(
             text=f"{message} (status={status}, stage={stage}). "
                  "You can keep using the UI; generation will unlock automatically when stock core models are ready."
+        )
+
+    profile_spec = _profile_spec(requested_mode, generation_profile)
+    turbo_path = _profile_path(profile_spec["lora"])
+    try:
+        turbo_ready = turbo_path.is_file() and turbo_path.stat().st_size >= 500 * 1024**2
+    except OSError:
+        turbo_ready = False
+    if not turbo_ready:
+        raise web.HTTPServiceUnavailable(
+            text=f"{generation_profile.title()} generation profile is still provisioning "
+                 f"({profile_spec['lora']}). Choose another ready profile or wait for this Turbo file to finish."
         )
 
     if checkpoint_choice == CHECKPOINT_EROS:
