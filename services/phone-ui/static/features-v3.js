@@ -8,6 +8,7 @@
   const BALANCED="balanced";
   const FAST="fast";
   state.endingImage=state.endingImage||null;
+  state.runtimeControls=state.runtimeControls||{memory_protection:true,output_naming_template:"MMH3/{mode}"};
 
   function ensureUi(){
     if(!$("#baseCheckpoint")){
@@ -70,7 +71,7 @@
 
     if(!$("#modelProvisioning")){
       const system=$("#tab-system");
-      const cards=$$(".card",system);
+      const cards=$(".card",system);
       const card=document.createElement("div");
       card.className="card";
       card.innerHTML=`
@@ -79,6 +80,53 @@
         <div id="modelProvisioning" class="model-provisioning stack"></div>`;
       if(cards[0])cards[0].insertAdjacentElement("afterend",card); else system.prepend(card);
     }
+
+    if(!$("#runtimeControlsVNext")){
+      const system=$("#tab-system");
+      const card=document.createElement("div");
+      card.className="card";
+      card.id="runtimeControlsVNext";
+      card.innerHTML=`
+        <div class="labelrow"><div><strong>Runtime controls</strong><div class="muted">Persistent across pod migrations.</div></div></div>
+        <label class="check"><input id="memoryProtectionToggle" type="checkbox" checked> Memory protection <span class="muted">blocks unsafe cross-family queueing and enables automatic RAM cleanup</span></label>
+        <label for="outputNamingTemplate">Output naming template</label>
+        <input id="outputNamingTemplate" value="MMH3/{mode}" placeholder="MMH3/{mode}">
+        <div class="muted">Tokens: {mode} {prompt_mode} {profile} {checkpoint} {seed} {date} {time}</div>
+        <div class="media-row"><button id="saveRuntimeControls" class="secondary" type="button">Save runtime controls</button><span id="runtimeControlsStatus" class="muted"></span></div>`;
+      system.appendChild(card);
+      $("#memoryProtectionToggle").onchange=()=>saveRuntimeControls({memory_protection:$("#memoryProtectionToggle").checked});
+      $("#saveRuntimeControls").onclick=()=>saveRuntimeControls({output_naming_template:$("#outputNamingTemplate").value});
+    }
+  }
+
+  async function loadRuntimeControls(){
+    try{
+      const value=await api("/api/runtime-controls");
+      state.runtimeControls=value||state.runtimeControls;
+      const mem=$("#memoryProtectionToggle");
+      if(mem)mem.checked=value.memory_protection!==false;
+      const naming=$("#outputNamingTemplate");
+      if(naming)naming.value=value.output_naming_template||"MMH3/{mode}";
+      const status=$("#runtimeControlsStatus");
+      if(status)status.textContent=value.memory_protection===false?"Protection OFF":"Protection ON";
+    }catch(e){
+      const status=$("#runtimeControlsStatus");
+      if(status)status.textContent="Unavailable";
+    }
+  }
+
+  async function saveRuntimeControls(update){
+    try{
+      const value=await api("/api/runtime-controls",{method:"PUT",body:update});
+      state.runtimeControls=value;
+      const mem=$("#memoryProtectionToggle");
+      if(mem)mem.checked=value.memory_protection!==false;
+      const naming=$("#outputNamingTemplate");
+      if(naming)naming.value=value.output_naming_template||"MMH3/{mode}";
+      const status=$("#runtimeControlsStatus");
+      if(status)status.textContent=value.memory_protection===false?"Protection OFF":"Saved";
+      toast("Runtime controls saved");
+    }catch(e){toast(e.message);}
   }
 
   function renderEndingImage(){
@@ -275,4 +323,5 @@
   renderProvisioning();
   updateGenerationAvailability();
   setTimeout(()=>refreshInfo(),100);
+  setTimeout(()=>loadRuntimeControls(),150);
 })();
