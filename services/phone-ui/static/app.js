@@ -555,7 +555,7 @@ function reuseExactSnapshot(v){
     prompt_mode:"custom",
     prompt:v.actual_prompt||v.prompt||v.prompt_idea||"",
     prompt_idea:"",
-    generation_profile:v.generation_profile||"legacy_exact",
+    generation_profile:v.generation_profile||(v.mode==="r2v"?"legacy_exact":"balanced8"),
     randomize_seed:false
   };
   applySnapshot(exact);

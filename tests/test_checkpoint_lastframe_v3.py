@@ -195,3 +195,26 @@ def test_generation_overrides_change_sampler_and_disable_extend(monkeypatch):
     assert beta[1]["inputs"]["alpha"] == 0.7
     assert graph["55"]["inputs"]["sigmas"] == [beta[0], 0]
     assert record["generation_settings"]["extend_enabled"] is False
+
+
+def test_i2v_ignores_advanced_generation_overrides(monkeypatch):
+    wrapper = load_wrapper()
+    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("i2v", "custom"))
+
+    graph, record = wrapper.patch_workflow_v3({
+        "mode": "i2v",
+        "prompt_mode": "custom",
+        "generation_profile": "balanced8",
+        "generation_settings": {
+            "sampler": "seeds_2",
+            "schedule_type": "beta",
+            "steps": 4,
+            "strength": 0.5,
+        },
+    })
+
+    assert record["generation_settings"]["sampler"] == "euler"
+    assert record["generation_settings"]["schedule_type"] == "basic"
+    assert record["generation_settings"]["steps"] == 8
+    assert record["generation_settings"]["strength"] == 1.0
+    assert graph["150"]["inputs"]["sampler_name"] == "euler"

@@ -26,23 +26,6 @@ modes:
         shift_video: 6.0
         shift_audio: 3.0
         ref_image_size: max
-      legacy_exact:
-        label: Legacy Exact · FL2V v0.1
-        turbo_lora: minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors
-        strength: 0.5
-        steps: 8
-        sampler: euler
-        schedule_type: beta
-        beta_alpha: 0.79
-        beta_beta: 0.5
-        extend_enabled: true
-        extend_steps: 3
-        extend_start: 0.8
-        extend_end: 0.0
-        extend_spacing: linear
-        shift_video: 6.0
-        shift_audio: 3.0
-        ref_image_size: max
 
   i2v:
     default: balanced8
@@ -66,23 +49,6 @@ modes:
         sampler: euler
         schedule_type: basic
         scheduler: simple
-        shift_video: 6.0
-        shift_audio: 3.0
-        ref_image_size: max
-      legacy_exact:
-        label: Legacy Exact · FL2V v0.1
-        turbo_lora: minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors
-        strength: 0.5
-        steps: 8
-        sampler: euler
-        schedule_type: beta
-        beta_alpha: 0.79
-        beta_beta: 0.5
-        extend_enabled: true
-        extend_steps: 3
-        extend_start: 0.8
-        extend_end: 0.0
-        extend_spacing: linear
         shift_video: 6.0
         shift_audio: 3.0
         ref_image_size: max

@@ -38,7 +38,12 @@ def test_old_profile_aliases_map_without_rewriting_history():
     assert resolve_profile("r2v", "fast")["profile_id"] == "legacy_exact"
     assert resolve_profile("t2v", "fast")["profile_id"] == "fast4"
     assert resolve_profile("i2v", "fast")["profile_id"] == "fast4"
-    assert resolve_profile("t2v", "legacy")["profile_id"] == "legacy_exact"
+    try:
+        resolve_profile("t2v", "legacy")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("T2V legacy profile should not exist in vNext")
 
 
 def test_advanced_overrides_are_bounded():
@@ -53,3 +58,13 @@ def test_advanced_overrides_are_bounded():
     assert spec["strength"] == 0.0
     assert spec["shift_video"] == 30.0
     assert spec["ref_image_size"] == "match"
+
+
+def test_fl2v_profiles_match_9d_and_do_not_expose_legacy_recipe():
+    for mode in ("t2v", "i2v"):
+        table = public_profiles(mode)
+        assert set(table["profiles"]) == {"balanced8", "fast4"}
+        balanced = table["profiles"]["balanced8"]
+        fast = table["profiles"]["fast4"]
+        assert (balanced["sampler"], balanced["scheduler"], balanced["steps"], balanced["shift_video"], balanced["shift_audio"]) == ("euler", "simple", 8, 6.0, 3.0)
+        assert (fast["sampler"], fast["scheduler"], fast["steps"], fast["shift_video"], fast["shift_audio"]) == ("euler", "simple", 4, 6.0, 3.0)

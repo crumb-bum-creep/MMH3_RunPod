@@ -274,6 +274,8 @@
   }
 
   function updateTuningVisibility(){
+    const tuning=$("#generationTuning");
+    if(tuning)tuning.hidden=state.mode!=="r2v";
     const beta=$("#genScheduleType")?.value==="beta";
     if($("#genBasicFields"))$("#genBasicFields").hidden=beta;
     if($("#genBetaFields"))$("#genBetaFields").hidden=!beta;
@@ -428,7 +430,7 @@
     const v=originalCapture();
     v.base_checkpoint=$("#baseCheckpoint")?.value||STOCK;
     v.generation_profile=$("#generationProfile")?.value||state.generationProfileData?.default||FALLBACK_PROFILE;
-    v.generation_settings=readGenerationSettings();
+    v.generation_settings=state.mode==="r2v"?readGenerationSettings():null;
     v.ending_image=state.endingImage||null;
     return v;
   };
@@ -439,7 +441,10 @@
     state.endingImage=v.ending_image||null;
     const sel=$("#baseCheckpoint");
     if(sel)sel.value=[STOCK,EROS].includes(v.base_checkpoint)?v.base_checkpoint:STOCK;
-    loadGenerationProfiles(v.generation_profile||null,v.generation_settings||null);
+    loadGenerationProfiles(
+      v.generation_profile||null,
+      state.mode==="r2v"?(v.generation_settings||null):null
+    );
     renderEndingImage();
     updateGenerationAvailability();
   };
@@ -475,7 +480,10 @@
     renderProvisioning();
     updateGenerationAvailability();
     if(state.info?.provisioning?.core_ready && state.generationProfileData?.comfy_options_live===false){
-      loadGenerationProfiles($("#generationProfile")?.value||null,readGenerationSettings());
+      loadGenerationProfiles(
+        $("#generationProfile")?.value||null,
+        state.mode==="r2v"?readGenerationSettings():null
+      );
     }
   };
 

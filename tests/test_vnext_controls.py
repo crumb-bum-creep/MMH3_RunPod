@@ -68,7 +68,7 @@ def test_reuse_exact_static_contract():
     assert 'prompt_mode:"custom"' in app
     assert "actual_prompt||v.prompt||v.prompt_idea" in app
     assert "randomize_seed:false" in app
-    assert 'generation_profile:v.generation_profile||"legacy_exact"' in app
+    assert 'generation_profile:v.generation_profile||(v.mode==="r2v"?"legacy_exact":"balanced8")' in app
     assert "historicalFallback=!v.generation_settings" in app
     assert "Reuse Exact" in library
     assert "reuseExactSnapshot(m)" in library
@@ -147,3 +147,11 @@ def test_comfy_runtime_put_persists_setting_and_requests_restart(monkeypatch, tm
     request = state_root / "comfy_restart.request"
     assert request.is_file()
     assert json.loads(request.read_text())["reason"] == "dynamic_vram_setting_changed"
+
+
+def test_advanced_tuning_is_r2v_only():
+    ui = (PHONE_ROOT / "static" / "features-v3.js").read_text(encoding="utf-8")
+    server = (PHONE_ROOT / "server.py").read_text(encoding="utf-8")
+    assert 'if(tuning)tuning.hidden=state.mode!=="r2v"' in ui
+    assert 'v.generation_settings=state.mode==="r2v"?readGenerationSettings():null' in ui
+    assert 'payload.get("generation_settings") if mode == "r2v" else None' in server

@@ -116,13 +116,14 @@ Phone UI can apply a named profile and optionally override supported tuning fiel
 
 ### T2V / I2V
 
+T2V and I2V are intentionally pinned to the two known-good 9d profiles. vNext must not apply the experimental R2V sampler/scheduler controls to FL2V.
+
 | ID | Purpose | Turbo | Strength | Schedule |
 | --- | --- | --- | ---: | --- |
-| `balanced8` | current 8-step profile | FL2V 8-step v1.0 | 1.0 | Euler + Simple, 8 steps, shift 6/3 |
-| `fast4` | current fast profile | FL2V 4-step v1.2 | 1.0 | Euler + Simple, 4 steps, shift 6/3 |
-| `legacy_exact` | historical pre-profile reproduction | FL2V LightX2V v0.1 | 0.5 | Euler + Beta 0.79/0.5 + Extend 3 |
+| `balanced8` | 9d default | FL2V 8-step v1.0 | 1.0 | Euler + Simple, 8 steps, shift 6/3 |
+| `fast4` | 9d fast profile | FL2V 4-step v1.2 | 1.0 | Euler + Simple, 4 steps, shift 6/3 |
 
-The historical FL2V v0.1 LoRA is again a managed accelerator so a fresh deployment can actually reproduce legacy outputs.
+There is deliberately no T2V/I2V `legacy_exact` profile in vNext. The older pre-9d FL2V Beta/Extend recipe was removed after candidate testing showed that generalizing the R2V recipe work across all generation families was too broad.
 
 ### R2V
 
@@ -143,7 +144,7 @@ Do not rewrite `legacy_exact` to reflect newer preferences. It exists for reprod
 
 ### Advanced tuning UI
 
-The Generate tab exposes a collapsed Advanced section backed by actual recipe data:
+For R2V only, the Generate tab exposes a collapsed Advanced section backed by actual recipe data:
 
 - sampler;
 - schedule type (Basic / Beta);

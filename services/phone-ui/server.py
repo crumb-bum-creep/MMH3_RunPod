@@ -298,11 +298,14 @@ def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str
     for _, node in unets:
         node.setdefault("inputs", {})["unet_name"] = checkpoint
 
+    # Keep T2V/I2V recipes exactly pinned to the known-good 9d profiles.
+    # Advanced sampler/scheduler experimentation is intentionally scoped to R2V;
+    # a stale/custom tuning payload must never mutate FL2V generation behavior.
     profile_spec = _patch_generation_profile(
         graph,
         mode,
         generation_profile,
-        payload.get("generation_settings"),
+        payload.get("generation_settings") if mode == "r2v" else None,
     )
 
     ending_image = str(payload.get("ending_image") or "").strip()
@@ -614,7 +617,7 @@ async def api_generate(request: web.Request) -> web.Response:
     profile_spec = _profile_spec(
         requested_mode,
         generation_profile,
-        payload.get("generation_settings"),
+        payload.get("generation_settings") if requested_mode == "r2v" else None,
     )
     turbo_path = _profile_path(profile_spec["turbo_lora"])
     try:
