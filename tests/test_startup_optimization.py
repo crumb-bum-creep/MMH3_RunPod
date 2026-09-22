@@ -12,7 +12,10 @@ def test_supervisor_prioritizes_phone_and_comfy_before_jupyter():
     assert phone < provision
     assert comfy < provision
     assert provision < jupyter
-    assert "STOP.wait(3)" in source
+    assert 'warm_start = bool(bootstrap_state.get("core_ready"))' in source
+    assert 'provisioner_start_mode="warm"' in source
+    assert 'provisioner_start_mode="cold"' in source
+    assert 'warm_start_grace_seconds' in source
 
 
 def test_warm_lora_sync_avoids_network_metadata_roundtrip():
