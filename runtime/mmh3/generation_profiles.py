@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 from .common import IMAGE_ROOT, load_yaml
 
-PROFILE_FILE = IMAGE_ROOT / "config" / "generation_profiles.yaml"
+_IMAGE_PROFILE_FILE = IMAGE_ROOT / "config" / "generation_profiles.yaml"
+_CHECKOUT_PROFILE_FILE = Path(__file__).resolve().parents[2] / "config" / "generation_profiles.yaml"
+PROFILE_FILE = _IMAGE_PROFILE_FILE if _IMAGE_PROFILE_FILE.exists() else _CHECKOUT_PROFILE_FILE
 
 ALIASES = {
     "t2v": {
