@@ -11,7 +11,7 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVER_PATH = ROOT / "services" / "phone-ui" / "server.py"
+SERVER_PATH = ROOT / "services" / "phone-ui" / "server_core.py"
 
 
 def load_server_module():
