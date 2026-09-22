@@ -4,6 +4,8 @@ import json
 import shutil
 import subprocess
 
+import yaml
+
 from .common import (
     CONFIG_ROOT,
     DATA_ROOT,
@@ -20,11 +22,54 @@ from .comfy import configure_persistent_paths
 from .models import local_model_progress, phase_ready
 
 
+def _deep_merge(defaults, overrides):
+    if not isinstance(defaults, dict) or not isinstance(overrides, dict):
+        return overrides
+    out = dict(defaults)
+    for key, value in overrides.items():
+        if key in out and isinstance(out[key], dict) and isinstance(value, dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def _migrate_runtime_config(src, dst) -> None:
+    defaults = load_yaml(src, {}) or {}
+    current = load_yaml(dst, {}) or {} if dst.exists() else {}
+    try:
+        old_version = int(current.get("version") or 1)
+    except (TypeError, ValueError):
+        old_version = 1
+
+    # v2 intentionally returns Comfy to its normal dynamic-VRAM behavior.
+    # The former default --disable-dynamic-vram correlated with host-RAM
+    # retention on the 96 GB RTX PRO 6000. Users can opt back in after the
+    # migration by editing the now-versioned persistent runtime config.
+    if old_version < 2:
+        current.setdefault("comfy", {})["disable_dynamic_vram"] = False
+        current["version"] = 2
+
+    merged = _deep_merge(defaults, current)
+    if not dst.exists() or merged != (load_yaml(dst, {}) or {}):
+        if dst.exists() and old_version < 2:
+            backup = dst.with_name(f"{dst.name}.v{old_version}.bak")
+            if not backup.exists():
+                shutil.copy2(dst, backup)
+        dst.write_text(yaml.safe_dump(merged, sort_keys=False), encoding="utf-8")
+
+
 def copy_default_configs() -> None:
-    # User-editable configuration is initialized once and then survives image upgrades.
+    # Defaults evolve with the image; persistent user values override them.
+    # runtime.yaml is schema-migrated instead of being frozen forever at the
+    # version that happened to create the persistent volume.
     src = IMAGE_ROOT / "config"
     CONFIG_ROOT.mkdir(parents=True, exist_ok=True)
-    for name in ("runtime.yaml", "loras.yaml", "system_prompts.yaml"):
+    runtime_src = src / "runtime.yaml"
+    if runtime_src.exists():
+        _migrate_runtime_config(runtime_src, CONFIG_ROOT / "runtime.yaml")
+
+    for name in ("loras.yaml", "system_prompts.yaml"):
         p = src / name
         dst = CONFIG_ROOT / name
         if p.exists() and not dst.exists():
