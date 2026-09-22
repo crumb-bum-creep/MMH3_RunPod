@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_memory_guard_is_cache_first_and_enqueue_is_side_effect_free():
     guard = (ROOT / "runtime" / "mmh3" / "memory_guard.py").read_text(encoding="utf-8")
     runtime = (ROOT / "config" / "runtime.yaml").read_text(encoding="utf-8")
-    wrapper = (ROOT / "services" / "phone-ui" / "server_v2.py").read_text(encoding="utf-8")
+    wrapper = (ROOT / "services" / "phone-ui" / "server.py").read_text(encoding="utf-8")
 
     # Background memory protection remains staged/cache-first.
     assert 'memory_cfg.get("cache_first", True)' in guard
