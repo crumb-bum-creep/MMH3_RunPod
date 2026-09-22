@@ -1,4 +1,4 @@
-version: 1
+version: 2
 
 paths:
   persistent_root: /workspace/mmh3
