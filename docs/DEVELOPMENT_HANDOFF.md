@@ -98,7 +98,7 @@ Cold volume:
 
 Warm/migrated volume with local core already present:
 
-`Phone UI + Comfy -> wait for Comfy health -> warm-start grace -> background provisioner`
+`Phone UI + Comfy -> wait for Comfy health -> verify/repair Comfy model visibility -> warm-start grace -> background provisioner`
 
 Default warm grace is 8 seconds. This reduces startup contention without delaying first-time model downloads.
 

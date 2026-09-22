@@ -188,7 +188,36 @@ def main() -> int:
         )
         comfy_ready = comfy.wait_ready(180)
     else:
+        # A migrated volume already has its core files, so prove Comfy can see
+        # them before starting any background provisioning I/O. This closes the
+        # historical migration race where the UI became usable while Comfy's
+        # loader filename cache was still empty/stale.
         comfy_ready = comfy.wait_ready(180)
+        if comfy_ready:
+            missing = comfy.missing_ready_model_choices(bootstrap_state.get("model_progress") or {})
+            if missing:
+                print(
+                    "[mmh3] warm-start Comfy model cache is stale; restarting once before generation: "
+                    + ", ".join(missing[:6]),
+                    flush=True,
+                )
+                startup_mark(comfy_model_visibility_missing=missing, comfy_model_visibility_repair=True)
+                terminate(comfy_proc)
+                comfy_proc = start_comfy()
+                comfy_ready = comfy.wait_ready(240)
+                remaining = (
+                    comfy.missing_ready_model_choices(bootstrap_state.get("model_progress") or {})
+                    if comfy_ready
+                    else missing
+                )
+                startup_mark(
+                    comfy_ready=comfy_ready,
+                    comfy_model_visibility_missing=remaining,
+                    comfy_model_visibility_ready=bool(comfy_ready and not remaining),
+                )
+            else:
+                startup_mark(comfy_model_visibility_missing=[], comfy_model_visibility_ready=True)
+
         if comfy_ready and warm_grace:
             STOP.wait(warm_grace)
         provision_proc = start_provisioner()
@@ -202,30 +231,6 @@ def main() -> int:
     startup_mark(comfy_ready=comfy_ready, comfy_ready_seconds=round(time.time() - START_EPOCH, 3))
     if not comfy_ready:
         print("[mmh3] ComfyUI did not become healthy within 180s; supervisor remains alive.", flush=True)
-    elif warm_start:
-        missing = comfy.missing_ready_model_choices(bootstrap_state.get("model_progress") or {})
-        if missing:
-            print(
-                "[mmh3] warm-start Comfy model cache is stale; restarting once before generation: "
-                + ", ".join(missing[:6]),
-                flush=True,
-            )
-            startup_mark(comfy_model_visibility_missing=missing, comfy_model_visibility_repair=True)
-            terminate(comfy_proc)
-            comfy_proc = start_comfy()
-            comfy_ready = comfy.wait_ready(240)
-            remaining = (
-                comfy.missing_ready_model_choices(bootstrap_state.get("model_progress") or {})
-                if comfy_ready
-                else missing
-            )
-            startup_mark(
-                comfy_ready=comfy_ready,
-                comfy_model_visibility_missing=remaining,
-                comfy_model_visibility_ready=bool(comfy_ready and not remaining),
-            )
-        else:
-            startup_mark(comfy_model_visibility_missing=[], comfy_model_visibility_ready=True)
 
     jupyter_proc = start_jupyter()
     startup_mark(jupyter_spawned=bool(jupyter_proc))

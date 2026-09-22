@@ -18,6 +18,7 @@ def test_supervisor_prioritizes_phone_and_comfy_before_jupyter():
     assert 'warm_start_grace_seconds' in source
     assert 'comfy.missing_ready_model_choices' in source
     assert 'comfy_model_visibility_repair=True' in source
+    assert source.index("comfy.missing_ready_model_choices") < source.index('provisioner_start_mode="warm"')
     assert 'cfg.get("disable_dynamic_vram", False)' in source
 
 
