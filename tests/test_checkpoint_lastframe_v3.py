@@ -69,7 +69,7 @@ def test_eros_i2v_patches_unet_last_frame_and_openrouter(monkeypatch):
     assert graph["40"]["inputs"]["image_2"] == [last_id, 0]
     assert record["base_checkpoint"] == wrapper.CHECKPOINT_EROS
     assert record["base_checkpoint_file"] == wrapper.EROS_BETA5_INT8
-    assert record["generation_profile"] == wrapper.PROFILE_BALANCED
+    assert record["generation_profile"] == "balanced8"
     assert record["turbo_lora"] == wrapper.FL2V_BALANCED
     assert graph["50"]["inputs"]["lora_name"] == wrapper.FL2V_BALANCED
     assert graph["50"]["inputs"]["strength_model"] == 1.0
@@ -119,7 +119,7 @@ def test_fast_fl2v_uses_v12_four_step_recipe(monkeypatch):
         "generation_profile": "fast",
     })
 
-    assert record["generation_profile"] == wrapper.PROFILE_FAST
+    assert record["generation_profile"] == "fast4"
     assert record["turbo_lora"] == wrapper.FL2V_FAST
     assert graph["50"]["inputs"]["lora_name"] == wrapper.FL2V_FAST
     assert graph["50"]["inputs"]["strength_model"] == 1.0
@@ -140,7 +140,7 @@ def test_fast_r2v_preserves_legacy_four_step_recipe(monkeypatch):
         "generation_profile": "fast",
     })
 
-    assert record["generation_profile"] == wrapper.PROFILE_FAST
+    assert record["generation_profile"] == "legacy_exact"
     assert record["turbo_lora"] == wrapper.REF2V_FAST
     assert graph["50"]["inputs"]["lora_name"] == wrapper.REF2V_FAST
     assert graph["50"]["inputs"]["strength_model"] == 0.85
@@ -155,3 +155,40 @@ def test_fast_r2v_preserves_legacy_four_step_recipe(monkeypatch):
     assert extend[1]["inputs"]["start_at_sigma"] == 0.8
     assert graph["54"]["inputs"]["model"] == ["50", 0]
     assert graph["55"]["inputs"]["sigmas"] == [extend[0], 0]
+
+
+def test_r2v_default_is_tuned_euler_v01(monkeypatch):
+    wrapper = load_wrapper()
+    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("r2v", "custom"))
+
+    graph, record = wrapper.patch_workflow_v3({
+        "mode": "r2v",
+        "prompt_mode": "custom",
+    })
+
+    assert record["generation_profile"] == "tuned"
+    assert record["turbo_lora"] == wrapper.REF2V_FAST
+    assert graph["53"]["inputs"]["sampler_name"] == "euler"
+    assert record["generation_settings"]["schedule_type"] == "beta"
+
+
+def test_generation_overrides_change_sampler_and_disable_extend(monkeypatch):
+    wrapper = load_wrapper()
+    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("r2v", "custom"))
+
+    graph, record = wrapper.patch_workflow_v3({
+        "mode": "r2v",
+        "prompt_mode": "custom",
+        "generation_profile": "tuned",
+        "generation_settings": {
+            "sampler": "euler",
+            "schedule_type": "beta",
+            "extend_enabled": False,
+            "beta_alpha": 0.7,
+        },
+    })
+
+    beta = next((nid, n) for nid, n in graph.items() if n.get("class_type") == "BetaSamplingScheduler")
+    assert beta[1]["inputs"]["alpha"] == 0.7
+    assert graph["55"]["inputs"]["sigmas"] == [beta[0], 0]
+    assert record["generation_settings"]["extend_enabled"] is False
