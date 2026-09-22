@@ -548,15 +548,18 @@ function formSnapshot(){
   return {mode:state.mode,prompt_mode:state.promptMode,...draft};
 }
 function reuseExactSnapshot(v){
-  if(!v)return;
+  if(!v)return false;
+  const historicalFallback=!v.generation_settings;
   const exact={
     ...v,
     prompt_mode:"custom",
     prompt:v.actual_prompt||v.prompt||v.prompt_idea||"",
     prompt_idea:"",
+    generation_profile:v.generation_profile||"legacy_exact",
     randomize_seed:false
   };
   applySnapshot(exact);
+  return historicalFallback;
 }
 
 function applySnapshot(v){
@@ -690,7 +693,7 @@ async function refreshOutputs(force=false){
       $(".copy-prompt",el).onclick=()=>copyText(m.actual_prompt||m.prompt||m.prompt_idea||"");
       $(".copy-seed",el).onclick=()=>copyText(String(m.seed??""));
       $(".copy-meta",el).onclick=()=>copyText(JSON.stringify(m,null,2));
-      $(".reuse",el).onclick=()=>{reuseExactSnapshot(m);switchTab("generate");toast("Exact setup loaded as Custom");};
+      $(".reuse",el).onclick=()=>{const fallback=reuseExactSnapshot(m);switchTab("generate");toast(fallback?"Loaded as Custom · historical recipe defaults applied":"Exact setup loaded as Custom");};
       $(".use-r2v",el).onclick=async()=>{
         try{
           const d=await api("/api/output-to-input",{method:"POST",body:{file:item.file}});
