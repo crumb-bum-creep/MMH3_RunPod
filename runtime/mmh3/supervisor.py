@@ -237,25 +237,31 @@ def main() -> int:
 
     crash_times: list[float] = []
     rescan_request = STATE_ROOT / "comfy_model_rescan.request"
+    restart_request = STATE_ROOT / "comfy_restart.request"
     while not STOP.is_set():
-        # The Phone UI writes this request when queue-time validation proves
-        # Comfy's filename cache cannot see model files that are present on the
-        # persistent volume. Restart only while idle so queued/running work is
-        # never interrupted by the self-heal path.
-        if rescan_request.exists() and comfy.queue_idle():
-            print("[mmh3] stale Comfy model index detected; restarting Comfy with refreshed persistent paths", flush=True)
-            startup_mark(comfy_model_rescan_requested=True)
+        # Model-cache repairs and user-requested launch-setting changes both
+        # restart only Comfy, and only while its queue is idle.
+        pending_restart = rescan_request.exists() or restart_request.exists()
+        if pending_restart and comfy.queue_idle():
+            reason = "model-index refresh" if rescan_request.exists() else "runtime setting change"
+            print(f"[mmh3] restarting Comfy for {reason}", flush=True)
+            startup_mark(
+                comfy_restart_requested=True,
+                comfy_model_rescan_requested=rescan_request.exists(),
+            )
             terminate(comfy_proc)
             comfy_proc = start_comfy()
-            ready_after_rescan = comfy.wait_ready(240)
+            ready_after_restart = comfy.wait_ready(240)
             startup_mark(
-                comfy_model_rescan_complete=ready_after_rescan,
-                comfy_ready=ready_after_rescan,
+                comfy_restart_complete=ready_after_restart,
+                comfy_model_rescan_complete=ready_after_restart if rescan_request.exists() else None,
+                comfy_ready=ready_after_restart,
             )
-            try:
-                rescan_request.unlink()
-            except OSError:
-                pass
+            for request_path in (rescan_request, restart_request):
+                try:
+                    request_path.unlink()
+                except OSError:
+                    pass
 
         if comfy_proc.poll() is not None:
             crash_times = [t for t in crash_times if time.time() - t < 600]

@@ -79,6 +79,9 @@ def test_memory_protection_runtime_control_is_wired():
     assert "if memory_protection and active_families" in wrapper
     assert "memory_protection_enabled" in guard
     assert "memoryProtectionToggle" in ui
+    assert "disableDynamicVramToggle" in ui
+    assert 'app.router.add_get("/api/comfy-runtime"' in wrapper
+    assert 'app.router.add_put("/api/comfy-runtime"' in wrapper
 
 
 def test_phone_ui_has_one_canonical_entrypoint():
@@ -92,3 +95,12 @@ def test_phone_ui_has_one_canonical_entrypoint():
     server = (phone / "server.py").read_text(encoding="utf-8")
     assert "base.api_generate = api_generate" not in server
     assert "base.patch_workflow = patch_workflow_v3" not in server
+
+
+def test_comfy_runtime_setting_requests_idle_restart():
+    wrapper = (PHONE_ROOT / "server.py").read_text(encoding="utf-8")
+    supervisor = (ROOT / "runtime" / "mmh3" / "supervisor.py").read_text(encoding="utf-8")
+    assert 'STATE_ROOT / "comfy_restart.request"' in wrapper
+    assert 'restart_request = STATE_ROOT / "comfy_restart.request"' in supervisor
+    assert "pending_restart = rescan_request.exists() or restart_request.exists()" in supervisor
+    assert "pending_restart and comfy.queue_idle()" in supervisor

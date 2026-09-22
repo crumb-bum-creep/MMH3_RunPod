@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from aiohttp import web
+import yaml
 
 from mmh3.controls import load_controls, save_controls
 from mmh3.generation_profiles import canonical_profile_id, public_profiles, resolve_profile
@@ -489,16 +490,68 @@ async def api_generation_profiles(request: web.Request) -> web.Response:
     except Exception:
         pass
 
+    live_options = bool(samplers or schedulers)
     if not samplers:
         samplers = {str(x.get("sampler") or "") for x in payload["profiles"].values()}
     if not schedulers:
         schedulers = {str(x.get("scheduler") or "") for x in payload["profiles"].values() if x.get("scheduler")}
 
+    payload["comfy_options_live"] = live_options
     payload["samplers"] = sorted(x for x in samplers if x)
     payload["schedulers"] = sorted(x for x in schedulers if x)
     payload["schedule_types"] = ["basic", "beta"]
     payload["ref_image_sizes"] = ["max", "match"]
     return web.json_response(payload)
+
+
+def _runtime_yaml_path() -> Path:
+    return base.CONFIG_ROOT / "runtime.yaml"
+
+
+def _load_comfy_runtime() -> dict[str, Any]:
+    runtime = base.load_yaml(_runtime_yaml_path(), {}) or {}
+    cfg = runtime.get("comfy") if isinstance(runtime.get("comfy"), dict) else {}
+    return {
+        "disable_dynamic_vram": bool(cfg.get("disable_dynamic_vram", False)),
+        "use_sage_attention": bool(cfg.get("use_sage_attention", True)),
+    }
+
+
+async def api_comfy_runtime_get(request: web.Request) -> web.Response:
+    return web.json_response(_load_comfy_runtime())
+
+
+async def api_comfy_runtime_put(request: web.Request) -> web.Response:
+    body = await request.json()
+    if not isinstance(body, dict) or "disable_dynamic_vram" not in body:
+        raise web.HTTPBadRequest(text="disable_dynamic_vram is required")
+
+    path = _runtime_yaml_path()
+    runtime = base.load_yaml(path, {}) or {}
+    if not isinstance(runtime, dict):
+        runtime = {}
+    runtime["version"] = max(2, int(runtime.get("version") or 2))
+    cfg = runtime.setdefault("comfy", {})
+    if not isinstance(cfg, dict):
+        cfg = {}
+        runtime["comfy"] = cfg
+    cfg["disable_dynamic_vram"] = bool(body["disable_dynamic_vram"])
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(yaml.safe_dump(runtime, sort_keys=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+    restart = base.STATE_ROOT / "comfy_restart.request"
+    restart.write_text(
+        json.dumps({
+            "requested_at": time.time(),
+            "reason": "dynamic_vram_setting_changed",
+            "disable_dynamic_vram": cfg["disable_dynamic_vram"],
+        }, indent=2),
+        encoding="utf-8",
+    )
+    return web.json_response({**_load_comfy_runtime(), "restart_requested": True})
 
 
 async def api_runtime_controls_get(request: web.Request) -> web.Response:
@@ -691,6 +744,8 @@ def make_app(comfy_url: str) -> web.Application:
     app.router.add_get("/api/generation-profiles", api_generation_profiles)
     app.router.add_get("/api/runtime-controls", api_runtime_controls_get)
     app.router.add_put("/api/runtime-controls", api_runtime_controls_put)
+    app.router.add_get("/api/comfy-runtime", api_comfy_runtime_get)
+    app.router.add_put("/api/comfy-runtime", api_comfy_runtime_put)
     app.on_startup.append(_start_indexer)
     app.on_cleanup.append(_stop_indexer)
     return app

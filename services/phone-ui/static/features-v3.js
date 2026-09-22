@@ -139,13 +139,15 @@
       card.innerHTML=`
         <div class="labelrow"><div><strong>Runtime controls</strong><div class="muted">Persistent across pod migrations.</div></div></div>
         <label class="check"><input id="memoryProtectionToggle" type="checkbox" checked> Memory protection <span class="muted">blocks unsafe cross-family queueing and enables automatic RAM cleanup</span></label>
+        <label class="check"><input id="disableDynamicVramToggle" type="checkbox"> Disable dynamic VRAM <span class="muted">normally leave OFF; changing this safely restarts Comfy when idle</span></label>
         <label for="outputNamingTemplate">Output naming template</label>
         <input id="outputNamingTemplate" value="MMH3/{mode}" placeholder="MMH3/{mode}">
         <div class="muted">Tokens: {mode} {prompt_mode} {profile} {checkpoint} {seed} {date} {time}</div>
-        <div class="media-row"><button id="saveRuntimeControls" class="secondary" type="button">Save runtime controls</button><span id="runtimeControlsStatus" class="muted"></span></div>`;
+        <div class="media-row"><button id="saveRuntimeControls" class="secondary" type="button">Save runtime controls</button><button id="applyComfyRuntime" class="secondary" type="button">Apply Comfy setting</button><span id="runtimeControlsStatus" class="muted"></span></div>`;
       system.appendChild(card);
       $("#memoryProtectionToggle").onchange=()=>saveRuntimeControls({memory_protection:$("#memoryProtectionToggle").checked});
       $("#saveRuntimeControls").onclick=()=>saveRuntimeControls({output_naming_template:$("#outputNamingTemplate").value});
+      $("#applyComfyRuntime").onclick=()=>saveComfyRuntime();
     }
   }
 
@@ -177,6 +179,29 @@
       if(status)status.textContent=value.memory_protection===false?"Protection OFF":"Saved";
       toast("Runtime controls saved");
     }catch(e){toast(e.message);}
+  }
+
+  async function loadComfyRuntime(){
+    try{
+      const value=await api("/api/comfy-runtime");
+      const toggle=$("#disableDynamicVramToggle");
+      if(toggle)toggle.checked=value.disable_dynamic_vram===true;
+    }catch(e){}
+  }
+
+  async function saveComfyRuntime(){
+    const button=$("#applyComfyRuntime");
+    if(button){button.disabled=true;button.textContent="Applying…";}
+    try{
+      const value=await api("/api/comfy-runtime",{
+        method:"PUT",
+        body:{disable_dynamic_vram:$("#disableDynamicVramToggle")?.checked===true}
+      });
+      const status=$("#runtimeControlsStatus");
+      if(status)status.textContent=value.restart_requested?"Comfy restart requested":"Saved";
+      toast("Comfy setting saved · restart will happen when idle");
+    }catch(e){toast(e.message);}
+    finally{if(button){button.disabled=false;button.textContent="Apply Comfy setting";}}
   }
 
   function renderEndingImage(){
@@ -441,6 +466,9 @@
     await originalRefreshInfo();
     renderProvisioning();
     updateGenerationAvailability();
+    if(state.info?.provisioning?.core_ready && state.generationProfileData?.comfy_options_live===false){
+      loadGenerationProfiles($("#generationProfile")?.value||null,readGenerationSettings());
+    }
   };
 
   renderEndingImage();
@@ -449,4 +477,5 @@
   setTimeout(()=>refreshInfo(),100);
   setTimeout(()=>loadGenerationProfiles(),120);
   setTimeout(()=>loadRuntimeControls(),150);
+  setTimeout(()=>loadComfyRuntime(),180);
 })();
