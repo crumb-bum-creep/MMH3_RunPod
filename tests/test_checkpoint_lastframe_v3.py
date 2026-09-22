@@ -12,8 +12,8 @@ PHONE_ROOT = ROOT / "services" / "phone-ui"
 def load_wrapper():
     sys.path.insert(0, str(PHONE_ROOT))
     try:
-        sys.modules.pop("server_v2", None)
-        return importlib.import_module("server_v2")
+        sys.modules.pop("server", None)
+        return importlib.import_module("server")
     finally:
         try:
             sys.path.remove(str(PHONE_ROOT))
