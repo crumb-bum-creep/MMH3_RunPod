@@ -1,6 +1,16 @@
 name: Build production candidate
 
 on:
+  push:
+    branches: [next/vnext-runtime-cleanup]
+    paths:
+      - Dockerfile
+      - runtime/**
+      - config/**
+      - workflows/**
+      - services/**
+      - scripts/**
+      - .github/workflows/build-production-candidate.yml
   workflow_dispatch:
 
 concurrency:
