@@ -41,7 +41,7 @@ def test_output_indexer_only_indexes_final_audio_and_finds_preview(tmp_path, mon
 def test_library_v2_static_contracts():
     js = (PHONE / "static" / "library-v2.js").read_text(encoding="utf-8")
     css = (PHONE / "static" / "library-v2.css").read_text(encoding="utf-8")
-    wrapper = (PHONE / "server_v2.py").read_text(encoding="utf-8")
+    wrapper = (PHONE / "server.py").read_text(encoding="utf-8")
     entrypoint = (ROOT / "runtime" / "entrypoint.sh").read_text(encoding="utf-8")
 
     for token in ("outputFavoritesV2", "outputGroupFilterV2", "outputTagFilterV2", "globalProgressHud", "clearCacheOnly"):
@@ -53,4 +53,4 @@ def test_library_v2_static_contracts():
     assert "base.api_outputs = api_outputs" in wrapper
     assert 'app.router.add_put("/api/output-library"' in wrapper
     assert '"unchanged": True' in wrapper
-    assert "server_legacy.py" in entrypoint and "server_v2.py" in entrypoint
+    assert "server_legacy.py" not in entrypoint and "server_v2.py" not in entrypoint
