@@ -12,8 +12,8 @@ PHONE_ROOT = ROOT / "services" / "phone-ui"
 def load_wrapper():
     sys.path.insert(0, str(PHONE_ROOT))
     try:
-        sys.modules.pop("server_v2", None)
-        return importlib.import_module("server_v2")
+        sys.modules.pop("server", None)
+        return importlib.import_module("server")
     finally:
         try:
             sys.path.remove(str(PHONE_ROOT))
@@ -69,7 +69,7 @@ def test_reuse_exact_static_contract():
 
 
 def test_memory_protection_runtime_control_is_wired():
-    wrapper = (PHONE_ROOT / "server_v2.py").read_text(encoding="utf-8")
+    wrapper = (PHONE_ROOT / "server.py").read_text(encoding="utf-8")
     guard = (ROOT / "runtime" / "mmh3" / "memory_guard.py").read_text(encoding="utf-8")
     ui = (PHONE_ROOT / "static" / "features-v3.js").read_text(encoding="utf-8")
     assert 'app.router.add_get("/api/runtime-controls"' in wrapper
