@@ -50,7 +50,8 @@ def test_library_v2_static_contracts():
     assert "refreshOutputs=async(force=false)=>load(force)" in js
     assert "?since=" in js
     assert "grid-template-columns:repeat(2" in css
-    assert "base.api_outputs = api_outputs" in wrapper
+    assert '"api_outputs": api_outputs' in wrapper
+    assert "base.api_outputs = api_outputs" not in wrapper
     assert 'app.router.add_put("/api/output-library"' in wrapper
     assert '"unchanged": True' in wrapper
     assert "server_legacy.py" not in entrypoint and "server_v2.py" not in entrypoint

@@ -99,7 +99,7 @@ def test_submit_posts_to_comfy_without_memory_cleanup(monkeypatch, tmp_path):
 
     monkeypatch.setattr(base, "_load_json", fake_load_json)
     monkeypatch.setattr(wrapper, "_profile_path", lambda _name: ReadyModelPath())
-    monkeypatch.setattr(base, "patch_workflow", lambda payload: ({"1": {"class_type": "TestNode", "inputs": {}}, "9": {"class_type": "VHS_VideoCombine", "inputs": {}}}, {
+    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: ({"1": {"class_type": "TestNode", "inputs": {}}, "9": {"class_type": "VHS_VideoCombine", "inputs": {}}}, {
         "mode": "t2v",
         "model_family": "fl2v",
         "seed": 123,
@@ -203,7 +203,7 @@ def test_node_errors_never_become_fake_success(monkeypatch):
         else default,
     )
     monkeypatch.setattr(wrapper, "_profile_path", lambda _name: ReadyModelPath())
-    monkeypatch.setattr(base, "patch_workflow", lambda payload: ({
+    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: ({
         "9": {"class_type": "VHS_VideoCombine", "inputs": {}},
     }, {
         "mode": "t2v",
