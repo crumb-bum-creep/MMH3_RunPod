@@ -59,6 +59,16 @@ models:
     label: TAEH3 Preview Decoder
     show_in_ui: true
 
+  fl2v_turbo_legacy:
+    source: huggingface
+    repo_id: Kijai/MiniMax-H3_comfy
+    source_path: loras/minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors
+    destination: loras/minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors
+    min_size_mb: 500
+    phase: accelerator
+    label: FL2V Legacy Exact Turbo v0.1
+    show_in_ui: true
+
   fl2v_turbo_4step:
     source: huggingface
     repo_id: lightx2v/Minimax-h3-Turbo
