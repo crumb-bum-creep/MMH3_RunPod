@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from mmh3 import models
+from mmh3 import comfy, models
 
 
 def _manifest(tmp_path: Path, destination: str = "diffusion_models/core.bin") -> Path:
@@ -104,3 +104,60 @@ def test_usable_requires_exact_expected_size_when_known(tmp_path):
 
     assert models._usable(path, 0.000001, 8)
     assert not models._usable(path, 0.000001, 9)
+
+
+def test_comfy_visibility_detects_ready_models_missing_from_selector_cache(monkeypatch):
+    monkeypatch.setattr(comfy, "object_info", lambda timeout=10.0: {
+        "CLIPLoader": {
+            "input": {
+                "required": {
+                    "clip_name": [["other-clip.safetensors"]]
+                }
+            }
+        },
+        "UNETLoader": {
+            "input": {
+                "required": {
+                    "unet_name": [["model-ok.safetensors"]]
+                }
+            }
+        },
+        "VAELoader": {
+            "input": {
+                "required": {
+                    "vae_name": [["video-vae.safetensors"]]
+                }
+            }
+        },
+        "LoraLoaderModelOnly": {
+            "input": {
+                "required": {
+                    "lora_name": [["turbo-ok.safetensors"]]
+                }
+            }
+        },
+    })
+    progress = {
+        "clip": {
+            "destination": "text_encoders/qwen.safetensors",
+            "status": "ready",
+        },
+        "unet": {
+            "destination": "diffusion_models/model-ok.safetensors",
+            "status": "ready",
+        },
+        "vae": {
+            "destination": "vae/video-vae.safetensors",
+            "status": "ready",
+        },
+        "turbo": {
+            "destination": "loras/turbo-ok.safetensors",
+            "status": "ready",
+        },
+        "waiting": {
+            "destination": "loras/not-ready.safetensors",
+            "status": "waiting",
+        },
+    }
+
+    assert comfy.missing_ready_model_choices(progress) == ["qwen.safetensors"]
