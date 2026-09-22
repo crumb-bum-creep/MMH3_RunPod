@@ -64,6 +64,8 @@ def test_reuse_exact_static_contract():
     assert 'prompt_mode:"custom"' in app
     assert "actual_prompt||v.prompt||v.prompt_idea" in app
     assert "randomize_seed:false" in app
+    assert 'generation_profile:v.generation_profile||"legacy_exact"' in app
+    assert "historicalFallback=!v.generation_settings" in app
     assert "Reuse Exact" in library
     assert "reuseExactSnapshot(m)" in library
 
@@ -77,3 +79,13 @@ def test_memory_protection_runtime_control_is_wired():
     assert "if memory_protection and active_families" in wrapper
     assert "memory_protection_enabled" in guard
     assert "memoryProtectionToggle" in ui
+
+
+def test_phone_ui_has_one_canonical_entrypoint():
+    phone = PHONE_ROOT
+    entrypoint = (ROOT / "runtime" / "entrypoint.sh").read_text(encoding="utf-8")
+    assert (phone / "server.py").is_file()
+    assert (phone / "server_core.py").is_file()
+    assert not (phone / "server_v2.py").exists()
+    assert "server_legacy.py" not in entrypoint
+    assert "server_v2.py" not in entrypoint
