@@ -30,31 +30,20 @@ loras/         LoRA metadata catalog (not model weights)
 
 ## Current status
 
-**First real RunPod deployment validated; post-deploy fixes are baked into the current image.**
-
-Immutable candidate image:
+The last deployed production input to the current cleanup is:
 
 ```text
-ghcr.io/crumb-bum-creep/mmh3-runpod:sha-7200522bcf6e
+ghcr.io/crumb-bum-creep/mmh3-runpod:sha-9d134f338f53
 ```
 
-Validated in GitHub CI:
+Active development is on `next/vnext-runtime-cleanup` / draft PR #28. vNext turns the migration/runtime fixes proven against the 9d image into first-class behavior: migration-safe Comfy model visibility, real video-output validation, warm-start-friendly output indexing, configurable generation recipes, Memory Protection controls, configurable output naming, Reuse Exact, runtime-config migration, and a simplified Phone UI/server layout.
 
-- runtime/unit/workflow-contract tests
-- phone UI JavaScript syntax
-- CUDA 13 / PyTorch 2.11 image build
-- pinned ComfyUI commit
-- six canonical H3 API workflows
-- MMH3 runtime imports
-- ONNX Runtime CUDA provider
-- ComfyUI custom-node initialization via `--quick-test-for-ci`
-- GHCR push
-
-The first real RTX PRO 6000 Blackwell deployment booted successfully with the expected GPU/RAM profile, required custom nodes, model provisioning path, Auto R2V, and Custom R2V. Post-deploy issues found during that smoke test are covered by regression tests and the current image.
+Do not treat vNext as production until its candidate image passes the acceptance checklist in `docs/DEVELOPMENT_HANDOFF.md`.
 
 See:
 
-- `docs/FIRST_RUNPOD_DEPLOY.md` — exact RunPod setup
+- `docs/DEVELOPMENT_HANDOFF.md` — current architecture, known 9d defects, vNext decisions, and promotion checklist
+- `docs/FIRST_RUNPOD_DEPLOY.md` — RunPod setup
 - `docs/OPERATIONS.md` — daily commands/recovery
 - `scripts/first_boot_check.sh` — one-command first-pod health check
 - `docs/PERSISTENCE.md` — persistent state and LoRA seed behavior
