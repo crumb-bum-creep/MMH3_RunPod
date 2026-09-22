@@ -39,8 +39,8 @@ def test_commit_markers_replace_runtime_git_requirement():
     assert "/ComfyUI/.mmh3_commit" in boot_check
 
 
-def test_ultra_image_drops_manager_and_git_metadata():
-    dockerfile = (ROOT / "Dockerfile.ultra").read_text()
+def test_production_image_drops_manager_and_git_metadata():
+    dockerfile = (ROOT / "Dockerfile").read_text()
     assert "FROM ubuntu:24.04 AS runtime" in dockerfile
     assert "rm -rf /ComfyUI/custom_nodes/comfyui-manager" in dockerfile
     assert "rm -rf /ComfyUI/.git /ComfyUI/custom_nodes/*/.git" in dockerfile
