@@ -11,6 +11,7 @@ from typing import Any
 from aiohttp import web
 
 from mmh3.controls import load_controls, save_controls
+from mmh3.generation_profiles import canonical_profile_id, public_profiles, resolve_profile
 
 try:
     import server_legacy as base
@@ -122,67 +123,22 @@ def _checkpoint_path(filename: str) -> Path:
     return base.COMFY_PERSIST / "models" / "diffusion_models" / filename
 
 
-def _generation_profile(payload: dict[str, Any]) -> str:
-    raw = str(payload.get("generation_profile") or PROFILE_BALANCED).strip().lower()
-    aliases = {
-        "balanced": PROFILE_BALANCED,
-        "quality": PROFILE_BALANCED,
-        "8step": PROFILE_BALANCED,
-        "fast": PROFILE_FAST,
-        "legacy": PROFILE_FAST,
-        "4step": PROFILE_FAST,
-    }
-    choice = aliases.get(raw)
-    if not choice:
-        raise web.HTTPBadRequest(text=f"unknown generation profile: {raw}")
-    return choice
+def _generation_profile(payload: dict[str, Any], mode: str) -> str:
+    try:
+        return canonical_profile_id(mode, str(payload.get("generation_profile") or "") or None)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
 
 
-def _profile_spec(mode: str, profile: str) -> dict[str, Any]:
-    if mode == "r2v":
-        if profile == PROFILE_FAST:
-            return {
-                "lora": REF2V_FAST,
-                "strength": 0.85,
-                "steps": 4,
-                "sampler": "seeds_2",
-                "legacy": True,
-                "shift_video": 12.0,
-                "shift_audio": 3.0,
-                "scheduler": "legacy_beta",
-            }
-        return {
-            "lora": REF2V_BALANCED,
-            "strength": 1.0,
-            "steps": 8,
-            "sampler": "euler",
-            "legacy": False,
-            "shift_video": 12.0,
-            "shift_audio": 3.0,
-            "scheduler": "simple",
-        }
-
-    if profile == PROFILE_FAST:
-        return {
-            "lora": FL2V_FAST,
-            "strength": 1.0,
-            "steps": 4,
-            "sampler": "euler",
-            "legacy": False,
-            "shift_video": 6.0,
-            "shift_audio": 3.0,
-            "scheduler": "simple",
-        }
-    return {
-        "lora": FL2V_BALANCED,
-        "strength": 1.0,
-        "steps": 8,
-        "sampler": "euler",
-        "legacy": False,
-        "shift_video": 6.0,
-        "shift_audio": 3.0,
-        "scheduler": "simple",
-    }
+def _profile_spec(
+    mode: str,
+    profile: str,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        return resolve_profile(mode, profile, overrides)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
 
 
 def _profile_path(filename: str) -> Path:
@@ -218,50 +174,59 @@ def _patch_generation_profile(
     graph: dict[str, Any],
     mode: str,
     profile: str,
+    overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    spec = _profile_spec(mode, profile)
+    spec = _profile_spec(mode, profile, overrides)
     turbo_id, turbo = _profile_turbo_node(graph)
     inp = turbo.setdefault("inputs", {})
-    inp["lora_name"] = spec["lora"]
+    inp["lora_name"] = spec["turbo_lora"]
     inp["strength_model"] = spec["strength"]
-    turbo.setdefault("_meta", {})["title"] = (
-        "Generation Profile Turbo LoRA · Fast"
-        if profile == PROFILE_FAST
-        else "Generation Profile Turbo LoRA · Balanced"
-    )
+    turbo.setdefault("_meta", {})["title"] = f"Generation Profile Turbo LoRA · {spec['label']}"
 
     for _, node in base.find_nodes(graph, "KSamplerSelect"):
         node.setdefault("inputs", {})["sampler_name"] = spec["sampler"]
+
+    if mode == "r2v":
+        for _, node in base.find_nodes(graph, "MiniMaxH3ReferenceToVideo"):
+            node.setdefault("inputs", {})["ref_image_size"] = spec["ref_image_size"]
 
     guiders = base.find_nodes(graph, "BasicGuider")
     samplers = base.find_nodes(graph, "SamplerCustomAdvanced")
     if not guiders or not samplers:
         raise web.HTTPServiceUnavailable(text="workflow is missing profile sampler/guider nodes")
 
-    if spec["legacy"]:
+    if spec["schedule_type"] == "beta":
         beta_id, beta = _ensure_profile_node(
-            graph, "BetaSamplingScheduler", "mmh3_fast_beta", "Fast Legacy Beta Scheduler"
+            graph, "BetaSamplingScheduler", "mmh3_profile_beta", "Generation Profile Beta Scheduler"
         )
         beta["inputs"] = {
-            "steps": 4,
-            "alpha": 0.6,
-            "beta": 0.6,
+            "steps": spec["steps"],
+            "alpha": spec["beta_alpha"],
+            "beta": spec["beta_beta"],
             "model": [turbo_id, 0],
         }
-        extend_id, extend = _ensure_profile_node(
-            graph, "ExtendIntermediateSigmas", "mmh3_fast_sigmas", "Fast Legacy Sigma Extension"
-        )
-        extend["inputs"] = {
-            "steps": 2,
-            "start_at_sigma": 0.8,
-            "end_at_sigma": 0,
-            "spacing": "linear",
-            "sigmas": [beta_id, 0],
-        }
+
+        sigma_source = [beta_id, 0]
+        if spec["extend_enabled"]:
+            extend_id, extend = _ensure_profile_node(
+                graph,
+                "ExtendIntermediateSigmas",
+                "mmh3_profile_sigmas",
+                "Generation Profile Sigma Extension",
+            )
+            extend["inputs"] = {
+                "steps": spec["extend_steps"],
+                "start_at_sigma": spec["extend_start"],
+                "end_at_sigma": spec["extend_end"],
+                "spacing": spec["extend_spacing"],
+                "sigmas": [beta_id, 0],
+            }
+            sigma_source = [extend_id, 0]
+
         for _, node in guiders:
             node.setdefault("inputs", {})["model"] = [turbo_id, 0]
         for _, node in samplers:
-            node.setdefault("inputs", {})["sigmas"] = [extend_id, 0]
+            node.setdefault("inputs", {})["sigmas"] = sigma_source
     else:
         shift_id, shift = _ensure_profile_node(
             graph, "MiniMaxH3SigmaShift", "mmh3_profile_shift", "Generation Profile Sigma Shift"
@@ -271,26 +236,18 @@ def _patch_generation_profile(
             "shift_video": spec["shift_video"],
             "shift_audio": spec["shift_audio"],
         }
-        shift.setdefault("_meta", {})["title"] = (
-            "Generation Profile Sigma Shift · Fast"
-            if profile == PROFILE_FAST
-            else "Generation Profile Sigma Shift · Balanced"
-        )
+        shift.setdefault("_meta", {})["title"] = f"Generation Profile Sigma Shift · {spec['label']}"
 
         scheduler_id, scheduler = _ensure_profile_node(
             graph, "BasicScheduler", "mmh3_profile_scheduler", "Generation Profile Scheduler"
         )
         scheduler["inputs"] = {
             "model": [shift_id, 0],
-            "scheduler": "simple",
+            "scheduler": spec["scheduler"],
             "steps": spec["steps"],
             "denoise": 1.0,
         }
-        scheduler.setdefault("_meta", {})["title"] = (
-            "Generation Profile Scheduler · Fast"
-            if profile == PROFILE_FAST
-            else "Generation Profile Scheduler · Balanced"
-        )
+        scheduler.setdefault("_meta", {})["title"] = f"Generation Profile Scheduler · {spec['label']}"
         for _, node in guiders:
             node.setdefault("inputs", {})["model"] = [shift_id, 0]
         for _, node in samplers:
@@ -343,7 +300,7 @@ def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str
     prompt_mode = str(payload.get("prompt_mode") or "custom").lower()
     choice = _checkpoint_choice(payload)
     checkpoint = _checkpoint_filename(mode, choice)
-    generation_profile = _generation_profile(payload)
+    generation_profile = _generation_profile(payload, mode)
 
     unets = base.find_nodes(graph, "UNETLoader")
     if not unets:
@@ -351,7 +308,12 @@ def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str
     for _, node in unets:
         node.setdefault("inputs", {})["unet_name"] = checkpoint
 
-    profile_spec = _patch_generation_profile(graph, mode, generation_profile)
+    profile_spec = _patch_generation_profile(
+        graph,
+        mode,
+        generation_profile,
+        payload.get("generation_settings"),
+    )
 
     ending_image = str(payload.get("ending_image") or "").strip()
     if ending_image and mode != "i2v":
@@ -378,12 +340,15 @@ def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str
     record["base_checkpoint"] = choice
     record["base_checkpoint_file"] = checkpoint
     record["generation_profile"] = generation_profile
-    record["turbo_lora"] = profile_spec["lora"]
+    record["turbo_lora"] = profile_spec["turbo_lora"]
     record["turbo_steps"] = profile_spec["steps"]
     record["turbo_sampler"] = profile_spec["sampler"]
-    record["turbo_scheduler"] = profile_spec["scheduler"]
+    record["turbo_scheduler"] = (
+        profile_spec["scheduler"] if profile_spec["schedule_type"] == "basic" else "legacy_beta"
+    )
     record["turbo_shift_video"] = profile_spec["shift_video"]
     record["turbo_shift_audio"] = profile_spec["shift_audio"]
+    record["generation_settings"] = profile_spec
     record["ending_image"] = ending_image or None
 
     output_prefix, naming_template = _output_prefix(payload, record, generation_profile, choice)
@@ -510,6 +475,43 @@ async def _ensure_graph_models_visible(app: web.Application, graph: dict[str, An
     )
 
 
+async def api_generation_profiles(request: web.Request) -> web.Response:
+    mode = str(request.query.get("mode") or "t2v").lower()
+    try:
+        payload = public_profiles(mode)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+
+    for spec in payload["profiles"].values():
+        path = _profile_path(spec["turbo_lora"])
+        try:
+            spec["ready"] = path.is_file() and path.stat().st_size >= 500 * 1024**2
+        except OSError:
+            spec["ready"] = False
+
+    samplers: set[str] = set()
+    schedulers: set[str] = set()
+    try:
+        async with request.app["session"].get(f"{request.app['comfy']}/object_info") as r:
+            if r.ok:
+                info = await r.json()
+                samplers = _object_info_choices(info, "KSamplerSelect", "sampler_name")
+                schedulers = _object_info_choices(info, "BasicScheduler", "scheduler")
+    except Exception:
+        pass
+
+    if not samplers:
+        samplers = {str(x.get("sampler") or "") for x in payload["profiles"].values()}
+    if not schedulers:
+        schedulers = {str(x.get("scheduler") or "") for x in payload["profiles"].values() if x.get("scheduler")}
+
+    payload["samplers"] = sorted(x for x in samplers if x)
+    payload["schedulers"] = sorted(x for x in schedulers if x)
+    payload["schedule_types"] = ["basic", "beta"]
+    payload["ref_image_sizes"] = ["max", "match"]
+    return web.json_response(payload)
+
+
 async def api_runtime_controls_get(request: web.Request) -> web.Response:
     return web.json_response(load_controls())
 
@@ -531,7 +533,7 @@ async def api_generate(request: web.Request) -> web.Response:
     requested_mode = str(payload.get("mode") or "t2v").lower()
     requested_family = "ref2v" if requested_mode == "r2v" else "fl2v"
     checkpoint_choice = _checkpoint_choice(payload)
-    generation_profile = _generation_profile(payload)
+    generation_profile = _generation_profile(payload, requested_mode)
 
     try:
         async with app["session"].get(f"{app['comfy']}/queue") as r:
@@ -567,29 +569,21 @@ async def api_generate(request: web.Request) -> web.Response:
                  "You can keep using the UI; generation will unlock automatically when stock core models are ready."
         )
 
-    profile_spec = _profile_spec(requested_mode, generation_profile)
-    progress_rows = provisioning.get("model_progress") if isinstance(provisioning, dict) else None
-    profile_row_id = (
-        "ref2v_turbo_4step" if requested_mode == "r2v" and generation_profile == PROFILE_FAST
-        else "ref2v_turbo_8step" if requested_mode == "r2v"
-        else "fl2v_turbo_4step" if generation_profile == PROFILE_FAST
-        else "fl2v_turbo_8step"
+    profile_spec = _profile_spec(
+        requested_mode,
+        generation_profile,
+        payload.get("generation_settings"),
     )
-    # New images publish accelerator rows during bootstrap. Older persisted
-    # provisioning state did not know about generation profiles, so don't turn
-    # that legacy state into a false 503 before bootstrap refreshes it.
-    profile_managed = isinstance(progress_rows, dict) and profile_row_id in progress_rows
-    if profile_managed:
-        turbo_path = _profile_path(profile_spec["lora"])
-        try:
-            turbo_ready = turbo_path.is_file() and turbo_path.stat().st_size >= 500 * 1024**2
-        except OSError:
-            turbo_ready = False
-        if not turbo_ready:
-            raise web.HTTPServiceUnavailable(
-                text=f"{generation_profile.title()} generation profile is still provisioning "
-                     f"({profile_spec['lora']}). Choose another ready profile or wait for this Turbo file to finish."
-            )
+    turbo_path = _profile_path(profile_spec["turbo_lora"])
+    try:
+        turbo_ready = turbo_path.is_file() and turbo_path.stat().st_size >= 500 * 1024**2
+    except OSError:
+        turbo_ready = False
+    if not turbo_ready:
+        raise web.HTTPServiceUnavailable(
+            text=f"{profile_spec['label']} is not ready ({profile_spec['turbo_lora']}). "
+                 "Choose a ready profile or wait/install the required Turbo file."
+        )
 
     if checkpoint_choice == CHECKPOINT_EROS:
         eros_path = _checkpoint_path(EROS_BETA5_INT8)
@@ -703,6 +697,7 @@ def make_app(comfy_url: str) -> web.Application:
     app = base.make_app(comfy_url)
     app.router.add_get("/api/output-library", api_output_library_get)
     app.router.add_put("/api/output-library", api_output_library_put)
+    app.router.add_get("/api/generation-profiles", api_generation_profiles)
     app.router.add_get("/api/runtime-controls", api_runtime_controls_get)
     app.router.add_put("/api/runtime-controls", api_runtime_controls_put)
     app.on_startup.append(_start_indexer)
