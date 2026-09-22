@@ -11,17 +11,34 @@ from pathlib import Path
 import json
 from mmh3.hardware import detect
 from mmh3 import comfy
+from mmh3.common import CONFIG_ROOT, load_yaml
+from mmh3.controls import load_controls
 h=detect(); print("=== MMH3 STATUS ===")
 print(f"GPU: {h.gpu_name} | VRAM: {h.vram_mib} MiB")
 print(f"RAM cgroup: {h.cgroup_memory_current_bytes/2**30:.1f} / {h.cgroup_memory_limit_bytes/2**30:.1f} GiB")
 print("Comfy:", "ready" if comfy.wait_ready(1) else "down")
-for name in ("hardware.json","memory.json","provisioning.json"):
+runtime=load_yaml(CONFIG_ROOT/"runtime.yaml",{}) or {}
+comfy_cfg=runtime.get("comfy") or {}
+controls=load_controls()
+print("Dynamic VRAM:", "DISABLED" if comfy_cfg.get("disable_dynamic_vram",False) else "enabled")
+print("Memory protection:", "ON" if controls.get("memory_protection",True) else "OFF")
+for name in ("hardware.json","memory.json","provisioning.json","startup.json"):
     p=Path("/workspace/mmh3/state")/name
     if p.exists():
         try:
             d=json.loads(p.read_text())
             if name=="provisioning.json":
                 print("Provisioning:", d.get("status"), "-", d.get("message") or d.get("stage"))
+            elif name=="memory.json":
+                gib=1024**3
+                print(
+                    "Memory:",
+                    f"working={float(d.get('working_set_bytes') or d.get('current_bytes') or 0)/gib:.1f} GiB",
+                    f"raw={float(d.get('raw_current_bytes') or 0)/gib:.1f} GiB",
+                    f"cache={float(d.get('reclaimable_cache_bytes') or 0)/gib:.1f} GiB",
+                )
+            elif name=="startup.json" and "comfy_model_visibility_ready" in d:
+                print("Comfy model visibility:", "ready" if d.get("comfy_model_visibility_ready") else "repair/incomplete")
         except Exception:
             pass
         print(f"{name}: {p}")
@@ -62,6 +79,18 @@ PY
     echo
     echo "--- provisioning ---"
     cat /workspace/mmh3/state/provisioning.json 2>/dev/null || echo "No provisioning state."
+    echo
+    echo "--- runtime controls ---"
+    python - <<'PY'
+from mmh3.common import CONFIG_ROOT, load_yaml
+from mmh3.controls import load_controls
+runtime=load_yaml(CONFIG_ROOT/"runtime.yaml",{}) or {}
+cfg=runtime.get("comfy") or {}
+ctl=load_controls()
+print("dynamic_vram:", "disabled" if cfg.get("disable_dynamic_vram",False) else "enabled")
+print("memory_protection:", "on" if ctl.get("memory_protection",True) else "off")
+print("output_naming:", ctl.get("output_naming_template","MMH3/{mode}"))
+PY
     echo
     if [[ "$phone" == "200" && "$comfy" == "200" && ( "$jupyter" == "200" || "$jupyter" == "302" || "$jupyter" == "403" ) ]]; then
       echo "VERDICT: local container services are healthy. If RunPod links are unavailable, suspect RunPod proxy/host state."

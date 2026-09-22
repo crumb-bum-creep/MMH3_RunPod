@@ -62,3 +62,6 @@ def test_ops_exposes_doctor_and_gpu_smoke():
     assert "  doctor)" in source
     assert "  gpu-smoke)" in source
     assert "GPU smoke: PASS" in source
+    assert "Dynamic VRAM:" in source
+    assert "Memory protection:" in source
+    assert "Comfy model visibility:" in source
