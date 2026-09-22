@@ -30,14 +30,6 @@ EROS_BETA5_INT8 = "10Eros_Max_h3_hybrid_beta5_int8.safetensors"
 CHECKPOINT_STOCK = "stock_convrot_int8"
 CHECKPOINT_EROS = "eros_beta5_int8"
 
-PROFILE_BALANCED = "balanced"
-PROFILE_FAST = "fast"
-FL2V_FAST = "minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors"
-FL2V_BALANCED = "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
-REF2V_FAST = "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
-REF2V_BALANCED = "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
-
-
 def _load_library() -> dict[str, Any]:
     value = base._load_json(LIBRARY_FILE, {})
     if not isinstance(value, dict):
