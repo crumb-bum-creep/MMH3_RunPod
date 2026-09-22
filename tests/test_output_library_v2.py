@@ -55,3 +55,10 @@ def test_library_v2_static_contracts():
     assert 'app.router.add_put("/api/output-library"' in wrapper
     assert '"unchanged": True' in wrapper
     assert "server_legacy.py" not in entrypoint and "server_v2.py" not in entrypoint
+
+
+def test_output_indexer_defers_warm_start_directory_scan():
+    source = (PHONE / "output_indexer.py").read_text(encoding="utf-8")
+    assert "poll_seconds: float = 5.0" in source
+    assert "safety_rescan_seconds: float = 300.0" in source
+    assert "if INDEX_FILE.exists() and startup_delay:" in source

@@ -57,7 +57,7 @@ def start_comfy() -> subprocess.Popen:
         args += ["--enable-cors-header", str(cfg["cors"])]
     if cfg.get("use_sage_attention", True):
         args.append("--use-sage-attention")
-    if cfg.get("disable_dynamic_vram", True):
+    if cfg.get("disable_dynamic_vram", False):
         args.append("--disable-dynamic-vram")
 
     reserve = float(((profile.get("comfy") or {}).get("reserve_vram_gb")) or 0)

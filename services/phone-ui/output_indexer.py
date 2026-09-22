@@ -119,7 +119,7 @@ def _dirs_changed(watched: dict[str, int]) -> bool:
     return False
 
 
-async def run_forever(poll_seconds: float = 2.0, safety_rescan_seconds: float = 120.0) -> None:
+async def run_forever(poll_seconds: float = 5.0, safety_rescan_seconds: float = 300.0) -> None:
     # Reuse the last persisted directory mtimes so a warm pod can serve the
     # existing output index immediately instead of recursively walking a large
     # persistent output tree while Comfy/provisioning are also starting.
@@ -131,7 +131,10 @@ async def run_forever(poll_seconds: float = 2.0, safety_rescan_seconds: float = 
     except ValueError:
         startup_delay = 45.0
 
-    if INDEX_FILE.exists() and not watched and startup_delay:
+    # Even a modern persisted index can represent hundreds/thousands of watched
+    # directories. Delay the first directory-stat sweep on every warm start so
+    # the UI/Comfy startup path gets uncontested I/O.
+    if INDEX_FILE.exists() and startup_delay:
         await asyncio.sleep(startup_delay)
 
     while True:
