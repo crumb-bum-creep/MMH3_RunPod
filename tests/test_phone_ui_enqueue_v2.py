@@ -90,7 +90,7 @@ def test_submit_posts_to_comfy_without_memory_cleanup(monkeypatch, tmp_path):
         return default
 
     monkeypatch.setattr(base, "_load_json", fake_load_json)
-    monkeypatch.setattr(base, "patch_workflow", lambda payload: ({"1": {"class_type": "TestNode", "inputs": {}}}, {
+    monkeypatch.setattr(base, "patch_workflow", lambda payload: ({"1": {"class_type": "TestNode", "inputs": {}}, "9": {"class_type": "VHS_VideoCombine", "inputs": {}}}, {
         "mode": "t2v",
         "model_family": "fl2v",
         "seed": 123,
@@ -122,6 +122,7 @@ def test_submit_posts_to_comfy_without_memory_cleanup(monkeypatch, tmp_path):
     sent = session.posts[0][1]["json"]
     assert sent["client_id"] == "phone-ui-test"
     assert sent["prompt"]["1"]["class_type"] == "TestNode"
+    assert sent["partial_execution_targets"] == ["9"]
     assert "integration-prompt-123" in app["records"]
     assert "integration-prompt-123" in app["plans"]
     assert touched == [("integration-prompt-123", {"status": "queued", "process_name": "Waiting in queue"})]
