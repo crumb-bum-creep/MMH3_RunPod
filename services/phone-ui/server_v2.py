@@ -414,6 +414,66 @@ async def api_free(request: web.Request) -> web.Response:
     return web.json_response({"ok": ok, "mode": "cache" if cache_only else "full"})
 
 
+def _graph_model_requirements(graph: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """Return (Comfy class, input name, selected filename) loader requirements."""
+    mapping = {
+        "CLIPLoader": "clip_name",
+        "UNETLoader": "unet_name",
+        "VAELoader": "vae_name",
+        "LoraLoaderModelOnly": "lora_name",
+    }
+    required: list[tuple[str, str, str]] = []
+    for class_type, input_name in mapping.items():
+        for _, node in base.find_nodes(graph, class_type):
+            filename = str((node.get("inputs") or {}).get(input_name) or "").strip()
+            if filename:
+                required.append((class_type, input_name, filename))
+    return required
+
+
+def _object_info_choices(info: dict[str, Any], class_type: str, input_name: str) -> set[str]:
+    try:
+        raw = info[class_type]["input"]["required"][input_name][0]
+    except (KeyError, IndexError, TypeError):
+        return set()
+    return {str(x) for x in raw} if isinstance(raw, list) else set()
+
+
+async def _ensure_graph_models_visible(app: web.Application, graph: dict[str, Any]) -> None:
+    """Fail safely and ask the supervisor to refresh Comfy if its cache is stale."""
+    required = _graph_model_requirements(graph)
+    if not required:
+        return
+    try:
+        async with app["session"].get(f"{app['comfy']}/object_info") as r:
+            if not r.ok:
+                raise RuntimeError(f"object_info HTTP {r.status}")
+            info = await r.json()
+    except Exception as exc:
+        raise web.HTTPServiceUnavailable(text=f"Could not verify Comfy model visibility: {exc}")
+
+    missing = [
+        filename
+        for class_type, input_name, filename in required
+        if filename not in _object_info_choices(info, class_type, input_name)
+    ]
+    if not missing:
+        return
+
+    request_file = base.STATE_ROOT / "comfy_model_rescan.request"
+    try:
+        request_file.write_text(
+            json.dumps({"requested_at": time.time(), "missing": sorted(set(missing))}, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+    names = ", ".join(sorted(set(missing))[:4])
+    raise web.HTTPServiceUnavailable(
+        text=f"Comfy's model index is stale ({names}). Automatic Comfy refresh requested; retry in a few seconds."
+    )
+
+
 async def api_generate(request: web.Request) -> web.Response:
     """Queue a generation without performing memory cleanup inside the request."""
     app = request.app
@@ -512,15 +572,36 @@ async def api_generate(request: web.Request) -> web.Response:
         )
 
     graph, record = base.patch_workflow(payload)
+    await _ensure_graph_models_visible(app, graph)
+
+    # Force Comfy to validate the actual video output branch. Without explicit
+    # targets a disconnected/invalid video branch can coexist with a valid
+    # display node, producing an apparent instant "success" with no video.
+    video_targets = [nid for nid, _ in base.find_nodes(graph, "VHS_VideoCombine")]
+    if not video_targets:
+        raise web.HTTPServiceUnavailable(text="workflow has no VHS_VideoCombine output target")
+
     plan = base._make_plan(graph)
     async with app["session"].post(
         f"{app['comfy']}/prompt",
-        json={"client_id": app["client_id"], "prompt": graph},
+        json={
+            "client_id": app["client_id"],
+            "prompt": graph,
+            "partial_execution_targets": video_targets,
+        },
     ) as r:
         body = await r.text()
         if not r.ok:
             raise web.HTTPBadGateway(text=body)
         reply = json.loads(body)
+
+    node_errors = reply.get("node_errors") or {}
+    if node_errors:
+        raise web.HTTPBadGateway(
+            text="Comfy rejected the video output branch: " + json.dumps(node_errors, separators=(",", ":"))
+        )
+    if not reply.get("prompt_id"):
+        raise web.HTTPBadGateway(text="Comfy accepted the request without returning a prompt_id")
 
     pid = str(reply["prompt_id"])
     app["plans"][pid] = plan
