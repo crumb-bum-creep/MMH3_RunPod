@@ -1,151 +1,266 @@
 # MMH3 Development Handoff
 
-> **Canonical baseline reset:** 2026-09-10  
+> **Updated:** 2026-09-22  
 > **Repository:** `crumb-bum-creep/MMH3_RunPod`  
-> **Development lineage:** continue from the validated production snapshot below, not from the later post-d2103 experiments.
+> **vNext branch:** `next/vnext-runtime-cleanup`  
+> **Historical production input:** `9d134f338f5374393a037f243551b1fe790517c6`  
+> **Historical production image:** `ghcr.io/crumb-bum-creep/mmh3-runpod:sha-9d134f338f53`
 
-## Canonical production baseline
+## Purpose
 
-The baseline for all new MMH3 development is the validated Phone UI v0.6 / optimized-runtime merge:
+MMH3 is a RunPod-first MiniMax H3 environment with:
 
-```text
-commit: d2103b98e60242125b825b60efc726b974847230
-image:  ghcr.io/crumb-bum-creep/mmh3-runpod:sha-d2103b98e602
-```
+- Phone UI on 7860;
+- ComfyUI on 8188;
+- JupyterLab on 8888;
+- six canonical T2V / I2V / R2V Auto + Custom API workflows;
+- persistent models, inputs, outputs and user state under `/workspace`;
+- image-local application code under `/opt/mmh3` and `/ComfyUI`.
 
-The post-d2103 commits that previously accumulated on `main` are historical reference material only. Do **not** wholesale rebase or merge them back into the active lineage. Port a specific later fix only after verifying that it is still wanted and does not regress this baseline.
+The vNext branch is a cleanup and reliability pass after repeated real RunPod migrations of the 9d image. Do not reintroduce the old live-patch/server-overlay architecture.
 
-## Current continuation work
+## Why vNext exists
 
-The first continuation from d2103 focuses on Phone UI usability and memory behavior while preserving the six known-good generation workflows and runtime stack.
+The 9d image worked, but repeated migrations exposed several runtime defects:
 
-### Indexed generation library
+1. Comfy could start before persistent model paths were fully reflected in its filename cache. Models existed on disk, but CLIP/Turbo selector lists were empty. Phone UI jobs then appeared to complete instantly without producing video. Manual bootstrap + Comfy restart repaired it.
+2. Phone UI queue submission did not force validation of the actual `VHS_VideoCombine` branch, allowing a valid display-only branch to look like a successful job.
+3. The output indexer could recursively scan a large persistent output library immediately after startup and compete with Comfy/provisioning for disk and CPU.
+4. Persistent `runtime.yaml` was initialized once and then frozen, so new image defaults could silently fail to reach an existing volume.
+5. Generation recipes were hardcoded in Python. Testing sampler/scheduler changes required live scripts against `/opt/mmh3`.
+6. `server.py`, `server_v2.py`, runtime renaming and `server_legacy.py` created unnecessary patching risk.
+7. Memory protection could not be disabled when the user intentionally wanted mixed-family queueing.
+8. Comfy was always launched with `--disable-dynamic-vram`. Real RunPod sessions showed inconsistent host-RAM retention; vNext returns to normal dynamic-VRAM behavior by default and treats this as a testable runtime choice rather than a universal truth.
+9. Output reuse did not provide a clean path from an Auto result to the exact generated prompt/configuration in Custom mode.
+10. Output filenames used a fixed prefix with no user-configurable naming convention.
 
-The old `/api/outputs` request recursively scanned every MP4, ran audio detection where necessary, statted everything, sorted everything, and then returned the list. With hundreds of videos that made the Outputs page increasingly expensive.
+## vNext architecture
 
-The continuation uses a background-derived index instead:
+### Canonical Phone UI backend
 
-```text
-user outputs:  /workspace/ComfyUI/output
-cached index:  /workspace/ComfyUI/output/.mmh3/output-index.json
-```
+The supervised service is now:
 
-`services/phone-ui/output_indexer.py` watches output-directory mtimes and rebuilds the index only when output directories change, with a periodic safety rescan. Request-time `/api/outputs` reads the cached JSON index instead of walking the filesystem. Clients can send `?since=<index_updated_at>` and receive a tiny `unchanged` response when nothing changed.
+`services/phone-ui/server.py`
 
-Only completed H3/VHS muxed MP4s using the normal `audio` filename convention are cataloged. `MMH3Director` outputs are excluded.
+Reusable baseline implementation code lives in:
 
-### Compact Outputs UI
+`services/phone-ui/server_core.py`
 
-The v0.6 vertical `<details>` list is retained only as historical implementation code; the active continuation overlays a compact library UI:
+There is no `server_v2.py`, no `server_legacy.py`, and `runtime/entrypoint.sh` no longer rewrites Python server files at container startup.
 
-- responsive thumbnail grid;
-- 48 cards rendered initially, with Show More pagination;
-- lazy image previews instead of one live `<video>` element per output;
-- one detail dialog / video player created only when a card is opened;
-- search across filenames, prompts, groups and tags;
-- single group/folder assignment per video;
-- multiple free-form tags per video;
-- independent Favorite flag;
-- group + tag + Favorites filters compose together.
+Git commits/tags are the rollback mechanism.
 
-Persistent user organization metadata lives at:
+### Migration-safe Comfy model visibility
 
-```text
-/workspace/mmh3/data/output_library.json
-```
+Before every Comfy launch, the supervisor calls `configure_persistent_paths()`.
 
-The derived output index can be regenerated; `output_library.json` is user-owned persistent state and must not be treated as disposable cache.
+Queue submission also verifies the selected CLIP / UNET / VAE / Turbo filenames against Comfy `/object_info`. If the files should exist but Comfy's selector cache is stale, Phone UI:
 
-### Always-visible generation progress
+- rejects the job instead of pretending it ran;
+- writes `/workspace/mmh3/state/comfy_model_rescan.request`;
+- tells the user an automatic refresh was requested.
 
-While a generation is queued or running, a compact fixed progress strip is visible on every tab. It contains:
+The supervisor notices that request and, once the Comfy queue is idle, restarts only Comfy with persistent paths reasserted.
 
-- current-process progress bar + percent;
-- overall-workflow progress bar + percent.
+### Real video-output validation
 
-It intentionally does not show step numbers or consume significant screen height.
+Phone UI submits jobs with the workflow's `VHS_VideoCombine` node(s) as `partial_execution_targets`.
 
-### Cache-first memory protection
+A queue response containing `node_errors` is treated as a failure and is not added to the generation record/plan store as a successful queued job.
 
-The supervisor memory guard uses a staged cache-first policy during ordinary idle pressure:
+This is the regression guard for the historical instant-completion/no-video failure.
 
-1. request `unload_models=false, free_memory=true` first;
-2. keep the hot model loaded and allow a short grace period (`cache_grace_seconds`, default 15s);
-3. if pressure remains, escalate to `unload_models=true, free_memory=true`;
-4. critical-memory interrupt behavior remains governed by the existing hardware/runtime policy.
+### Output library startup behavior
 
-The d2103 **generation-admission path is intentionally not monkey-patched**. If a user attempts to enqueue while host memory is already above the admission threshold, `/api/generate` retains the original d2103 behavior and may immediately request a full Comfy model/cache release before posting the prompt. This is deliberate: the background guard can optimize idle memory behavior, but enqueue must not stall on a cache-only cleanup and then reject the prompt before it reaches Comfy.
+`output_indexer.py` persists both the video index and watched directory mtimes.
 
-The System tab separately exposes **Clear cache** and **Unload models + cache**.
+Warm starts serve the existing index immediately and avoid an unconditional full recursive output scan. Older indexes without watched-directory state receive a startup grace before reconciliation. Failed background scans preserve the previous usable index rather than blanking Outputs.
 
-Default config additions:
+Do not reintroduce request-time recursive scanning.
 
-```yaml
-memory:
-  cache_first: true
-  cache_grace_seconds: 15
-```
+### Runtime config migration
 
-## Runtime compatibility layer
+Image defaults live in `config/runtime.yaml`; persistent user config remains under `/workspace/mmh3/config/runtime.yaml`.
 
-The goal is to continue from d2103 rather than rewrite it invisibly. The image still contains the known-good d2103 `services/phone-ui/server.py` at build time. On container startup, when `server_v2.py` is present, `runtime/entrypoint.sh` preserves the original as `server_legacy.py` and installs the continuation wrapper as the supervised `server.py`.
+Runtime config now has a schema version. Bootstrap deep-merges new defaults with persistent overrides and performs explicit migrations with a backup when a schema transition changes behavior.
 
-This makes the d2103 server an explicit rollback/reference layer while allowing the new output-library and cache-management behavior to extend it.
+v1 -> v2 intentionally changes:
 
-## Contracts that must not regress
+`comfy.disable_dynamic_vram: true -> false`
 
-- Phone UI: port 7860
-- ComfyUI: port 8188
-- JupyterLab: port 8888
-- Persistent storage remains under `/workspace`.
-- Application/runtime source remains image-local under `/opt/mmh3` and `/ComfyUI`.
-- Exactly six canonical API generation workflows remain supported: T2V Auto/Custom, I2V Auto/Custom, R2V Auto/Custom.
-- Custom R2V must not invoke Auto/OpenRouter prompt generation.
-- Secrets must never be committed to Git.
-- `MMH3Director` content must not be mixed into the normal generated-video library.
-- Do not reintroduce request-time recursive output scanning or a live `<video>` element for every generation card.
-- Prefer cache clearing before model unloading during ordinary idle memory pressure; retain full unload as escalation.
-- Do not globally patch the d2103 Phone UI `comfy.free_memory` function; user-triggered generation admission must retain the baseline full-release escape path when already under pressure.
+A user who later explicitly sets it in a v2 config keeps that choice.
 
-## Development rule from here
+### Cold vs warm startup sequencing
 
-Treat the d2103 continuation lineage as authoritative. Before bringing over any code from the former post-d2103 `main`, inspect the exact change and port only the desired behavior intentionally. Do not assume a numerically newer commit is a better MMH3 baseline.
+Cold volume:
 
+`Phone UI + Comfy -> short grace -> provision immediately while Comfy initializes`
 
-## 2026-09-18 resilient provisioning + generation profiles
+Warm/migrated volume with local core already present:
 
-This iteration continues from the deployed `sha-d44f924e57fa` feature image plus the targeted `233700d` provisioning-telemetry fix. It does not reintroduce the discarded post-d2103 lineage wholesale.
+`Phone UI + Comfy -> wait for Comfy health -> warm-start grace -> background provisioner`
 
-### Warm-start and migration-safe provisioning
+Default warm grace is 8 seconds. This reduces startup contention without delaying first-time model downloads.
 
-Bootstrap now performs a network-free inventory of the persistent model volume before starting services. If the stock core is already present, `core_ready` is restored immediately instead of being reset to false on every container start. The background provisioner still verifies the inventory and repairs missing files.
+## Generation recipes
 
-Model verification is stronger than the old minimum-size check:
+Generation recipes are defined in:
 
-- reuse the exact byte size recorded by the last successful provisioning report when available;
-- query Hugging Face metadata in the background and require the exact remote size when available;
-- detect broken symlinks and partial/truncated final files;
-- wait briefly before repairing a wrong-size existing file so an active RunPod volume restore is not deleted mid-transfer;
-- preserve Hugging Face's resumable local-download behavior;
-- touch model directories after verification/download so ComfyUI's directory-mtime model cache notices restored files without requiring a manual Comfy restart.
+`config/generation_profiles.yaml`
 
-The supervisor gives failed background provisioning a bounded retry window rather than permanently giving up after the first transient failure. Default: 3 attempts with exponential backoff starting at 8 seconds.
+Resolver/validation code lives in:
 
-### Accelerated generation profiles
+`runtime/mmh3/generation_profiles.py`
 
-`base_checkpoint` and `generation_profile` are independent selectors. The base checkpoint remains Stock ConvRot INT8 or Eros Max Beta5 INT8; the generation profile chooses the LightX2V Turbo recipe.
+Phone UI can apply a named profile and optionally override supported tuning fields per generation. The fully resolved recipe is saved into output metadata as `generation_settings`.
 
-| Mode | Profile | Turbo file | Strength | Steps | Video/audio shift | Sampler / scheduler |
-| --- | --- | --- | ---: | ---: | --- | --- |
-| T2V / I2V | Balanced (default) | `minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` | 1.0 | 8 | 6 / 3 | Euler / Simple |
-| T2V / I2V | Fast | `minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors` | 1.0 | 4 | 6 / 3 | Euler / Simple |
-| R2V | Balanced (default) | `minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` | 1.0 | 8 | 12 / 3 | Euler / Simple |
-| R2V | Fast / legacy | `minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` | 0.85 | 4 | legacy v0.1 path | seeds_2 + Beta/Extend |
+### T2V / I2V
 
-The R2V Fast path intentionally preserves the old production recipe so Fast-v0.1 vs Balanced-v1.0 remains a meaningful comparison. The six bundled standalone Comfy workflows use Balanced defaults; Phone UI can queue either profile without rewriting the stored workflow files.
+| ID | Purpose | Turbo | Strength | Schedule |
+| --- | --- | --- | ---: | --- |
+| `balanced8` | current 8-step profile | FL2V 8-step v1.0 | 1.0 | Euler + Simple, 8 steps, shift 6/3 |
+| `fast4` | current fast profile | FL2V 4-step v1.2 | 1.0 | Euler + Simple, 4 steps, shift 6/3 |
+| `legacy_exact` | historical pre-profile reproduction | FL2V LightX2V v0.1 | 0.5 | Euler + Beta 0.79/0.5 + Extend 3 |
 
-Turbo files are provisioned in an `accelerator` phase after the stock core and before user-managed LoRAs. The stock core can unlock generation while accelerators continue; queue admission separately verifies the Turbo file required by the selected profile. Eros remains the final addon phase.
+The historical FL2V v0.1 LoRA is again a managed accelerator so a fresh deployment can actually reproduce legacy outputs.
 
-The older FL2V 4-step v0.1 file is no longer a managed download. Existing persistent copies are not deleted automatically.
+### R2V
 
-The Alibaba PAI/Kijai Ref2VA PDD accelerator remains experimental and is not part of the default image.
+| ID | Purpose | Turbo | Strength | Schedule |
+| --- | --- | --- | ---: | --- |
+| `tuned` | vNext default under evaluation | Ref2V v0.1 | 0.85 | Euler + historical Beta/Extend chain |
+| `legacy_exact` | exact historical baseline | Ref2V v0.1 | 0.85 | seeds_2 + Beta 0.6/0.6 + Extend 2 |
+| `balanced8` | newer 8-step comparison | Ref2V 8-step v1.0 | 1.0 | Euler + Simple, 8 steps, shift 12/3 |
+
+Important empirical findings from RunPod testing:
+
+- `seeds_2` reproducibly reintroduced the historical left-shift/composition problem;
+- Euler has been the best R2V sampler tested so far;
+- `res_multistep` looked substantially worse and should not be promoted;
+- with Euler, remaining composition drift appeared by the second preview/early denoising update, so scheduler/sigma-chain tuning is a higher-priority diagnostic than late decode behavior.
+
+Do not rewrite `legacy_exact` to reflect newer preferences. It exists for reproduction. Continue tuning under `tuned`.
+
+### Advanced tuning UI
+
+The Generate tab exposes a collapsed Advanced section backed by actual recipe data:
+
+- sampler;
+- schedule type (Basic / Beta);
+- steps;
+- Turbo strength;
+- Basic scheduler;
+- video/audio sigma shifts;
+- Beta alpha/beta;
+- ExtendIntermediateSigmas enable/steps/start/end/spacing;
+- R2V reference sizing `max` / `match`.
+
+Sampler and BasicScheduler options are queried from the running Comfy instance when available.
+
+## Reuse Exact
+
+Outputs expose one reuse action: **Reuse Exact**.
+
+It loads the output into the matching **Custom Prompt** mode and restores:
+
+- `actual_prompt` for Auto-generated outputs;
+- seed, with randomization disabled;
+- starting/ending images;
+- R2V references;
+- user LoRAs and strengths;
+- aspect ratio, megapixels and duration;
+- checkpoint;
+- generation profile;
+- fully resolved `generation_settings` recipe;
+- output naming metadata where applicable.
+
+Historical outputs that predate resolved recipe metadata must map to historical profile defaults rather than silently using today's default.
+
+## Output naming
+
+Default behavior remains equivalent to production:
+
+`MMH3/{mode}`
+
+A persistent System setting allows a naming template using:
+
+- `{mode}`
+- `{prompt_mode}`
+- `{profile}`
+- `{checkpoint}`
+- `{seed}`
+- `{date}`
+- `{time}`
+
+Rendered path segments are sanitized before reaching `VHS_VideoCombine`.
+
+## Memory protection
+
+Persistent runtime controls live in:
+
+`/workspace/mmh3/data/runtime_controls.json`
+
+**Memory Protection** defaults ON.
+
+ON:
+- background cache-first memory guard operates normally;
+- critically high memory can block new jobs;
+- mixed FL2V / Ref2V queue families are blocked to preserve cleanup windows.
+
+OFF:
+- memory hold/automatic cleanup pressure logic is disabled;
+- critical-memory admission blocking is bypassed;
+- mixed-family queueing is allowed.
+
+Manual cache/model release controls remain available either way.
+
+Memory telemetry continues to distinguish raw cgroup usage from working set by subtracting reclaimable inactive file cache.
+
+## Image/build housekeeping
+
+The production image is defined by the root `Dockerfile`.
+
+Superseded `Dockerfile.fast`, `Dockerfile.ultra`, their build workflows, and the obsolete startup-branch test workflow were removed. The optimized split-runtime-layer strategy remains in the production Dockerfile.
+
+Primary workflows:
+
+- `.github/workflows/test.yml` — runtime/unit/contracts;
+- `.github/workflows/build-image.yml` — production image on `main`;
+- `.github/workflows/build-production-candidate.yml` — explicit manual candidate build;
+- `.github/workflows/audit-runtime-weight.yml` — image/runtime weight auditing.
+
+## Non-negotiable contracts
+
+- persistent data remains under `/workspace`;
+- outputs are never deleted as part of migration/repair;
+- exactly six canonical API workflow files remain installed;
+- Custom R2V never invokes OpenRouter Auto prompt generation;
+- no secrets in Git/workflow JSON;
+- `MMH3Director` remains excluded from the normal output library;
+- queue admission never performs synchronous model/cache cleanup;
+- a failed video branch must never surface as a successful generation;
+- migration recovery must not require ad-hoc scripts against `/opt`;
+- live sampler experiments must go through recipe/tuning controls, not source-file surgery.
+
+## Before promoting vNext
+
+Do not merge/promote until all of the following are true:
+
+1. runtime CI is green;
+2. candidate image builds and passes image smoke tests;
+3. warm migration boots without manual bootstrap/Comfy restart;
+4. Phone UI remains responsive during startup with a large persistent output library;
+5. Fast/Balanced/Legacy accelerator files are visible to Comfy;
+6. T2V, I2V and R2V each produce a real video through Phone UI;
+7. an intentionally invalid video branch is rejected instead of instant-completing;
+8. Memory Protection OFF permits intentional mixed-family queueing;
+9. Memory Protection ON retains safe blocking/cleanup behavior;
+10. dynamic-VRAM-on candidate is exercised across a mixed sequence such as R2V -> R2V -> I2V -> T2V -> R2V while watching both working-set and raw host RAM;
+11. Reuse Exact restores an Auto result into Custom mode with generated prompt, references, LoRAs, seed and recipe intact;
+12. output naming default matches historical behavior and custom templates write where expected.
+
+## Current development rule
+
+The 9d image is the historical input baseline; vNext is the active continuation.
+
+Do not copy live duct-tape scripts into production architecture. Convert the behavior they proved into tested runtime features, then delete the need for the script.
