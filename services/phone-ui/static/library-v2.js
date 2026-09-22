@@ -273,7 +273,7 @@
     q("#outputCopyPromptV2").onclick=()=>copyText(m.actual_prompt||m.prompt||m.prompt_idea||"");
     q("#outputCopySeedV2").onclick=()=>copyText(String(m.seed??""));
     q("#outputCopyMetaV2").onclick=()=>copyText(JSON.stringify(m,null,2));
-    q("#outputReuseV2").onclick=()=>{dialog.close();reuseExactSnapshot(m);switchTab("generate");toast("Exact setup loaded as Custom");};
+    q("#outputReuseV2").onclick=()=>{dialog.close();const fallback=reuseExactSnapshot(m);switchTab("generate");toast(fallback?"Loaded as Custom · historical recipe defaults applied":"Exact setup loaded as Custom");};
     q("#outputUseR2VV2").onclick=async()=>{try{const d=await api("/api/output-to-input",{method:"POST",body:{file}});dialog.close();setMode("r2v");addRef("video",d.file,true);switchTab("generate");refreshInputOptions();toast("Added as R2V video reference");}catch(e){toast(e.message);}};
     q("#outputDeleteV2").onclick=async()=>{
       if(!confirm("Delete this video?"))return;
