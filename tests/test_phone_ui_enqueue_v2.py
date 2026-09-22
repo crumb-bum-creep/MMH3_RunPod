@@ -69,6 +69,14 @@ class FakeRequest:
         return self.payload
 
 
+class ReadyModelPath:
+    def is_file(self):
+        return True
+
+    def stat(self):
+        return SimpleNamespace(st_size=2 * 1024**3)
+
+
 def test_submit_posts_to_comfy_without_memory_cleanup(monkeypatch, tmp_path):
     wrapper = load_wrapper()
     base = wrapper.base
@@ -90,6 +98,7 @@ def test_submit_posts_to_comfy_without_memory_cleanup(monkeypatch, tmp_path):
         return default
 
     monkeypatch.setattr(base, "_load_json", fake_load_json)
+    monkeypatch.setattr(wrapper, "_profile_path", lambda _name: ReadyModelPath())
     monkeypatch.setattr(base, "patch_workflow", lambda payload: ({"1": {"class_type": "TestNode", "inputs": {}}, "9": {"class_type": "VHS_VideoCombine", "inputs": {}}}, {
         "mode": "t2v",
         "model_family": "fl2v",
@@ -147,6 +156,7 @@ def test_critical_rejection_is_side_effect_free(monkeypatch):
         return default
 
     monkeypatch.setattr(base, "_load_json", fake_load_json)
+    monkeypatch.setattr(wrapper, "_profile_path", lambda _name: ReadyModelPath())
     monkeypatch.setattr(base.comfy, "free_memory", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no cleanup on reject")))
 
     app = {
