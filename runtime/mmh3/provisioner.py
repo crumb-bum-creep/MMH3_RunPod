@@ -24,6 +24,28 @@ def _state(**values):
         dump_json(path, current)
 
 
+def _request_comfy_rescan(results: list[dict], reason: str) -> None:
+    downloaded = [
+        str(row.get("name") or row.get("destination") or "")
+        for row in results
+        if isinstance(row, dict) and row.get("status") == "downloaded"
+    ]
+    downloaded = [name for name in downloaded if name]
+    if not downloaded:
+        return
+    try:
+        dump_json(
+            STATE_ROOT / "comfy_model_rescan.request",
+            {
+                "requested_at": time.time(),
+                "reason": reason,
+                "downloaded": downloaded,
+            },
+        )
+    except Exception:
+        pass
+
+
 def _progress_callback(name: str, values: dict) -> None:
     with _STATE_LOCK:
         path = STATE_ROOT / "provisioning.json"
@@ -82,6 +104,7 @@ def run() -> int:
         if do_models:
             _state(stage="models", message="Checking/downloading stock MiniMax H3 core models")
             core_results = sync_models(manifest, phase="core", progress=_progress_callback)
+            _request_comfy_rescan(core_results, "core_models_changed")
             core_failed = [x for x in core_results if x.get("status") == "error"]
             core_ready = not core_failed
             _state(
@@ -105,6 +128,7 @@ def run() -> int:
                 ),
             )
             accelerator_results = sync_models(manifest, phase="accelerator", progress=_progress_callback)
+            _request_comfy_rescan(accelerator_results, "accelerators_changed")
             accelerator_failed = [x for x in accelerator_results if x.get("status") == "error"]
             accelerator_ready = not accelerator_failed and bool(accelerator_results)
             _state(
@@ -145,6 +169,7 @@ def run() -> int:
                 message="Downloading/checking Eros Max Beta5 INT8 last",
             )
             addon_results = sync_models(manifest, phase="addon", progress=_progress_callback)
+            _request_comfy_rescan(addon_results, "addons_changed")
             addon_failed = [x for x in addon_results if x.get("status") == "error"]
             addon_ready = not addon_failed and bool(addon_results)
             _state(
