@@ -42,4 +42,5 @@ provisioning:
   run_in_background: true
   retry_attempts: 3
   retry_backoff_seconds: 8
+  warm_start_grace_seconds: 8
   workflow_install_mode: overwrite
