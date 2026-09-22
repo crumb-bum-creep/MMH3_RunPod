@@ -603,7 +603,7 @@ async def api_generate(request: web.Request) -> web.Response:
                  "The prompt was not queued and no memory cleanup was triggered by this submission."
         )
 
-    graph, record = base.patch_workflow(payload)
+    graph, record = patch_workflow_v3(payload)
     await _ensure_graph_models_visible(app, graph)
 
     # Force Comfy to validate the actual video output branch. Without explicit
@@ -675,15 +675,17 @@ async def _stop_indexer(app: web.Application) -> None:
 
 
 def make_app(comfy_url: str) -> web.Application:
-    base.APP_VERSION = APP_VERSION
-    base.patch_workflow = patch_workflow_v3
-    base.api_generate = api_generate
-    base.api_outputs = api_outputs
-    base.api_delete_output = api_delete_output
-    base.api_free = api_free
-    base.index = index
-
-    app = base.make_app(comfy_url)
+    app = base.make_app(
+        comfy_url,
+        app_version=APP_VERSION,
+        handlers={
+            "index": index,
+            "api_generate": api_generate,
+            "api_outputs": api_outputs,
+            "api_delete_output": api_delete_output,
+            "api_free": api_free,
+        },
+    )
     app.router.add_get("/api/output-library", api_output_library_get)
     app.router.add_put("/api/output-library", api_output_library_put)
     app.router.add_get("/api/generation-profiles", api_generation_profiles)

@@ -89,3 +89,6 @@ def test_phone_ui_has_one_canonical_entrypoint():
     assert not (phone / "server_v2.py").exists()
     assert "server_legacy.py" not in entrypoint
     assert "server_v2.py" not in entrypoint
+    server = (phone / "server.py").read_text(encoding="utf-8")
+    assert "base.api_generate = api_generate" not in server
+    assert "base.patch_workflow = patch_workflow_v3" not in server

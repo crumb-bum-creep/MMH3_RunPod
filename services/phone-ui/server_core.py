@@ -606,7 +606,7 @@ async def api_info(request: web.Request) -> web.Response:
         "status": "unknown", "stage": "unknown", "core_ready": False
     })
     return web.json_response({
-        "version": APP_VERSION,
+        "version": request.app.get("app_version", APP_VERSION),
         "hardware": h.to_dict(),
         "memory": mem,
         "provisioning": provisioning,
@@ -1159,7 +1159,18 @@ async def on_cleanup(app: web.Application) -> None:
     await app["session"].close()
 
 
-def make_app(comfy_url: str) -> web.Application:
+def make_app(
+    comfy_url: str,
+    *,
+    handlers: dict[str, Any] | None = None,
+    app_version: str | None = None,
+) -> web.Application:
+    """Build the core app with explicit handler injection for vNext extensions."""
+    handlers = handlers or {}
+
+    def handler(name: str, default):
+        return handlers.get(name, default)
+
     app = web.Application(client_max_size=4 * 1024**3)
     app["comfy"] = comfy_url.rstrip("/")
     app["client_id"] = "mmh3-phone-" + uuid.uuid4().hex
@@ -1167,13 +1178,14 @@ def make_app(comfy_url: str) -> web.Application:
     app["progress"] = {}
     app["records"] = _load_json(RECORD_FILE, {})
     app["ws_connected"] = False
+    app["app_version"] = app_version or APP_VERSION
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
     app.add_routes([
-        web.get("/", index),
+        web.get("/", handler("index", index)),
         web.static("/static", STATIC, show_index=False),
         web.get("/api/info", api_info),
-        web.post("/api/generate", api_generate),
+        web.post("/api/generate", handler("api_generate", api_generate)),
         web.get("/api/queue", api_queue),
         web.get("/api/progress", api_progress),
         web.post("/api/cancel/{pid}", api_cancel),
@@ -1184,8 +1196,8 @@ def make_app(comfy_url: str) -> web.Application:
         web.get("/media/input-thumb/{path:.*}", serve_input_thumb),
         web.get("/api/ui-state", api_ui_state_get),
         web.put("/api/ui-state", api_ui_state_put),
-        web.get("/api/outputs", api_outputs),
-        web.delete("/api/outputs/{path:.*}", api_delete_output),
+        web.get("/api/outputs", handler("api_outputs", api_outputs)),
+        web.delete("/api/outputs/{path:.*}", handler("api_delete_output", api_delete_output)),
         web.get("/media/output/{path:.*}", serve_output),
         web.post("/api/output-to-input", api_output_to_input),
         web.get("/api/loras", api_loras),
@@ -1198,7 +1210,7 @@ def make_app(comfy_url: str) -> web.Application:
         web.get("/api/templates", api_templates_get),
         web.post("/api/templates", api_templates_put),
         web.delete("/api/templates/{name}", api_templates_delete),
-        web.post("/api/system/free", api_free),
+        web.post("/api/system/free", handler("api_free", api_free)),
         web.post("/api/system/interrupt", api_interrupt),
     ])
     return app

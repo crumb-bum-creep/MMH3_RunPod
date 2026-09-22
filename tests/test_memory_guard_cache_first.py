@@ -24,7 +24,9 @@ def test_memory_guard_is_cache_first_and_enqueue_is_side_effect_free():
 
     # The active continuation owns /api/generate and must POST to Comfy without
     # invoking cleanup or waiting for memory to cross an ordinary-pressure gate.
-    assert "base.api_generate = api_generate" in wrapper
+    assert '"api_generate": api_generate' in wrapper
+    assert "base.api_generate = api_generate" not in wrapper
+    assert "base.patch_workflow = patch_workflow_v3" not in wrapper
     start = wrapper.index("async def api_generate")
     end = wrapper.index("async def index", start)
     enqueue = wrapper[start:end]
