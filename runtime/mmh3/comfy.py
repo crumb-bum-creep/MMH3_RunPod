@@ -107,3 +107,53 @@ def interrupt() -> bool:
         return r.ok
     except requests.RequestException:
         return False
+
+
+def object_info(timeout: float = 10.0) -> dict[str, Any]:
+    try:
+        r = requests.get(base_url() + "/object_info", timeout=timeout)
+        r.raise_for_status()
+        value = r.json()
+        return value if isinstance(value, dict) else {}
+    except (requests.RequestException, ValueError):
+        return {}
+
+
+def _choice_values(info: dict[str, Any], class_type: str, input_name: str) -> set[str]:
+    try:
+        raw = info[class_type]["input"]["required"][input_name][0]
+    except (KeyError, IndexError, TypeError):
+        return set()
+    return {str(value) for value in raw} if isinstance(raw, list) else set()
+
+
+def missing_ready_model_choices(progress: dict[str, Any]) -> list[str]:
+    """Return ready persistent model files that Comfy's current selector cache cannot see."""
+    info = object_info()
+    if not info:
+        return []
+
+    mapping = {
+        "text_encoders/": ("CLIPLoader", "clip_name"),
+        "diffusion_models/": ("UNETLoader", "unet_name"),
+        "unet/": ("UNETLoader", "unet_name"),
+        "vae/": ("VAELoader", "vae_name"),
+        "loras/": ("LoraLoaderModelOnly", "lora_name"),
+    }
+    choices = {
+        key: _choice_values(info, *target)
+        for key, target in mapping.items()
+    }
+
+    missing: list[str] = []
+    for row in (progress or {}).values():
+        if not isinstance(row, dict) or row.get("status") != "ready":
+            continue
+        destination = str(row.get("destination") or "").replace("\\", "/")
+        prefix = next((key for key in mapping if destination.startswith(key)), None)
+        if prefix is None:
+            continue
+        filename = destination.split("/")[-1]
+        if filename and filename not in choices[prefix]:
+            missing.append(filename)
+    return sorted(set(missing))
