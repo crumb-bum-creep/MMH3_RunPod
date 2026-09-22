@@ -10,6 +10,8 @@ from typing import Any
 
 from aiohttp import web
 
+from mmh3.controls import load_controls, save_controls
+
 try:
     import server_legacy as base
 except ImportError:  # development/test checkout before runtime overlay
@@ -306,6 +308,34 @@ def _next_node_id(graph: dict[str, Any], prefix: str) -> str:
     return candidate
 
 
+def _sanitize_prefix_segment(value: str) -> str:
+    import re
+    value = re.sub(r"[^A-Za-z0-9._() +\-]+", "_", str(value or "")).strip(" .")
+    return value[:120] or "_"
+
+
+def _output_prefix(payload: dict[str, Any], record: dict[str, Any], profile: str, checkpoint: str) -> tuple[str, str]:
+    controls = load_controls()
+    template = str(payload.get("output_naming_template") or controls.get("output_naming_template") or "MMH3/{mode}")
+    now = time.localtime()
+    values = {
+        "mode": str(record.get("mode") or "VIDEO").upper(),
+        "prompt_mode": str(record.get("prompt_mode") or "").lower(),
+        "profile": str(profile or ""),
+        "checkpoint": str(checkpoint or ""),
+        "seed": str(record.get("seed") or ""),
+        "date": time.strftime("%Y-%m-%d", now),
+        "time": time.strftime("%H-%M-%S", now),
+    }
+    try:
+        rendered = template.format_map(values)
+    except (KeyError, ValueError):
+        rendered = "MMH3/{mode}".format_map(values)
+        template = "MMH3/{mode}"
+    parts = [_sanitize_prefix_segment(part) for part in rendered.replace("\\", "/").split("/") if part not in {"", ".", ".."}]
+    return "/".join(parts[:8]) or f"MMH3/{values['mode']}", template
+
+
 def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """Apply MMH3 v3 queue-time features on top of the d2103 workflow patcher."""
     graph, record = _base_patch_workflow(payload)
@@ -355,6 +385,12 @@ def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str
     record["turbo_shift_video"] = profile_spec["shift_video"]
     record["turbo_shift_audio"] = profile_spec["shift_audio"]
     record["ending_image"] = ending_image or None
+
+    output_prefix, naming_template = _output_prefix(payload, record, generation_profile, choice)
+    for _, node in base.find_nodes(graph, "VHS_VideoCombine"):
+        node.setdefault("inputs", {})["filename_prefix"] = output_prefix
+    record["output_prefix"] = output_prefix
+    record["output_naming_template"] = naming_template
     return graph, record
 
 
@@ -474,10 +510,23 @@ async def _ensure_graph_models_visible(app: web.Application, graph: dict[str, An
     )
 
 
+async def api_runtime_controls_get(request: web.Request) -> web.Response:
+    return web.json_response(load_controls())
+
+
+async def api_runtime_controls_put(request: web.Request) -> web.Response:
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(text="runtime controls must be an object")
+    return web.json_response(save_controls(body))
+
+
 async def api_generate(request: web.Request) -> web.Response:
     """Queue a generation without performing memory cleanup inside the request."""
     app = request.app
     payload = await request.json()
+    controls = load_controls()
+    memory_protection = bool(controls.get("memory_protection", True))
 
     requested_mode = str(payload.get("mode") or "t2v").lower()
     requested_family = "ref2v" if requested_mode == "r2v" else "fl2v"
@@ -501,7 +550,7 @@ async def api_generate(request: web.Request) -> web.Response:
             if family:
                 active_families.add(str(family))
 
-    if active_families and requested_family not in active_families:
+    if memory_protection and active_families and requested_family not in active_families:
         names = ", ".join(sorted(active_families))
         raise web.HTTPConflict(
             text=f"A {names} generation family is already running/queued. "
@@ -564,7 +613,7 @@ async def api_generate(request: web.Request) -> web.Response:
         fraction, critical_fraction, free_bytes, updated_at = 0.0, 0.92, 0.0, 0.0
 
     memory_is_fresh = updated_at > 0 and (time.time() - updated_at) <= 15.0
-    if memory_is_fresh and fraction >= critical_fraction:
+    if memory_protection and memory_is_fresh and fraction >= critical_fraction:
         free_gib = free_bytes / (1024 ** 3)
         raise web.HTTPServiceUnavailable(
             text=f"MMH3 host memory is critically high ({fraction:.0%} used, {free_gib:.1f} GiB free). "
@@ -654,6 +703,8 @@ def make_app(comfy_url: str) -> web.Application:
     app = base.make_app(comfy_url)
     app.router.add_get("/api/output-library", api_output_library_get)
     app.router.add_put("/api/output-library", api_output_library_put)
+    app.router.add_get("/api/runtime-controls", api_runtime_controls_get)
+    app.router.add_put("/api/runtime-controls", api_runtime_controls_put)
     app.on_startup.append(_start_indexer)
     app.on_cleanup.append(_stop_indexer)
     return app
