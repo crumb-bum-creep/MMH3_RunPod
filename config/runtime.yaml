@@ -14,7 +14,10 @@ services:
 
 comfy:
   use_sage_attention: true
-  disable_dynamic_vram: true
+  # Dynamic VRAM is left enabled by default. The old --disable-dynamic-vram
+  # setting correlated with host-RAM retention on the 96 GB RTX PRO 6000.
+  # Keep this configurable so hardware-specific A/B testing is easy.
+  disable_dynamic_vram: false
   cors: "*"
 
 memory:
