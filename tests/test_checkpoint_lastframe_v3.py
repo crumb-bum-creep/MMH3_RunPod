@@ -70,8 +70,9 @@ def test_eros_i2v_patches_unet_last_frame_and_openrouter(monkeypatch):
     assert record["base_checkpoint"] == wrapper.CHECKPOINT_EROS
     assert record["base_checkpoint_file"] == wrapper.EROS_BETA5_INT8
     assert record["generation_profile"] == "balanced8"
-    assert record["turbo_lora"] == wrapper.FL2V_BALANCED
-    assert graph["50"]["inputs"]["lora_name"] == wrapper.FL2V_BALANCED
+    expected = wrapper._profile_spec("i2v", "balanced8")["turbo_lora"]
+    assert record["turbo_lora"] == expected
+    assert graph["50"]["inputs"]["lora_name"] == expected
     assert graph["50"]["inputs"]["strength_model"] == 1.0
     assert graph["51"]["inputs"]["shift_video"] == 6.0
     assert graph["52"]["inputs"]["steps"] == 8
@@ -120,8 +121,9 @@ def test_fast_fl2v_uses_v12_four_step_recipe(monkeypatch):
     })
 
     assert record["generation_profile"] == "fast4"
-    assert record["turbo_lora"] == wrapper.FL2V_FAST
-    assert graph["50"]["inputs"]["lora_name"] == wrapper.FL2V_FAST
+    expected = wrapper._profile_spec("t2v", "fast4")["turbo_lora"]
+    assert record["turbo_lora"] == expected
+    assert graph["50"]["inputs"]["lora_name"] == expected
     assert graph["50"]["inputs"]["strength_model"] == 1.0
     assert graph["51"]["inputs"]["shift_video"] == 6.0
     assert graph["51"]["inputs"]["shift_audio"] == 3.0
@@ -141,8 +143,9 @@ def test_fast_r2v_preserves_legacy_four_step_recipe(monkeypatch):
     })
 
     assert record["generation_profile"] == "legacy_exact"
-    assert record["turbo_lora"] == wrapper.REF2V_FAST
-    assert graph["50"]["inputs"]["lora_name"] == wrapper.REF2V_FAST
+    expected = wrapper._profile_spec("r2v", "legacy_exact")["turbo_lora"]
+    assert record["turbo_lora"] == expected
+    assert graph["50"]["inputs"]["lora_name"] == expected
     assert graph["50"]["inputs"]["strength_model"] == 0.85
     assert graph["53"]["inputs"]["sampler_name"] == "seeds_2"
 
@@ -167,7 +170,7 @@ def test_r2v_default_is_tuned_euler_v01(monkeypatch):
     })
 
     assert record["generation_profile"] == "tuned"
-    assert record["turbo_lora"] == wrapper.REF2V_FAST
+    assert record["turbo_lora"] == wrapper._profile_spec("r2v", "tuned")["turbo_lora"]
     assert graph["53"]["inputs"]["sampler_name"] == "euler"
     assert record["generation_settings"]["schedule_type"] == "beta"
 
