@@ -3,7 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP = (ROOT / "services" / "phone-ui" / "static" / "app.js").read_text()
 HTML = (ROOT / "services" / "phone-ui" / "static" / "index.html").read_text()
-SERVER = (ROOT / "services" / "phone-ui" / "server.py").read_text()
+SERVER = (ROOT / "services" / "phone-ui" / "server_core.py").read_text()
 CSS = (ROOT / "services" / "phone-ui" / "static" / "styles.css").read_text()
 
 
