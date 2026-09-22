@@ -329,6 +329,14 @@
       }
       renderGenerationSettings(preferredSettings||profiles[wanted]||{});
       updateGenerationAvailability();
+      // applyDraft/Reuse Exact can hand us profile settings before this async
+      // request finishes. Persist the resolved controls after they are actually
+      // rendered so a fast Queue click cannot fall back to the previous tab recipe.
+      if(preferredProfile||preferredSettings){
+        state.uiProfiles[profileKey()]=captureDraft();
+        mirrorUiState();
+        scheduleDraftSave();
+      }
     }catch(e){
       const status=$("#profileStatus");
       if(status)status.textContent="Profile config unavailable";

@@ -72,6 +72,9 @@ def test_reuse_exact_static_contract():
     assert "historicalFallback=!v.generation_settings" in app
     assert "Reuse Exact" in library
     assert "reuseExactSnapshot(m)" in library
+    features = (PHONE_ROOT / "static" / "features-v3.js").read_text(encoding="utf-8")
+    assert "state.uiProfiles[profileKey()]=captureDraft()" in features
+    assert "if(preferredProfile||preferredSettings)" in features
 
 
 def test_memory_protection_runtime_control_is_wired():
