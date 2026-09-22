@@ -2,7 +2,7 @@
 
 This is the first-deployment procedure for the MMH3 image.
 
-> **Validated post-deploy image.** Runtime tests, Docker build, Comfy custom-node initialization smoke test, GHCR push, and the first real RTX PRO 6000 Blackwell deployment are complete. The immutable image below includes the fixes discovered during that deployment.
+> **Image status.** `sha-9d134f338f53` is the historical deployed baseline feeding the current vNext cleanup. While `next/vnext-runtime-cleanup` is still under candidate validation, keep existing production templates pinned to 9d. After vNext promotion, update the template to the new immutable `sha-...` tag produced by the main image build.
 
 ## 1. RunPod Secrets
 
@@ -52,7 +52,7 @@ If the GHCR package is intentionally made public later, registry credentials are
 The production image will be:
 
 ```text
-ghcr.io/crumb-bum-creep/mmh3-runpod:sha-7200522bcf6e
+ghcr.io/crumb-bum-creep/mmh3-runpod:sha-9d134f338f53
 ```
 
 Prefer the pinned `sha-...` tag for normal deployments after validation. Do not rely on
@@ -191,10 +191,11 @@ On an empty persistent volume, startup is intentionally staged:
 2. Persistent paths are created.
 3. Canonical workflows are installed.
 4. ComfyUI, the phone UI, and Jupyter start.
-5. Core H3 models and managed LoRAs provision in the background.
+5. Core H3 models and managed accelerators/LoRAs provision in the background.
 6. Port 7860 reports provisioning state.
 7. Generation remains locked until the required core model set reports ready.
-8. Once ready, jobs can be queued normally.
+8. On warm/migrated volumes, MMH3 verifies that Comfy can see persistent model filenames and repairs a stale Comfy model index automatically.
+9. Once the selected profile/checkpoint is ready, jobs can be queued normally.
 
 This prevents a fresh Pod from appearing dead during very large model downloads.
 

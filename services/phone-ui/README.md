@@ -1,5 +1,14 @@
 # MMH3 Phone UI
 
-The production standalone 7860 control plane is bundled here.
+The standalone 7860 control plane lives here.
 
-During the repository bootstrap phase the service directory is kept present so Docker image builds remain testable while the current phone UI is being folded into the unified MMH3 runtime.
+## vNext layout
+
+- `server.py` — canonical vNext service entrypoint and MMH3-specific generation/runtime features.
+- `server_core.py` — reusable base handlers and workflow plumbing used by the entrypoint.
+- `output_indexer.py` — persistent-output library indexer.
+- `static/` — mobile/desktop UI assets.
+
+The old `server_v2.py -> server.py -> server_legacy.py` runtime-copy arrangement was removed. Container startup no longer rewrites backend source files.
+
+vNext uses explicit handler composition between `server.py` and `server_core.py`, generation recipes from `config/generation_profiles.yaml`, and persistent controls under `/workspace/mmh3`.

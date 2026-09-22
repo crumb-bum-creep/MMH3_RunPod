@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
+import json
 import sys
 from pathlib import Path
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,3 +108,39 @@ def test_comfy_runtime_setting_requests_idle_restart():
     assert 'restart_request = STATE_ROOT / "comfy_restart.request"' in supervisor
     assert "pending_restart = rescan_request.exists() or restart_request.exists()" in supervisor
     assert "pending_restart and comfy.queue_idle()" in supervisor
+
+
+class JsonRequest:
+    def __init__(self, body):
+        self._body = body
+
+    async def json(self):
+        return self._body
+
+
+def test_comfy_runtime_put_persists_setting_and_requests_restart(monkeypatch, tmp_path):
+    wrapper = load_wrapper()
+    config_root = tmp_path / "config"
+    state_root = tmp_path / "state"
+    config_root.mkdir()
+    state_root.mkdir()
+    runtime = config_root / "runtime.yaml"
+    runtime.write_text(
+        yaml.safe_dump({"version": 2, "comfy": {"disable_dynamic_vram": False, "use_sage_attention": True}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wrapper.base, "CONFIG_ROOT", config_root)
+    monkeypatch.setattr(wrapper.base, "STATE_ROOT", state_root)
+
+    response = asyncio.run(
+        wrapper.api_comfy_runtime_put(JsonRequest({"disable_dynamic_vram": True}))
+    )
+    body = json.loads(response.text)
+    saved = yaml.safe_load(runtime.read_text())
+
+    assert body["disable_dynamic_vram"] is True
+    assert body["restart_requested"] is True
+    assert saved["comfy"]["disable_dynamic_vram"] is True
+    request = state_root / "comfy_restart.request"
+    assert request.is_file()
+    assert json.loads(request.read_text())["reason"] == "dynamic_vram_setting_changed"
