@@ -177,3 +177,98 @@ def test_critical_rejection_is_side_effect_free(monkeypatch):
         raise AssertionError("expected critical-memory rejection")
 
     assert session.posts == []
+
+
+class NodeErrorSession(FakeSession):
+    def post(self, url, **kwargs):
+        self.posts.append((url, kwargs))
+        if url.endswith("/prompt"):
+            return FakeResponse({
+                "prompt_id": "bad-prompt",
+                "node_errors": {"9": {"errors": [{"message": "video branch invalid"}]}},
+            })
+        raise AssertionError(f"unexpected POST: {url}")
+
+
+def test_node_errors_never_become_fake_success(monkeypatch):
+    wrapper = load_wrapper()
+    base = wrapper.base
+    session = NodeErrorSession()
+
+    monkeypatch.setattr(
+        base,
+        "_load_json",
+        lambda path, default: {"core_ready": True}
+        if Path(path).name == "provisioning.json"
+        else default,
+    )
+    monkeypatch.setattr(wrapper, "_profile_path", lambda _name: ReadyModelPath())
+    monkeypatch.setattr(base, "patch_workflow", lambda payload: ({
+        "9": {"class_type": "VHS_VideoCombine", "inputs": {}},
+    }, {
+        "mode": "t2v",
+        "model_family": "fl2v",
+        "seed": 123,
+    }))
+    monkeypatch.setattr(base, "_make_plan", lambda graph: {"nodes": {}})
+
+    app = {
+        "session": session,
+        "comfy": "http://127.0.0.1:8188",
+        "client_id": "phone-ui-test",
+        "records": {},
+        "plans": {},
+    }
+    request = FakeRequest(app, {"mode": "t2v", "prompt_mode": "custom", "prompt": "fail correctly"})
+
+    try:
+        asyncio.run(wrapper.api_generate(request))
+    except wrapper.web.HTTPBadGateway as exc:
+        assert "video output branch" in exc.text
+        assert "video branch invalid" in exc.text
+    else:
+        raise AssertionError("expected node validation failure")
+
+    assert app["records"] == {}
+    assert app["plans"] == {}
+
+
+class ObjectInfoSession:
+    def __init__(self, info):
+        self.info = info
+        self.gets = []
+
+    def get(self, url, **kwargs):
+        self.gets.append((url, kwargs))
+        assert url.endswith("/object_info")
+        return FakeResponse(self.info)
+
+
+def test_stale_model_index_requests_safe_comfy_refresh(monkeypatch, tmp_path):
+    wrapper = load_wrapper()
+    monkeypatch.setattr(wrapper.base, "STATE_ROOT", tmp_path)
+    session = ObjectInfoSession({
+        "CLIPLoader": {"input": {"required": {"clip_name": [[]]}}},
+    })
+    app = {
+        "session": session,
+        "comfy": "http://127.0.0.1:8188",
+    }
+    graph = {
+        "1": {
+            "class_type": "CLIPLoader",
+            "inputs": {"clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"},
+        }
+    }
+
+    try:
+        asyncio.run(wrapper._ensure_graph_models_visible(app, graph))
+    except wrapper.web.HTTPServiceUnavailable as exc:
+        assert "Automatic Comfy refresh requested" in exc.text
+    else:
+        raise AssertionError("expected stale model-index rejection")
+
+    request = tmp_path / "comfy_model_rescan.request"
+    assert request.is_file()
+    body = json.loads(request.read_text())
+    assert "qwen3vl_32b_minimax_h3_int8_convrot.safetensors" in body["missing"]
