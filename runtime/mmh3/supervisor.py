@@ -151,8 +151,6 @@ def main() -> int:
     comfy_proc = start_comfy()
     startup_mark(phone_spawned=True, comfy_spawned=True)
 
-    STOP.wait(3)
-    provision_proc = start_provisioner()
     provision_attempt = 1
     provision_retry_at = 0.0
     provision_cfg = runtime.get("provisioning") or {}
@@ -164,9 +162,43 @@ def main() -> int:
         provision_backoff = max(2.0, float(provision_cfg.get("retry_backoff_seconds", 8)))
     except (TypeError, ValueError):
         provision_backoff = 8.0
-    startup_mark(provisioner_started=True, provisioner_attempt=provision_attempt)
+    try:
+        warm_grace = max(0.0, float(provision_cfg.get("warm_start_grace_seconds", 8)))
+    except (TypeError, ValueError):
+        warm_grace = 8.0
 
-    comfy_ready = comfy.wait_ready(180)
+    bootstrap_state = {}
+    try:
+        bootstrap_state = json.loads((STATE_ROOT / "provisioning.json").read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    warm_start = bool(bootstrap_state.get("core_ready"))
+
+    # Empty volumes need downloads as soon as possible, so preserve the short
+    # overlap there. Warm/migrated volumes already have their core files and
+    # benefit more from letting Comfy finish imports/indexing before optional
+    # verification/download work competes for persistent-volume I/O.
+    if not warm_start:
+        STOP.wait(3)
+        provision_proc = start_provisioner()
+        startup_mark(
+            provisioner_started=True,
+            provisioner_attempt=provision_attempt,
+            provisioner_start_mode="cold",
+        )
+        comfy_ready = comfy.wait_ready(180)
+    else:
+        comfy_ready = comfy.wait_ready(180)
+        if comfy_ready and warm_grace:
+            STOP.wait(warm_grace)
+        provision_proc = start_provisioner()
+        startup_mark(
+            provisioner_started=True,
+            provisioner_attempt=provision_attempt,
+            provisioner_start_mode="warm",
+            provisioner_warm_grace_seconds=warm_grace,
+        )
+
     startup_mark(comfy_ready=comfy_ready, comfy_ready_seconds=round(time.time() - START_EPOCH, 3))
     if not comfy_ready:
         print("[mmh3] ComfyUI did not become healthy within 180s; supervisor remains alive.", flush=True)
