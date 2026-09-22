@@ -378,7 +378,7 @@
       const total=Number(row.total_bytes||0), done=Number(row.downloaded_bytes||0);
       const ready=row.status==="ready";
       const progress=ready?100:(total>0?Math.min(100,done/total*100):0);
-      const phase=row.phase==="addon"?"ADDON · LAST":"CORE";
+      const phase=row.phase==="addon"?"ADDON · LAST":row.phase==="accelerator"?"ACCELERATOR":"CORE";
       return `<div class="model-download ${ready?"ready":row.status==="error"?"error":""}">
         <div class="model-download-head"><div><span class="model-phase">${esc(phase)}</span><strong>${esc(row.label||row.destination||"Model")}</strong></div><strong>${ready?"READY":row.status==="error"?"ERROR":pct(progress)}</strong></div>
         <div class="progress model-progress"><div style="width:${progress}%"></div></div>
