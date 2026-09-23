@@ -279,3 +279,17 @@ The Sep 18 `9d134f` Fast/Balanced profile system is the behavioral baseline. Do 
 - R2V Fast keeps the Sep 18 v0.1 / 0.85 / Beta+Extend 4-step recipe, but uses Euler instead of `seeds_2` because live pod testing tied `seeds_2` to severe camera/composition shifting.
 - Advanced generation tuning is R2V-only and opt-in. Merely opening the panel, switching profiles, restoring a draft, or carrying stale UI state must not mutate Fast/Balanced.
 - Resolved `generation_settings` continue to be recorded on outputs, together with `advanced_generation_overrides`, so metadata describes what actually ran.
+
+
+## 2026-09-23 FL2V reproducibility correction
+
+Fast/Balanced I2V and T2V profile values were already numerically identical in `0ba0fa1`, so changing profile YAML alone could not address the reported reproduction regression. Comparison against the last known-good Sep 18 profile build showed:
+
+- the six bundled workflow JSONs are unchanged;
+- the base I2V/T2V workflow patcher and seed handling are unchanged;
+- the production Dockerfile did not change between those points;
+- the concrete generation-environment difference is Comfy Dynamic VRAM: the known-good build used `--disable-dynamic-vram`, while the Sep 22 refactor migrated persistent runtime config to Dynamic VRAM enabled.
+
+Runtime config schema v3 therefore restores `disable_dynamic_vram: true` by default and migrates v1/v2 persisted configs back to that mode. The System UI toggle remains available; a v3 user override is preserved on future starts.
+
+This is intentionally separate from the profile recipe cleanup. T2V/I2V still use only canonical Balanced and Fast recipes, and Advanced sampler controls remain unable to mutate FL2V.

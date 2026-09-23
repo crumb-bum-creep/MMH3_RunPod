@@ -42,17 +42,23 @@ def _migrate_runtime_config(src, dst) -> None:
     except (TypeError, ValueError):
         old_version = 1
 
-    # v2 intentionally returns Comfy to its normal dynamic-VRAM behavior.
-    # The former default --disable-dynamic-vram correlated with host-RAM
-    # retention on the 96 GB RTX PRO 6000. Users can opt back in after the
-    # migration by editing the now-versioned persistent runtime config.
+    # v2 temporarily returned Comfy to dynamic-VRAM mode. That landed in the
+    # same refactor wave as the Advanced sampler work and changed the execution
+    # environment from the last known-good Fast/Balanced profile build.
     if old_version < 2:
         current.setdefault("comfy", {})["disable_dynamic_vram"] = False
         current["version"] = 2
 
+    # v3 restores the last known-good generation environment for reproducibility.
+    # Users can still turn Dynamic VRAM back on from System after migration if
+    # host-RAM retention becomes more important than exact-repeat behavior.
+    if old_version < 3:
+        current.setdefault("comfy", {})["disable_dynamic_vram"] = True
+        current["version"] = 3
+
     merged = _deep_merge(defaults, current)
     if not dst.exists() or merged != (load_yaml(dst, {}) or {}):
-        if dst.exists() and old_version < 2:
+        if dst.exists() and old_version < 3:
             backup = dst.with_name(f"{dst.name}.v{old_version}.bak")
             if not backup.exists():
                 shutil.copy2(dst, backup)

@@ -1,4 +1,4 @@
-version: 2
+version: 3
 
 paths:
   persistent_root: /workspace/mmh3
@@ -14,10 +14,10 @@ services:
 
 comfy:
   use_sage_attention: true
-  # Dynamic VRAM is left enabled by default. The old --disable-dynamic-vram
-  # setting correlated with host-RAM retention on the 96 GB RTX PRO 6000.
-  # Keep this configurable so hardware-specific A/B testing is easy.
-  disable_dynamic_vram: false
+  # Match the last known-good pre-Advanced generation environment. Dynamic VRAM
+  # remains user-toggleable in System, but reproducibility takes precedence for
+  # the default runtime.
+  disable_dynamic_vram: true
   cors: "*"
 
 memory:
