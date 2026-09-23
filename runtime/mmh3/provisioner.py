@@ -122,7 +122,7 @@ def run() -> int:
                 stage="accelerators",
                 core_ready=core_ready,
                 message=(
-                    "Stock core ready; checking/downloading Fast and Balanced Turbo profiles"
+                    "Stock core ready; checking/downloading Balanced, Fast, and Legacy Turbo profiles"
                     if core_ready
                     else "Checking/downloading Turbo profile files"
                 ),
@@ -137,7 +137,7 @@ def run() -> int:
                 accelerator_ready=accelerator_ready,
                 accelerator_models=accelerator_results,
                 message=(
-                    "Fast and Balanced Turbo profiles ready"
+                    "Balanced, Fast, and Legacy Turbo profiles ready"
                     if accelerator_ready
                     else f"{len(accelerator_failed)} Turbo profile file(s) still need attention"
                 ),

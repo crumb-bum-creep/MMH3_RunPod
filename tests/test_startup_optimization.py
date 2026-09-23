@@ -3,15 +3,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_supervisor_prioritizes_phone_and_comfy_before_jupyter():
+def test_supervisor_starts_interactive_services_before_long_startup_work():
     source = (ROOT / "runtime" / "mmh3" / "supervisor.py").read_text()
     phone = source.index("phone_proc = start_phone()")
     comfy = source.index("comfy_proc = start_comfy()")
     provision = source.index("provision_proc = start_provisioner()")
     jupyter = source.index("jupyter_proc = start_jupyter()")
-    assert phone < provision
-    assert comfy < provision
-    assert provision < jupyter
+    assert phone < comfy < jupyter < provision
     assert 'warm_start = bool(bootstrap_state.get("core_ready"))' in source
     assert 'provisioner_start_mode="warm"' in source
     assert 'provisioner_start_mode="cold"' in source
@@ -65,3 +63,8 @@ def test_ops_exposes_doctor_and_gpu_smoke():
     assert "Dynamic VRAM:" in source
     assert "Memory protection:" in source
     assert "Comfy model visibility:" in source
+
+
+def test_jupyter_is_not_blocked_on_comfy_health_wait():
+    source = (ROOT / "runtime" / "mmh3" / "supervisor.py").read_text()
+    assert source.index("jupyter_proc = start_jupyter()") < source.index("comfy.wait_ready(180)")

@@ -116,21 +116,19 @@ Phone UI can apply a named profile and optionally override supported tuning fiel
 
 ### T2V / I2V
 
-T2V and I2V are intentionally pinned to the two known-good 9d profiles. vNext must not apply the experimental R2V sampler/scheduler controls to FL2V.
+T2V and I2V keep the known-good Balanced/Fast recipes plus the older FL2V Legacy recipe. Advanced sampler overrides are **not** accepted for FL2V; choosing a profile applies that profile exactly.
 
 | ID | Purpose | Turbo | Strength | Schedule |
 | --- | --- | --- | ---: | --- |
-| `balanced8` | 9d default | FL2V 8-step v1.0 | 1.0 | Euler + Simple, 8 steps, shift 6/3 |
-| `fast4` | 9d fast profile | FL2V 4-step v1.2 | 1.0 | Euler + Simple, 4 steps, shift 6/3 |
-
-There is deliberately no T2V/I2V `legacy_exact` profile in vNext. The older pre-9d FL2V Beta/Extend recipe was removed after candidate testing showed that generalizing the R2V recipe work across all generation families was too broad.
+| `balanced8` | default / known-good 9d profile | FL2V 8-step v1.0 | 1.0 | Euler + Simple, 8 steps, shift 6/3 |
+| `fast4` | known-good fast profile | FL2V 4-step v1.2 | 1.0 | Euler + Simple, 4 steps, shift 6/3 |
+| `legacy_exact` | older FL2V behavior retained as an explicit option | FL2V LightX2V v0.1 | 0.5 | Euler + Beta 0.79/0.5 + Extend 3, shift 6/3 |
 
 ### R2V
 
 | ID | Purpose | Turbo | Strength | Schedule |
 | --- | --- | --- | ---: | --- |
-| `tuned` | vNext default under evaluation | Ref2V v0.1 | 0.85 | Euler + historical Beta/Extend chain |
-| `legacy_exact` | exact historical baseline | Ref2V v0.1 | 0.85 | seeds_2 + Beta 0.6/0.6 + Extend 2 |
+| `legacy_exact` | default historical baseline | Ref2V v0.1 | 0.85 | seeds_2 + Beta 0.6/0.6 + Extend 2 |
 | `balanced8` | newer 8-step comparison | Ref2V 8-step v1.0 | 1.0 | Euler + Simple, 8 steps, shift 12/3 |
 
 Important empirical findings from RunPod testing:
@@ -140,7 +138,7 @@ Important empirical findings from RunPod testing:
 - `res_multistep` looked substantially worse and should not be promoted;
 - with Euler, remaining composition drift appeared by the second preview/early denoising update, so scheduler/sigma-chain tuning is a higher-priority diagnostic than late decode behavior.
 
-Do not rewrite `legacy_exact` to reflect newer preferences. It exists for reproduction. Continue tuning under `tuned`.
+Do not rewrite `legacy_exact` to reflect newer preferences. It is the default historical R2V baseline. Use `balanced8` (Euler/Simple, shift 12/3) for the audio-reference workaround, and use Advanced controls only for deliberate R2V experiments.
 
 ### Advanced tuning UI
 
@@ -227,7 +225,7 @@ Primary workflows:
 
 - `.github/workflows/test.yml` — runtime/unit/contracts;
 - `.github/workflows/build-image.yml` — production image on `main`;
-- `.github/workflows/build-production-candidate.yml` — explicit manual candidate build;
+- `.github/workflows/build-production-candidate.yml` — candidate build with a runtime-test gate before the expensive Docker build;
 - `.github/workflows/audit-runtime-weight.yml` — image/runtime weight auditing.
 
 ## Non-negotiable contracts
@@ -265,3 +263,8 @@ Do not merge/promote until all of the following are true:
 The 9d image is the historical input baseline; vNext is the active continuation.
 
 Do not copy live duct-tape scripts into production architecture. Convert the behavior they proved into tested runtime features, then delete the need for the script.
+
+
+### Degraded / CPU-only recovery
+
+Jupyter now starts before Comfy's long health wait. This keeps port 8888 available for metadata/output recovery even when Comfy cannot initialize on a CPU-only pod. Comfy may still fail on CPU-only hardware; the recovery requirement is that it cannot block Jupyter startup.

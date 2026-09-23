@@ -17,6 +17,7 @@ ALIASES = {
         "8step": "balanced8",
         "fast": "fast4",
         "4step": "fast4",
+        "legacy": "legacy_exact",
     },
     "i2v": {
         "balanced": "balanced8",

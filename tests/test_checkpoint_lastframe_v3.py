@@ -160,7 +160,7 @@ def test_fast_r2v_preserves_legacy_four_step_recipe(monkeypatch):
     assert graph["55"]["inputs"]["sigmas"] == [extend[0], 0]
 
 
-def test_r2v_default_is_tuned_euler_v01(monkeypatch):
+def test_r2v_default_is_historical_legacy_recipe(monkeypatch):
     wrapper = load_wrapper()
     monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("r2v", "custom"))
 
@@ -169,9 +169,9 @@ def test_r2v_default_is_tuned_euler_v01(monkeypatch):
         "prompt_mode": "custom",
     })
 
-    assert record["generation_profile"] == "tuned"
-    assert record["turbo_lora"] == wrapper._profile_spec("r2v", "tuned")["turbo_lora"]
-    assert graph["53"]["inputs"]["sampler_name"] == "euler"
+    assert record["generation_profile"] == "legacy_exact"
+    assert record["turbo_lora"] == wrapper._profile_spec("r2v", "legacy_exact")["turbo_lora"]
+    assert graph["53"]["inputs"]["sampler_name"] == "seeds_2"
     assert record["generation_settings"]["schedule_type"] == "beta"
 
 
@@ -182,7 +182,7 @@ def test_generation_overrides_change_sampler_and_disable_extend(monkeypatch):
     graph, record = wrapper.patch_workflow_v3({
         "mode": "r2v",
         "prompt_mode": "custom",
-        "generation_profile": "tuned",
+        "generation_profile": "legacy_exact",
         "generation_settings": {
             "sampler": "euler",
             "schedule_type": "beta",
@@ -217,4 +217,20 @@ def test_i2v_ignores_advanced_generation_overrides(monkeypatch):
     assert record["generation_settings"]["schedule_type"] == "basic"
     assert record["generation_settings"]["steps"] == 8
     assert record["generation_settings"]["strength"] == 1.0
-    assert graph["150"]["inputs"]["sampler_name"] == "euler"
+    sampler_node = next(node for node in graph.values() if node.get("class_type") == "KSamplerSelect")
+    assert sampler_node["inputs"]["sampler_name"] == "euler"
+
+
+def test_fl2v_legacy_profile_is_selectable_but_not_overridable(monkeypatch):
+    wrapper = load_wrapper()
+    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("i2v", "custom"))
+    graph, record = wrapper.patch_workflow_v3({
+        "mode": "i2v",
+        "prompt_mode": "custom",
+        "generation_profile": "legacy",
+        "generation_settings": {"sampler": "seeds_2", "steps": 2, "strength": 1.9},
+    })
+    assert record["generation_profile"] == "legacy_exact"
+    spec = record["generation_settings"]
+    assert (spec["sampler"], spec["schedule_type"], spec["steps"], spec["strength"]) == ("euler", "beta", 8, 0.5)
+    assert (spec["beta_alpha"], spec["beta_beta"], spec["extend_steps"]) == (0.79, 0.5, 3)

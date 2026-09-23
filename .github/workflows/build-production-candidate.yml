@@ -22,7 +22,26 @@ permissions:
   packages: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest PyYAML requests psutil huggingface_hub aiohttp Pillow
+      - name: Runtime gate
+        shell: bash
+        run: |
+          PYTHONPATH=runtime pytest -q
+          python -m py_compile services/phone-ui/server.py services/phone-ui/server_core.py services/phone-ui/output_indexer.py runtime/mmh3/*.py
+          node --check services/phone-ui/static/app.js
+          node --check services/phone-ui/static/library-v2.js
+          node --check services/phone-ui/static/features-v3.js
+          bash -n scripts/mmh3 scripts/first_boot_check.sh runtime/entrypoint.sh
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
