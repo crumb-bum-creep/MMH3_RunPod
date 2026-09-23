@@ -243,3 +243,48 @@ def test_r2v_stale_advanced_values_do_not_mutate_named_profile(monkeypatch):
     assert record["advanced_generation_overrides"] is False
     assert (spec["sampler"], spec["schedule_type"], spec["steps"], spec["strength"]) == ("euler", "beta", 4, 0.85)
     assert graph["53"]["inputs"]["sampler_name"] == "euler"
+
+
+def test_fl2v_fast_and_balanced_never_queue_beta_or_sigma_extender(monkeypatch):
+    wrapper = load_wrapper()
+
+    for mode in ("t2v", "i2v"):
+        for profile in ("balanced8", "fast4"):
+            monkeypatch.setattr(
+                wrapper,
+                "_base_patch_workflow",
+                lambda payload, m=mode: base_graph(m, "custom"),
+            )
+            graph, record = wrapper.patch_workflow_v3({
+                "mode": mode,
+                "prompt_mode": "custom",
+                "generation_profile": profile,
+                # Deliberately hostile/stale Advanced values. FL2V must ignore them.
+                "advanced_generation_overrides": True,
+                "generation_settings": {
+                    "sampler": "seeds_2",
+                    "schedule_type": "beta",
+                    "beta_alpha": 0.79,
+                    "beta_beta": 0.5,
+                    "extend_enabled": True,
+                    "extend_steps": 3,
+                    "extend_start": 0.8,
+                    "extend_end": 0.0,
+                },
+            })
+
+            assert not any(n.get("class_type") == "BetaSamplingScheduler" for n in graph.values())
+            assert not any(n.get("class_type") == "ExtendIntermediateSigmas" for n in graph.values())
+
+            scheduler_id, scheduler = next(
+                (nid, n) for nid, n in graph.items() if n.get("class_type") == "BasicScheduler"
+            )
+            sampler = next(n for n in graph.values() if n.get("class_type") == "KSamplerSelect")
+            advanced = next(n for n in graph.values() if n.get("class_type") == "SamplerCustomAdvanced")
+
+            assert sampler["inputs"]["sampler_name"] == "euler"
+            assert scheduler["inputs"]["scheduler"] == "simple"
+            assert scheduler["inputs"]["steps"] == (8 if profile == "balanced8" else 4)
+            assert advanced["inputs"]["sigmas"] == [scheduler_id, 0]
+            assert record["generation_settings"]["schedule_type"] == "basic"
+            assert record["generation_settings"]["extend_enabled"] is False
