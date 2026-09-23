@@ -132,7 +132,7 @@ def test_fast_fl2v_uses_v12_four_step_recipe(monkeypatch):
     assert graph["53"]["inputs"]["sampler_name"] == "euler"
 
 
-def test_fast_r2v_preserves_legacy_four_step_recipe(monkeypatch):
+def test_fast_r2v_keeps_v01_beta_recipe_with_euler_camera_fix(monkeypatch):
     wrapper = load_wrapper()
     monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("r2v", "custom"))
 
@@ -142,12 +142,12 @@ def test_fast_r2v_preserves_legacy_four_step_recipe(monkeypatch):
         "generation_profile": "fast",
     })
 
-    assert record["generation_profile"] == "legacy_exact"
-    expected = wrapper._profile_spec("r2v", "legacy_exact")["turbo_lora"]
+    assert record["generation_profile"] == "fast4"
+    expected = wrapper._profile_spec("r2v", "fast4")["turbo_lora"]
     assert record["turbo_lora"] == expected
     assert graph["50"]["inputs"]["lora_name"] == expected
     assert graph["50"]["inputs"]["strength_model"] == 0.85
-    assert graph["53"]["inputs"]["sampler_name"] == "seeds_2"
+    assert graph["53"]["inputs"]["sampler_name"] == "euler"
 
     beta = next((nid, n) for nid, n in graph.items() if n.get("class_type") == "BetaSamplingScheduler")
     extend = next((nid, n) for nid, n in graph.items() if n.get("class_type") == "ExtendIntermediateSigmas")
@@ -160,7 +160,7 @@ def test_fast_r2v_preserves_legacy_four_step_recipe(monkeypatch):
     assert graph["55"]["inputs"]["sigmas"] == [extend[0], 0]
 
 
-def test_r2v_default_is_historical_legacy_recipe(monkeypatch):
+def test_r2v_default_is_balanced_profile(monkeypatch):
     wrapper = load_wrapper()
     monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("r2v", "custom"))
 
@@ -169,10 +169,10 @@ def test_r2v_default_is_historical_legacy_recipe(monkeypatch):
         "prompt_mode": "custom",
     })
 
-    assert record["generation_profile"] == "legacy_exact"
-    assert record["turbo_lora"] == wrapper._profile_spec("r2v", "legacy_exact")["turbo_lora"]
-    assert graph["53"]["inputs"]["sampler_name"] == "seeds_2"
-    assert record["generation_settings"]["schedule_type"] == "beta"
+    assert record["generation_profile"] == "balanced8"
+    assert record["turbo_lora"] == wrapper._profile_spec("r2v", "balanced8")["turbo_lora"]
+    assert graph["53"]["inputs"]["sampler_name"] == "euler"
+    assert record["generation_settings"]["schedule_type"] == "basic"
 
 
 def test_generation_overrides_change_sampler_and_disable_extend(monkeypatch):
@@ -182,9 +182,10 @@ def test_generation_overrides_change_sampler_and_disable_extend(monkeypatch):
     graph, record = wrapper.patch_workflow_v3({
         "mode": "r2v",
         "prompt_mode": "custom",
-        "generation_profile": "legacy_exact",
+        "generation_profile": "fast4",
+        "advanced_generation_overrides": True,
         "generation_settings": {
-            "sampler": "euler",
+            "sampler": "seeds_2",
             "schedule_type": "beta",
             "extend_enabled": False,
             "beta_alpha": 0.7,
@@ -195,6 +196,8 @@ def test_generation_overrides_change_sampler_and_disable_extend(monkeypatch):
     assert beta[1]["inputs"]["alpha"] == 0.7
     assert graph["55"]["inputs"]["sigmas"] == [beta[0], 0]
     assert record["generation_settings"]["extend_enabled"] is False
+    assert record["generation_settings"]["sampler"] == "seeds_2"
+    assert record["advanced_generation_overrides"] is True
 
 
 def test_i2v_ignores_advanced_generation_overrides(monkeypatch):
@@ -221,16 +224,22 @@ def test_i2v_ignores_advanced_generation_overrides(monkeypatch):
     assert sampler_node["inputs"]["sampler_name"] == "euler"
 
 
-def test_fl2v_legacy_profile_is_selectable_but_not_overridable(monkeypatch):
+def test_r2v_stale_advanced_values_do_not_mutate_named_profile(monkeypatch):
     wrapper = load_wrapper()
-    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("i2v", "custom"))
+    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("r2v", "custom"))
     graph, record = wrapper.patch_workflow_v3({
-        "mode": "i2v",
+        "mode": "r2v",
         "prompt_mode": "custom",
-        "generation_profile": "legacy",
-        "generation_settings": {"sampler": "seeds_2", "steps": 2, "strength": 1.9},
+        "generation_profile": "fast",
+        "generation_settings": {
+            "sampler": "seeds_2",
+            "schedule_type": "basic",
+            "steps": 19,
+            "strength": 0.2,
+        },
     })
-    assert record["generation_profile"] == "legacy_exact"
     spec = record["generation_settings"]
-    assert (spec["sampler"], spec["schedule_type"], spec["steps"], spec["strength"]) == ("euler", "beta", 8, 0.5)
-    assert (spec["beta_alpha"], spec["beta_beta"], spec["extend_steps"]) == (0.79, 0.5, 3)
+    assert record["generation_profile"] == "fast4"
+    assert record["advanced_generation_overrides"] is False
+    assert (spec["sampler"], spec["schedule_type"], spec["steps"], spec["strength"]) == ("euler", "beta", 4, 0.85)
+    assert graph["53"]["inputs"]["sampler_name"] == "euler"

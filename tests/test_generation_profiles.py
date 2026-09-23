@@ -24,49 +24,47 @@ def test_every_profile_turbo_is_managed_by_model_manifest():
             assert spec["turbo_lora"] in destinations, (mode, spec["profile_id"], spec["turbo_lora"])
 
 
-def test_r2v_known_good_profiles_are_legacy_and_balanced():
+def test_r2v_profiles_match_post_profile_known_good_state():
     table = public_profiles("r2v")
-    assert table["default"] == "legacy_exact"
-    assert set(table["profiles"]) == {"legacy_exact", "balanced8"}
-    legacy = table["profiles"]["legacy_exact"]
+    assert table["default"] == "balanced8"
+    assert set(table["profiles"]) == {"balanced8", "fast4"}
     balanced = table["profiles"]["balanced8"]
-    assert (legacy["sampler"], legacy["schedule_type"], legacy["steps"], legacy["strength"]) == ("seeds_2", "beta", 4, 0.85)
+    fast = table["profiles"]["fast4"]
     assert (balanced["sampler"], balanced["scheduler"], balanced["steps"], balanced["strength"]) == ("euler", "simple", 8, 1.0)
-    assert (legacy["shift_video"], legacy["shift_audio"]) == (12.0, 3.0)
+    assert (fast["sampler"], fast["schedule_type"], fast["steps"], fast["strength"]) == ("euler", "beta", 4, 0.85)
+    assert (fast["beta_alpha"], fast["beta_beta"], fast["extend_steps"]) == (0.6, 0.6, 2)
     assert (balanced["shift_video"], balanced["shift_audio"]) == (12.0, 3.0)
+    assert (fast["shift_video"], fast["shift_audio"]) == (12.0, 3.0)
 
 
-def test_old_profile_aliases_map_without_rewriting_history():
-    assert resolve_profile("r2v", "fast")["profile_id"] == "legacy_exact"
-    assert resolve_profile("t2v", "fast")["profile_id"] == "fast4"
-    assert resolve_profile("i2v", "fast")["profile_id"] == "fast4"
-    assert resolve_profile("t2v", "legacy")["profile_id"] == "legacy_exact"
-    assert resolve_profile("i2v", "legacy")["profile_id"] == "legacy_exact"
+def test_old_profile_aliases_map_to_current_fast_balanced_profiles():
+    for mode in ("t2v", "i2v", "r2v"):
+        assert resolve_profile(mode, "balanced")["profile_id"] == "balanced8"
+        assert resolve_profile(mode, "fast")["profile_id"] == "fast4"
+        assert resolve_profile(mode, "legacy")["profile_id"] == "fast4"
 
 
 def test_advanced_overrides_are_bounded():
-    spec = resolve_profile("r2v", "legacy_exact", {
+    spec = resolve_profile("r2v", "fast4", {
         "steps": 999,
         "strength": -4,
         "shift_video": 999,
-        "sampler": "euler",
+        "sampler": "seeds_2",
         "ref_image_size": "match",
     })
     assert spec["steps"] == 50
     assert spec["strength"] == 0.0
     assert spec["shift_video"] == 30.0
+    assert spec["sampler"] == "seeds_2"
     assert spec["ref_image_size"] == "match"
 
 
-def test_fl2v_known_good_profiles_and_legacy_option():
+def test_fl2v_profiles_are_exactly_fast_and_balanced_from_9d():
     for mode in ("t2v", "i2v"):
         table = public_profiles(mode)
         assert table["default"] == "balanced8"
-        assert set(table["profiles"]) == {"balanced8", "fast4", "legacy_exact"}
+        assert set(table["profiles"]) == {"balanced8", "fast4"}
         balanced = table["profiles"]["balanced8"]
         fast = table["profiles"]["fast4"]
-        legacy = table["profiles"]["legacy_exact"]
         assert (balanced["sampler"], balanced["scheduler"], balanced["steps"], balanced["shift_video"], balanced["shift_audio"], balanced["strength"]) == ("euler", "simple", 8, 6.0, 3.0, 1.0)
         assert (fast["sampler"], fast["scheduler"], fast["steps"], fast["shift_video"], fast["shift_audio"], fast["strength"]) == ("euler", "simple", 4, 6.0, 3.0, 1.0)
-        assert (legacy["sampler"], legacy["schedule_type"], legacy["steps"], legacy["strength"]) == ("euler", "beta", 8, 0.5)
-        assert (legacy["beta_alpha"], legacy["beta_beta"], legacy["extend_steps"], legacy["extend_start"], legacy["extend_end"]) == (0.79, 0.5, 3, 0.8, 0.0)

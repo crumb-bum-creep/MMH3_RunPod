@@ -268,3 +268,14 @@ Do not copy live duct-tape scripts into production architecture. Convert the beh
 ### Degraded / CPU-only recovery
 
 Jupyter now starts before Comfy's long health wait. This keeps port 8888 available for metadata/output recovery even when Comfy cannot initialize on a CPU-only pod. Comfy may still fail on CPU-only hardware; the recovery requirement is that it cannot block Jupyter startup.
+
+
+## 2026-09-23 profile baseline correction
+
+The Sep 18 `9d134f` Fast/Balanced profile system is the behavioral baseline. Do not roll generation behavior back to the pre-profile FL2V v0.1 setup.
+
+- T2V/I2V expose only Balanced (FL2V 8-step v1.0, Euler/Simple, 6/3) and Fast (FL2V 4-step v1.2, Euler/Simple, 6/3).
+- R2V defaults to Balanced (Ref2V 8-step v1.0, Euler/Simple, 12/3).
+- R2V Fast keeps the Sep 18 v0.1 / 0.85 / Beta+Extend 4-step recipe, but uses Euler instead of `seeds_2` because live pod testing tied `seeds_2` to severe camera/composition shifting.
+- Advanced generation tuning is R2V-only and opt-in. Merely opening the panel, switching profiles, restoring a draft, or carrying stale UI state must not mutate Fast/Balanced.
+- Resolved `generation_settings` continue to be recorded on outputs, together with `advanced_generation_overrides`, so metadata describes what actually ran.

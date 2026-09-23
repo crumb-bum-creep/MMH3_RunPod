@@ -9,6 +9,7 @@
   state.endingImage=state.endingImage||null;
   state.generationProfileData=state.generationProfileData||{profiles:{},default:FALLBACK_PROFILE,samplers:["euler"],schedulers:["simple"]};
   state.profileLoadToken=0;
+  state.advancedGenerationOverrides=false;
   state.runtimeControls=state.runtimeControls||{memory_protection:true,output_naming_template:"MMH3/{mode}"};
 
   function ensureUi(){
@@ -76,17 +77,19 @@
           <label>R2V reference sizing</label>
           <select id="genRefImageSize"><option value="max">max</option><option value="match">match</option></select>
         </div>
-        <div class="media-row"><button id="resetGenerationTuning" class="secondary" type="button">Reset to profile</button><span class="muted">Saved per Auto/Custom draft and with each output.</span></div>`;
+        <div class="media-row"><button id="resetGenerationTuning" class="secondary" type="button">Reset to profile</button><span id="generationOverrideStatus" class="muted">Profile defaults active · change a field to override.</span></div>`;
       profile?.insertAdjacentElement("afterend",details);
       const ids=["genSampler","genScheduleType","genScheduler","genSteps","genStrength","genShiftVideo","genShiftAudio","genBetaAlpha","genBetaBeta","genExtendEnabled","genExtendSteps","genExtendStart","genExtendEnd","genExtendSpacing","genRefImageSize"];
       ids.forEach(id=>{
         const el=$("#"+id); if(!el)return;
         el.addEventListener(el.type==="number"?"input":"change",()=>{
+          state.advancedGenerationOverrides=true;
+          updateAdvancedOverrideStatus();
           updateTuningVisibility();
           stashCurrentDraft();
         });
       });
-      $("#resetGenerationTuning").onclick=()=>{applySelectedProfileDefaults();stashCurrentDraft();};
+      $("#resetGenerationTuning").onclick=()=>{state.advancedGenerationOverrides=false;applySelectedProfileDefaults();stashCurrentDraft();};
     }
 
     if(!$("#endSelected")){
@@ -239,9 +242,7 @@
   function legacyProfileAlias(value){
     const raw=String(value||"").toLowerCase();
     if(["balanced","quality","8step"].includes(raw))return "balanced8";
-    if(state.mode==="r2v"&&["fast","legacy","4step"].includes(raw))return "legacy_exact";
-    if(["fast","4step"].includes(raw))return "fast4";
-    if(raw==="legacy")return "legacy_exact";
+    if(["fast","4step","legacy"].includes(raw))return "fast4";
     return raw;
   }
 
@@ -273,6 +274,13 @@
     };
   }
 
+  function updateAdvancedOverrideStatus(){
+    const status=$("#generationOverrideStatus");
+    if(status)status.textContent=state.advancedGenerationOverrides
+      ?"Advanced overrides active"
+      :"Profile defaults active · change a field to override.";
+  }
+
   function updateTuningVisibility(){
     const tuning=$("#generationTuning");
     if(tuning)tuning.hidden=state.mode!=="r2v";
@@ -281,6 +289,7 @@
     if($("#genBetaFields"))$("#genBetaFields").hidden=!beta;
     if($("#genExtendFields"))$("#genExtendFields").hidden=!$("#genExtendEnabled")?.checked;
     if($("#genR2VFields"))$("#genR2VFields").hidden=state.mode!=="r2v";
+    updateAdvancedOverrideStatus();
   }
 
   function renderGenerationSettings(spec={}){
@@ -309,8 +318,10 @@
   }
 
   function applySelectedProfileDefaults(){
+    state.advancedGenerationOverrides=false;
     const spec=selectedProfileSpec();
     if(spec)renderGenerationSettings(spec);
+    updateAdvancedOverrideStatus();
   }
 
   async function loadGenerationProfiles(preferredProfile=null,preferredSettings=null){
@@ -430,7 +441,8 @@
     const v=originalCapture();
     v.base_checkpoint=$("#baseCheckpoint")?.value||STOCK;
     v.generation_profile=$("#generationProfile")?.value||state.generationProfileData?.default||FALLBACK_PROFILE;
-    v.generation_settings=state.mode==="r2v"?readGenerationSettings():null;
+    v.advanced_generation_overrides=state.mode==="r2v"&&state.advancedGenerationOverrides===true;
+    v.generation_settings=v.advanced_generation_overrides?readGenerationSettings():null;
     v.ending_image=state.endingImage||null;
     return v;
   };
@@ -441,9 +453,10 @@
     state.endingImage=v.ending_image||null;
     const sel=$("#baseCheckpoint");
     if(sel)sel.value=[STOCK,EROS].includes(v.base_checkpoint)?v.base_checkpoint:STOCK;
+    state.advancedGenerationOverrides=state.mode==="r2v"&&v.advanced_generation_overrides===true;
     loadGenerationProfiles(
       v.generation_profile||null,
-      state.mode==="r2v"?(v.generation_settings||null):null
+      state.advancedGenerationOverrides?(v.generation_settings||null):null
     );
     renderEndingImage();
     updateGenerationAvailability();

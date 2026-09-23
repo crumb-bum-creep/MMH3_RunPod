@@ -26,23 +26,6 @@ modes:
         shift_video: 6.0
         shift_audio: 3.0
         ref_image_size: max
-      legacy_exact:
-        label: Legacy · FL2V v0.1
-        turbo_lora: minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors
-        strength: 0.5
-        steps: 8
-        sampler: euler
-        schedule_type: beta
-        beta_alpha: 0.79
-        beta_beta: 0.5
-        extend_enabled: true
-        extend_steps: 3
-        extend_start: 0.8
-        extend_end: 0.0
-        extend_spacing: linear
-        shift_video: 6.0
-        shift_audio: 3.0
-        ref_image_size: max
 
   i2v:
     default: balanced8
@@ -69,44 +52,10 @@ modes:
         shift_video: 6.0
         shift_audio: 3.0
         ref_image_size: max
-      legacy_exact:
-        label: Legacy · FL2V v0.1
-        turbo_lora: minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors
-        strength: 0.5
-        steps: 8
-        sampler: euler
-        schedule_type: beta
-        beta_alpha: 0.79
-        beta_beta: 0.5
-        extend_enabled: true
-        extend_steps: 3
-        extend_start: 0.8
-        extend_end: 0.0
-        extend_spacing: linear
-        shift_video: 6.0
-        shift_audio: 3.0
-        ref_image_size: max
 
   r2v:
-    default: legacy_exact
+    default: balanced8
     profiles:
-      legacy_exact:
-        label: Legacy · Ref2V v0.1 · seeds_2
-        turbo_lora: minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
-        strength: 0.85
-        steps: 4
-        sampler: seeds_2
-        schedule_type: beta
-        beta_alpha: 0.6
-        beta_beta: 0.6
-        extend_enabled: true
-        extend_steps: 2
-        extend_start: 0.8
-        extend_end: 0.0
-        extend_spacing: linear
-        shift_video: 12.0
-        shift_audio: 3.0
-        ref_image_size: max
       balanced8:
         label: Balanced · Ref2V 8-step v1.0 · Euler/Simple
         turbo_lora: minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
@@ -115,6 +64,23 @@ modes:
         sampler: euler
         schedule_type: basic
         scheduler: simple
+        shift_video: 12.0
+        shift_audio: 3.0
+        ref_image_size: max
+      fast4:
+        label: Fast · Ref2V v0.1 · Euler/Beta+Extend
+        turbo_lora: minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
+        strength: 0.85
+        steps: 4
+        sampler: euler
+        schedule_type: beta
+        beta_alpha: 0.6
+        beta_beta: 0.6
+        extend_enabled: true
+        extend_steps: 2
+        extend_start: 0.8
+        extend_end: 0.0
+        extend_spacing: linear
         shift_video: 12.0
         shift_audio: 3.0
         ref_image_size: max

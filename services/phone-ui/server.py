@@ -298,14 +298,17 @@ def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str
     for _, node in unets:
         node.setdefault("inputs", {})["unet_name"] = checkpoint
 
-    # Keep T2V/I2V recipes exactly pinned to the known-good 9d profiles.
-    # Advanced sampler/scheduler experimentation is intentionally scoped to R2V;
-    # a stale/custom tuning payload must never mutate FL2V generation behavior.
+    # Named Fast/Balanced profiles are immutable recipes. Advanced R2V tuning
+    # is an explicit override layer only after the user actually activates it;
+    # stale draft/UI values must never silently mutate a named profile.
+    advanced_generation_overrides = (
+        mode == "r2v" and bool(payload.get("advanced_generation_overrides", False))
+    )
     profile_spec = _patch_generation_profile(
         graph,
         mode,
         generation_profile,
-        payload.get("generation_settings") if mode == "r2v" else None,
+        payload.get("generation_settings") if advanced_generation_overrides else None,
     )
 
     ending_image = str(payload.get("ending_image") or "").strip()
@@ -342,6 +345,7 @@ def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str
     record["turbo_shift_video"] = profile_spec["shift_video"]
     record["turbo_shift_audio"] = profile_spec["shift_audio"]
     record["generation_settings"] = profile_spec
+    record["advanced_generation_overrides"] = advanced_generation_overrides
     record["ending_image"] = ending_image or None
 
     output_prefix, naming_template = _output_prefix(payload, record, generation_profile, choice)

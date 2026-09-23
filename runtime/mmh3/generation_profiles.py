@@ -17,7 +17,7 @@ ALIASES = {
         "8step": "balanced8",
         "fast": "fast4",
         "4step": "fast4",
-        "legacy": "legacy_exact",
+        "legacy": "fast4",
     },
     "i2v": {
         "balanced": "balanced8",
@@ -25,17 +25,17 @@ ALIASES = {
         "8step": "balanced8",
         "fast": "fast4",
         "4step": "fast4",
-        "legacy": "legacy_exact",
+        "legacy": "fast4",
     },
     "r2v": {
         "balanced": "balanced8",
         "quality": "balanced8",
         "8step": "balanced8",
-        # Preserve old 9d metadata semantics: R2V "fast" meant the exact
-        # seeds_2 + Beta/Extend v0.1 recipe.
-        "fast": "legacy_exact",
-        "4step": "legacy_exact",
-        "legacy": "legacy_exact",
+        # Fast stays on the v0.1 4-step recipe, but uses the post-profile
+        # camera-drift fix: Euler instead of seeds_2.
+        "fast": "fast4",
+        "4step": "fast4",
+        "legacy": "fast4",
     },
 }
 
