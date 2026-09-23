@@ -149,9 +149,11 @@ def test_comfy_runtime_put_persists_setting_and_requests_restart(monkeypatch, tm
     assert json.loads(request.read_text())["reason"] == "dynamic_vram_setting_changed"
 
 
-def test_advanced_tuning_is_r2v_only():
+def test_advanced_tuning_is_r2v_only_and_explicit():
     ui = (PHONE_ROOT / "static" / "features-v3.js").read_text(encoding="utf-8")
     server = (PHONE_ROOT / "server.py").read_text(encoding="utf-8")
     assert 'if(tuning)tuning.hidden=state.mode!=="r2v"' in ui
-    assert 'v.generation_settings=state.mode==="r2v"?readGenerationSettings():null' in ui
-    assert 'payload.get("generation_settings") if mode == "r2v" else None' in server
+    assert 'v.advanced_generation_overrides=state.mode==="r2v"&&state.advancedGenerationOverrides===true' in ui
+    assert 'v.generation_settings=v.advanced_generation_overrides?readGenerationSettings():null' in ui
+    assert 'mode == "r2v" and bool(payload.get("advanced_generation_overrides", False))' in server
+    assert 'payload.get("generation_settings") if advanced_generation_overrides else None' in server
