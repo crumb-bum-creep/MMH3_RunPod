@@ -117,6 +117,7 @@ def resolve_profile(mode: str, requested: str | None, overrides: dict[str, Any] 
     spec["extend_start"] = _num(spec.get("extend_start"), 0.8, 0.0, 1000.0)
     spec["extend_end"] = _num(spec.get("extend_end"), 0.0, 0.0, 1000.0)
     spec["extend_enabled"] = bool(spec.get("extend_enabled", False))
+    spec["sigma_shift_enabled"] = bool(spec.get("sigma_shift_enabled", True))
     spec["sampler"] = str(spec.get("sampler") or "euler")
     spec["schedule_type"] = str(spec.get("schedule_type") or "basic").lower()
     if spec["schedule_type"] not in {"basic", "beta"}:
