@@ -293,3 +293,27 @@ Fast/Balanced I2V and T2V profile values were already numerically identical in `
 Runtime config schema v3 therefore restores `disable_dynamic_vram: true` by default and migrates v1/v2 persisted configs back to that mode. The System UI toggle remains available; a v3 user override is preserved on future starts.
 
 This is intentionally separate from the profile recipe cleanup. T2V/I2V still use only canonical Balanced and Fast recipes, and Advanced sampler controls remain unable to mutate FL2V.
+
+
+## 2026-09-25 Community parity profiles
+
+A/B testing against the older community MiniMax H3 pod showed a materially different sampling graph from MMH3's current Balanced/Fast recipes. The community recipes are now exposed as an additive `community` generation profile for T2V, I2V, and direct-reference R2V. Existing defaults and existing `balanced8` / `fast4` values are unchanged.
+
+Community T2V/I2V:
+- FL2VA ConvRot INT8 base
+- FL2V Turbo 8-step v1.0 at strength 0.80
+- Euler sampler
+- BasicScheduler `simple`, 8 steps, denoise 1
+- no MiniMaxH3SigmaShift
+- no ExtendIntermediateSigmas
+
+Community direct R2V:
+- Ref2VA ConvRot INT8 base
+- Ref2V Turbo 8-step v1.0 at strength 0.85
+- Euler sampler
+- BasicScheduler `simple`, 8 steps, denoise 1
+- no MiniMaxH3SigmaShift
+- ExtendIntermediateSigmas: 2 steps, sigma 0.8 -> 0.0, linear
+- existing MiniMaxH3ReferencePack -> MiniMaxH3ReferenceToVideo path; RefMod is intentionally not used
+
+The Phone UI generation-profile selector is API-driven, so no separate UI hard-code was required. The queue-time profile patcher now supports BasicScheduler profiles that bypass SigmaShift and optionally extend the resulting sigmas. Profiles that omit `sigma_shift_enabled` preserve the previous behavior (`true`), which keeps Balanced/Fast graph behavior unchanged.
