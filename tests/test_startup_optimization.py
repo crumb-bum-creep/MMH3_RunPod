@@ -3,16 +3,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_supervisor_prioritizes_phone_and_comfy_before_jupyter():
+def test_supervisor_starts_interactive_services_before_long_startup_work():
     source = (ROOT / "runtime" / "mmh3" / "supervisor.py").read_text()
     phone = source.index("phone_proc = start_phone()")
     comfy = source.index("comfy_proc = start_comfy()")
     provision = source.index("provision_proc = start_provisioner()")
     jupyter = source.index("jupyter_proc = start_jupyter()")
-    assert phone < provision
-    assert comfy < provision
-    assert provision < jupyter
-    assert "STOP.wait(3)" in source
+    assert phone < comfy < jupyter < provision
+    assert 'warm_start = bool(bootstrap_state.get("core_ready"))' in source
+    assert 'provisioner_start_mode="warm"' in source
+    assert 'provisioner_start_mode="cold"' in source
+    assert 'warm_start_grace_seconds' in source
+    assert 'comfy.missing_ready_model_choices' in source
+    assert 'comfy_model_visibility_repair=True' in source
+    assert source.index("comfy.missing_ready_model_choices") < source.index('provisioner_start_mode="warm"')
+    assert 'cfg.get("disable_dynamic_vram", False)' in source
 
 
 def test_warm_lora_sync_avoids_network_metadata_roundtrip():
@@ -36,8 +41,8 @@ def test_commit_markers_replace_runtime_git_requirement():
     assert "/ComfyUI/.mmh3_commit" in boot_check
 
 
-def test_ultra_image_drops_manager_and_git_metadata():
-    dockerfile = (ROOT / "Dockerfile.ultra").read_text()
+def test_production_image_drops_manager_and_git_metadata():
+    dockerfile = (ROOT / "Dockerfile").read_text()
     assert "FROM ubuntu:24.04 AS runtime" in dockerfile
     assert "rm -rf /ComfyUI/custom_nodes/comfyui-manager" in dockerfile
     assert "rm -rf /ComfyUI/.git /ComfyUI/custom_nodes/*/.git" in dockerfile
@@ -55,3 +60,11 @@ def test_ops_exposes_doctor_and_gpu_smoke():
     assert "  doctor)" in source
     assert "  gpu-smoke)" in source
     assert "GPU smoke: PASS" in source
+    assert "Dynamic VRAM:" in source
+    assert "Memory protection:" in source
+    assert "Comfy model visibility:" in source
+
+
+def test_jupyter_is_not_blocked_on_comfy_health_wait():
+    source = (ROOT / "runtime" / "mmh3" / "supervisor.py").read_text()
+    assert source.index("jupyter_proc = start_jupyter()") < source.index("comfy.wait_ready(180)")

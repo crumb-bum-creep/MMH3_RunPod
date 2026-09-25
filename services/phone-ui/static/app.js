@@ -547,6 +547,21 @@ function formSnapshot(){
   const draft=captureDraft();
   return {mode:state.mode,prompt_mode:state.promptMode,...draft};
 }
+function reuseExactSnapshot(v){
+  if(!v)return false;
+  const historicalFallback=!v.generation_settings;
+  const exact={
+    ...v,
+    prompt_mode:"custom",
+    prompt:v.actual_prompt||v.prompt||v.prompt_idea||"",
+    prompt_idea:"",
+    generation_profile:v.generation_profile||(v.mode==="r2v"?"legacy_exact":"balanced8"),
+    randomize_seed:false
+  };
+  applySnapshot(exact);
+  return historicalFallback;
+}
+
 function applySnapshot(v){
   if(!v)return;
   const mode=v.mode||"t2v", pm=v.prompt_mode||"auto";
@@ -666,7 +681,7 @@ async function refreshOutputs(force=false){
           <button class="secondary copy-seed">Copy seed</button>
           <button class="secondary copy-meta">Copy metadata</button>
           <button class="secondary use-r2v">Use as R2V ref</button>
-          <button class="secondary reuse">Reuse setup</button>
+          <button class="secondary reuse">Reuse Exact</button>
           <button class="danger delete">Delete</button>
         </div>
         <div class="meta">${esc((m.prompt_idea||m.prompt||"").slice(0,600))}</div>
@@ -678,7 +693,7 @@ async function refreshOutputs(force=false){
       $(".copy-prompt",el).onclick=()=>copyText(m.actual_prompt||m.prompt||m.prompt_idea||"");
       $(".copy-seed",el).onclick=()=>copyText(String(m.seed??""));
       $(".copy-meta",el).onclick=()=>copyText(JSON.stringify(m,null,2));
-      $(".reuse",el).onclick=()=>{applySnapshot(m);switchTab("generate");toast("Setup loaded");};
+      $(".reuse",el).onclick=()=>{const fallback=reuseExactSnapshot(m);switchTab("generate");toast(fallback?"Loaded as Custom · historical recipe defaults applied":"Exact setup loaded as Custom");};
       $(".use-r2v",el).onclick=async()=>{
         try{
           const d=await api("/api/output-to-input",{method:"POST",body:{file:item.file}});

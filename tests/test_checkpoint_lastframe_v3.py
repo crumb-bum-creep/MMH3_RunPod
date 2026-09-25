@@ -12,8 +12,8 @@ PHONE_ROOT = ROOT / "services" / "phone-ui"
 def load_wrapper():
     sys.path.insert(0, str(PHONE_ROOT))
     try:
-        sys.modules.pop("server_v2", None)
-        return importlib.import_module("server_v2")
+        sys.modules.pop("server", None)
+        return importlib.import_module("server")
     finally:
         try:
             sys.path.remove(str(PHONE_ROOT))
@@ -69,9 +69,10 @@ def test_eros_i2v_patches_unet_last_frame_and_openrouter(monkeypatch):
     assert graph["40"]["inputs"]["image_2"] == [last_id, 0]
     assert record["base_checkpoint"] == wrapper.CHECKPOINT_EROS
     assert record["base_checkpoint_file"] == wrapper.EROS_BETA5_INT8
-    assert record["generation_profile"] == wrapper.PROFILE_BALANCED
-    assert record["turbo_lora"] == wrapper.FL2V_BALANCED
-    assert graph["50"]["inputs"]["lora_name"] == wrapper.FL2V_BALANCED
+    assert record["generation_profile"] == "balanced8"
+    expected = wrapper._profile_spec("i2v", "balanced8")["turbo_lora"]
+    assert record["turbo_lora"] == expected
+    assert graph["50"]["inputs"]["lora_name"] == expected
     assert graph["50"]["inputs"]["strength_model"] == 1.0
     assert graph["51"]["inputs"]["shift_video"] == 6.0
     assert graph["52"]["inputs"]["steps"] == 8
@@ -119,9 +120,10 @@ def test_fast_fl2v_uses_v12_four_step_recipe(monkeypatch):
         "generation_profile": "fast",
     })
 
-    assert record["generation_profile"] == wrapper.PROFILE_FAST
-    assert record["turbo_lora"] == wrapper.FL2V_FAST
-    assert graph["50"]["inputs"]["lora_name"] == wrapper.FL2V_FAST
+    assert record["generation_profile"] == "fast4"
+    expected = wrapper._profile_spec("t2v", "fast4")["turbo_lora"]
+    assert record["turbo_lora"] == expected
+    assert graph["50"]["inputs"]["lora_name"] == expected
     assert graph["50"]["inputs"]["strength_model"] == 1.0
     assert graph["51"]["inputs"]["shift_video"] == 6.0
     assert graph["51"]["inputs"]["shift_audio"] == 3.0
@@ -130,7 +132,7 @@ def test_fast_fl2v_uses_v12_four_step_recipe(monkeypatch):
     assert graph["53"]["inputs"]["sampler_name"] == "euler"
 
 
-def test_fast_r2v_preserves_legacy_four_step_recipe(monkeypatch):
+def test_fast_r2v_keeps_v01_beta_recipe_with_euler_camera_fix(monkeypatch):
     wrapper = load_wrapper()
     monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("r2v", "custom"))
 
@@ -140,11 +142,12 @@ def test_fast_r2v_preserves_legacy_four_step_recipe(monkeypatch):
         "generation_profile": "fast",
     })
 
-    assert record["generation_profile"] == wrapper.PROFILE_FAST
-    assert record["turbo_lora"] == wrapper.REF2V_FAST
-    assert graph["50"]["inputs"]["lora_name"] == wrapper.REF2V_FAST
+    assert record["generation_profile"] == "fast4"
+    expected = wrapper._profile_spec("r2v", "fast4")["turbo_lora"]
+    assert record["turbo_lora"] == expected
+    assert graph["50"]["inputs"]["lora_name"] == expected
     assert graph["50"]["inputs"]["strength_model"] == 0.85
-    assert graph["53"]["inputs"]["sampler_name"] == "seeds_2"
+    assert graph["53"]["inputs"]["sampler_name"] == "euler"
 
     beta = next((nid, n) for nid, n in graph.items() if n.get("class_type") == "BetaSamplingScheduler")
     extend = next((nid, n) for nid, n in graph.items() if n.get("class_type") == "ExtendIntermediateSigmas")
@@ -155,3 +158,133 @@ def test_fast_r2v_preserves_legacy_four_step_recipe(monkeypatch):
     assert extend[1]["inputs"]["start_at_sigma"] == 0.8
     assert graph["54"]["inputs"]["model"] == ["50", 0]
     assert graph["55"]["inputs"]["sigmas"] == [extend[0], 0]
+
+
+def test_r2v_default_is_balanced_profile(monkeypatch):
+    wrapper = load_wrapper()
+    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("r2v", "custom"))
+
+    graph, record = wrapper.patch_workflow_v3({
+        "mode": "r2v",
+        "prompt_mode": "custom",
+    })
+
+    assert record["generation_profile"] == "balanced8"
+    assert record["turbo_lora"] == wrapper._profile_spec("r2v", "balanced8")["turbo_lora"]
+    assert graph["53"]["inputs"]["sampler_name"] == "euler"
+    assert record["generation_settings"]["schedule_type"] == "basic"
+
+
+def test_generation_overrides_change_sampler_and_disable_extend(monkeypatch):
+    wrapper = load_wrapper()
+    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("r2v", "custom"))
+
+    graph, record = wrapper.patch_workflow_v3({
+        "mode": "r2v",
+        "prompt_mode": "custom",
+        "generation_profile": "fast4",
+        "advanced_generation_overrides": True,
+        "generation_settings": {
+            "sampler": "seeds_2",
+            "schedule_type": "beta",
+            "extend_enabled": False,
+            "beta_alpha": 0.7,
+        },
+    })
+
+    beta = next((nid, n) for nid, n in graph.items() if n.get("class_type") == "BetaSamplingScheduler")
+    assert beta[1]["inputs"]["alpha"] == 0.7
+    assert graph["55"]["inputs"]["sigmas"] == [beta[0], 0]
+    assert record["generation_settings"]["extend_enabled"] is False
+    assert record["generation_settings"]["sampler"] == "seeds_2"
+    assert record["advanced_generation_overrides"] is True
+
+
+def test_i2v_ignores_advanced_generation_overrides(monkeypatch):
+    wrapper = load_wrapper()
+    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("i2v", "custom"))
+
+    graph, record = wrapper.patch_workflow_v3({
+        "mode": "i2v",
+        "prompt_mode": "custom",
+        "generation_profile": "balanced8",
+        "generation_settings": {
+            "sampler": "seeds_2",
+            "schedule_type": "beta",
+            "steps": 4,
+            "strength": 0.5,
+        },
+    })
+
+    assert record["generation_settings"]["sampler"] == "euler"
+    assert record["generation_settings"]["schedule_type"] == "basic"
+    assert record["generation_settings"]["steps"] == 8
+    assert record["generation_settings"]["strength"] == 1.0
+    sampler_node = next(node for node in graph.values() if node.get("class_type") == "KSamplerSelect")
+    assert sampler_node["inputs"]["sampler_name"] == "euler"
+
+
+def test_r2v_stale_advanced_values_do_not_mutate_named_profile(monkeypatch):
+    wrapper = load_wrapper()
+    monkeypatch.setattr(wrapper, "_base_patch_workflow", lambda payload: base_graph("r2v", "custom"))
+    graph, record = wrapper.patch_workflow_v3({
+        "mode": "r2v",
+        "prompt_mode": "custom",
+        "generation_profile": "fast",
+        "generation_settings": {
+            "sampler": "seeds_2",
+            "schedule_type": "basic",
+            "steps": 19,
+            "strength": 0.2,
+        },
+    })
+    spec = record["generation_settings"]
+    assert record["generation_profile"] == "fast4"
+    assert record["advanced_generation_overrides"] is False
+    assert (spec["sampler"], spec["schedule_type"], spec["steps"], spec["strength"]) == ("euler", "beta", 4, 0.85)
+    assert graph["53"]["inputs"]["sampler_name"] == "euler"
+
+
+def test_fl2v_fast_and_balanced_never_queue_beta_or_sigma_extender(monkeypatch):
+    wrapper = load_wrapper()
+
+    for mode in ("t2v", "i2v"):
+        for profile in ("balanced8", "fast4"):
+            monkeypatch.setattr(
+                wrapper,
+                "_base_patch_workflow",
+                lambda payload, m=mode: base_graph(m, "custom"),
+            )
+            graph, record = wrapper.patch_workflow_v3({
+                "mode": mode,
+                "prompt_mode": "custom",
+                "generation_profile": profile,
+                # Deliberately hostile/stale Advanced values. FL2V must ignore them.
+                "advanced_generation_overrides": True,
+                "generation_settings": {
+                    "sampler": "seeds_2",
+                    "schedule_type": "beta",
+                    "beta_alpha": 0.79,
+                    "beta_beta": 0.5,
+                    "extend_enabled": True,
+                    "extend_steps": 3,
+                    "extend_start": 0.8,
+                    "extend_end": 0.0,
+                },
+            })
+
+            assert not any(n.get("class_type") == "BetaSamplingScheduler" for n in graph.values())
+            assert not any(n.get("class_type") == "ExtendIntermediateSigmas" for n in graph.values())
+
+            scheduler_id, scheduler = next(
+                (nid, n) for nid, n in graph.items() if n.get("class_type") == "BasicScheduler"
+            )
+            sampler = next(n for n in graph.values() if n.get("class_type") == "KSamplerSelect")
+            advanced = next(n for n in graph.values() if n.get("class_type") == "SamplerCustomAdvanced")
+
+            assert sampler["inputs"]["sampler_name"] == "euler"
+            assert scheduler["inputs"]["scheduler"] == "simple"
+            assert scheduler["inputs"]["steps"] == (8 if profile == "balanced8" else 4)
+            assert advanced["inputs"]["sigmas"] == [scheduler_id, 0]
+            assert record["generation_settings"]["schedule_type"] == "basic"
+            assert record["generation_settings"]["extend_enabled"] is False

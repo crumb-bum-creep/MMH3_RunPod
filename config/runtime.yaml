@@ -1,4 +1,4 @@
-version: 1
+version: 3
 
 paths:
   persistent_root: /workspace/mmh3
@@ -14,6 +14,9 @@ services:
 
 comfy:
   use_sage_attention: true
+  # Match the last known-good pre-Advanced generation environment. Dynamic VRAM
+  # remains user-toggleable in System, but reproducibility takes precedence for
+  # the default runtime.
   disable_dynamic_vram: true
   cors: "*"
 
@@ -39,4 +42,5 @@ provisioning:
   run_in_background: true
   retry_attempts: 3
   retry_backoff_seconds: 8
+  warm_start_grace_seconds: 8
   workflow_install_mode: overwrite

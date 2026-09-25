@@ -78,17 +78,36 @@ def wait_ready(timeout: float = 180.0) -> bool:
         time.sleep(2)
     return False
 
-def queue_state() -> dict[str, Any]:
+def queue_state() -> dict[str, Any] | None:
+    """Return Comfy's queue state, or None when it cannot be verified.
+
+    Queue-read failures must never be interpreted as an empty queue: doing so can
+    authorize a supervisor restart while Comfy is busy or temporarily unresponsive.
+    """
     try:
         r = requests.get(base_url() + "/queue", timeout=3)
         r.raise_for_status()
-        return r.json()
-    except requests.RequestException:
-        return {"queue_running": [], "queue_pending": []}
+        value = r.json()
+        return value if isinstance(value, dict) else None
+    except (requests.RequestException, ValueError):
+        return None
 
 def queue_idle() -> bool:
     q = queue_state()
+    if q is None:
+        return False
     return not q.get("queue_running") and not q.get("queue_pending")
+
+def queue_idle_stable(checks: int = 2, delay: float = 1.0) -> bool:
+    """Require repeated verified-idle samples before allowing a managed restart."""
+    checks = max(1, int(checks))
+    delay = max(0.0, float(delay))
+    for index in range(checks):
+        if not queue_idle():
+            return False
+        if index + 1 < checks and delay:
+            time.sleep(delay)
+    return True
 
 def free_memory(unload_models: bool = True, free_memory_flag: bool = True) -> bool:
     try:
@@ -107,3 +126,53 @@ def interrupt() -> bool:
         return r.ok
     except requests.RequestException:
         return False
+
+
+def object_info(timeout: float = 10.0) -> dict[str, Any]:
+    try:
+        r = requests.get(base_url() + "/object_info", timeout=timeout)
+        r.raise_for_status()
+        value = r.json()
+        return value if isinstance(value, dict) else {}
+    except (requests.RequestException, ValueError):
+        return {}
+
+
+def _choice_values(info: dict[str, Any], class_type: str, input_name: str) -> set[str]:
+    try:
+        raw = info[class_type]["input"]["required"][input_name][0]
+    except (KeyError, IndexError, TypeError):
+        return set()
+    return {str(value) for value in raw} if isinstance(raw, list) else set()
+
+
+def missing_ready_model_choices(progress: dict[str, Any]) -> list[str]:
+    """Return ready persistent model files that Comfy's current selector cache cannot see."""
+    info = object_info()
+    if not info:
+        return []
+
+    mapping = {
+        "text_encoders/": ("CLIPLoader", "clip_name"),
+        "diffusion_models/": ("UNETLoader", "unet_name"),
+        "unet/": ("UNETLoader", "unet_name"),
+        "vae/": ("VAELoader", "vae_name"),
+        "loras/": ("LoraLoaderModelOnly", "lora_name"),
+    }
+    choices = {
+        key: _choice_values(info, *target)
+        for key, target in mapping.items()
+    }
+
+    missing: list[str] = []
+    for row in (progress or {}).values():
+        if not isinstance(row, dict) or row.get("status") != "ready":
+            continue
+        destination = str(row.get("destination") or "").replace("\\", "/")
+        prefix = next((key for key in mapping if destination.startswith(key)), None)
+        if prefix is None:
+            continue
+        filename = destination.split("/")[-1]
+        if filename and filename not in choices[prefix]:
+            missing.append(filename)
+    return sorted(set(missing))

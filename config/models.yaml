@@ -67,7 +67,7 @@ models:
     min_size_mb: 500
     phase: accelerator
     label: FL2V Fast Turbo 4-step v1.2 768p
-    show_in_ui: false
+    show_in_ui: true
 
   fl2v_turbo_8step:
     source: huggingface
@@ -77,7 +77,7 @@ models:
     min_size_mb: 500
     phase: accelerator
     label: FL2V Balanced Turbo 8-step v1.0 768p
-    show_in_ui: false
+    show_in_ui: true
 
   ref2v_turbo_4step:
     source: huggingface
@@ -87,7 +87,7 @@ models:
     min_size_mb: 500
     phase: accelerator
     label: Ref2V Fast Legacy Turbo 4-step v0.1
-    show_in_ui: false
+    show_in_ui: true
 
   ref2v_turbo_8step:
     source: huggingface
@@ -97,7 +97,7 @@ models:
     min_size_mb: 500
     phase: accelerator
     label: Ref2V Balanced Turbo 8-step v1.0 768p
-    show_in_ui: false
+    show_in_ui: true
 
   eros_beta5_int8:
     source: huggingface

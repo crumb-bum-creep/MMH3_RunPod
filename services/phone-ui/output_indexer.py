@@ -119,29 +119,45 @@ def _dirs_changed(watched: dict[str, int]) -> bool:
     return False
 
 
-async def run_forever(poll_seconds: float = 2.0, safety_rescan_seconds: float = 120.0) -> None:
-    watched: dict[str, int] = {}
-    last_scan = 0.0
+async def run_forever(poll_seconds: float = 5.0, safety_rescan_seconds: float = 300.0) -> None:
+    # Reuse the last persisted directory mtimes so a warm pod can serve the
+    # existing output index immediately instead of recursively walking a large
+    # persistent output tree while Comfy/provisioning are also starting.
+    prior = _load_json(INDEX_FILE, {})
+    watched = dict(prior.get("watched_dirs") or {}) if isinstance(prior, dict) else {}
+    last_scan = time.time() if watched else 0.0
+    try:
+        startup_delay = max(0.0, float(os.environ.get("MMH3_OUTPUT_INDEX_STARTUP_DELAY_SECONDS", "45")))
+    except ValueError:
+        startup_delay = 45.0
+
+    # Even a modern persisted index can represent hundreds/thousands of watched
+    # directories. Delay the first directory-stat sweep on every warm start so
+    # the UI/Comfy startup path gets uncontested I/O.
+    if INDEX_FILE.exists() and startup_delay:
+        await asyncio.sleep(startup_delay)
+
     while True:
         try:
             now = time.time()
             if _dirs_changed(watched) or now - last_scan >= safety_rescan_seconds:
                 snapshot = await asyncio.to_thread(build_index)
-                watched = dict(snapshot.pop("watched_dirs", {}))
+                watched = dict(snapshot.get("watched_dirs") or {})
                 await asyncio.to_thread(_atomic_json, INDEX_FILE, snapshot)
                 last_scan = now
             await asyncio.sleep(poll_seconds)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # Preserve the previous usable index when a background refresh
+            # fails. A transient disk/migration error should not blank Outputs.
+            previous = _load_json(INDEX_FILE, {})
+            if not isinstance(previous, dict):
+                previous = {}
+            previous["error"] = str(exc)
+            previous["updated_at"] = float(previous.get("updated_at") or time.time())
             try:
-                _atomic_json(INDEX_FILE, {
-                    "version": 1,
-                    "updated_at": time.time(),
-                    "count": 0,
-                    "items": [],
-                    "error": str(exc),
-                })
+                _atomic_json(INDEX_FILE, previous)
             except Exception:
                 pass
             await asyncio.sleep(max(5.0, poll_seconds))

@@ -6,6 +6,7 @@ from typing import Any
 
 from . import comfy
 from .common import LOG_ROOT, STATE_ROOT
+from .controls import load_controls
 from .hardware import cgroup_current_bytes, cgroup_inactive_file_bytes, cgroup_limit_bytes
 
 GIB = 1024 ** 3
@@ -66,10 +67,18 @@ def run(memory_cfg: dict[str, Any]) -> None:
         running = bool(q.get("queue_running"))
         pending = bool(q.get("queue_pending"))
 
-        pressure = frac >= cleanup or free < min_headroom
+        protection_enabled = bool(load_controls().get("memory_protection", True))
+        if not protection_enabled:
+            hold = False
+            pressure_since = None
+            cleanup_stage = "disabled"
+        elif cleanup_stage == "disabled":
+            cleanup_stage = "idle"
+
+        pressure = protection_enabled and (frac >= cleanup or free < min_headroom)
         safe_to_resume = frac <= resume and free >= resume_headroom
         cleanup_idle = not idle_only or (not running and not pending)
-        raw_critical = raw_frac >= critical and pressure
+        raw_critical = protection_enabled and raw_frac >= critical and pressure
 
         # Normal pressure is based on cgroup working set: raw memory.current less
         # inactive file cache. Linux is allowed to use spare RAM for page cache;
@@ -108,6 +117,7 @@ def run(memory_cfg: dict[str, Any]) -> None:
             "pending": pending,
             "comfy_ready": comfy_ready,
             "memory_hold": hold,
+            "memory_protection_enabled": protection_enabled,
             "pressure": pressure,
             "raw_critical": raw_critical,
             "pressure_for_seconds": round(pressure_for, 3),

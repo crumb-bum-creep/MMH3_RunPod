@@ -88,7 +88,7 @@ def test_custom_r2v_has_no_openrouter_api_key_node():
 
 
 def test_phone_ui_custom_r2v_uses_valid_referencepack_enum():
-    source = (ROOT / "services" / "phone-ui" / "server.py").read_text()
+    source = (ROOT / "services" / "phone-ui" / "server_core.py").read_text()
     assert 'inp["prompt_provider"] = "none"' in source
     assert 'inp["job_type"] = "standard"' in source
     assert 'inp["job_type"] = "custom"' not in source
@@ -110,5 +110,5 @@ def test_workflows_do_not_contain_embedded_credentials():
 
 
 def test_phone_ui_has_r2v_cache_nonce():
-    source = (ROOT / "services" / "phone-ui" / "server.py").read_text()
+    source = (ROOT / "services" / "phone-ui" / "server_core.py").read_text()
     assert 'inp["local_model_slug"] = f"mmh3-cache-{random_openrouter_seed()}"' in source

@@ -30,6 +30,8 @@ Observed Comfy launch flags:
 --disable-dynamic-vram
 ```
 
+> This is a **historical capture**, not the vNext default. Later real-pod sessions showed inconsistent host-RAM retention with this launch mode. vNext defaults to normal dynamic-VRAM behavior and exposes `Disable dynamic VRAM` as an explicit System setting for controlled A/B testing.
+
 ## Telemetry workloads
 
 | Run | Workload | Cold/Warm | Peak VRAM | Start RAM | Peak RAM | End RAM |

@@ -248,7 +248,7 @@
         <button id="outputDetailFavoriteV2" class="secondary ${org.favorite?"active":""}" type="button">${org.favorite?"★ Favorited":"☆ Favorite"}</button>
       </div>
       <div class="actions output-actions-v2">
-        <button class="secondary" id="outputCopyPromptV2">Copy prompt</button><button class="secondary" id="outputCopySeedV2">Copy seed</button><button class="secondary" id="outputCopyMetaV2">Copy metadata</button><button class="secondary" id="outputUseR2VV2">Use as R2V ref</button><button class="secondary" id="outputReuseV2">Reuse setup</button><button class="danger" id="outputDeleteV2">Delete</button>
+        <button class="secondary" id="outputCopyPromptV2">Copy prompt</button><button class="secondary" id="outputCopySeedV2">Copy seed</button><button class="secondary" id="outputCopyMetaV2">Copy metadata</button><button class="secondary" id="outputUseR2VV2">Use as R2V ref</button><button class="secondary" id="outputReuseV2">Reuse Exact</button><button class="danger" id="outputDeleteV2">Delete</button>
       </div>
       <div class="meta output-prompt-v2">${html((m.actual_prompt||m.prompt_idea||m.prompt||"").slice(0,1600))}</div>`;
 
@@ -273,7 +273,7 @@
     q("#outputCopyPromptV2").onclick=()=>copyText(m.actual_prompt||m.prompt||m.prompt_idea||"");
     q("#outputCopySeedV2").onclick=()=>copyText(String(m.seed??""));
     q("#outputCopyMetaV2").onclick=()=>copyText(JSON.stringify(m,null,2));
-    q("#outputReuseV2").onclick=()=>{dialog.close();applySnapshot(m);switchTab("generate");toast("Setup loaded");};
+    q("#outputReuseV2").onclick=()=>{dialog.close();const fallback=reuseExactSnapshot(m);switchTab("generate");toast(fallback?"Loaded as Custom · historical recipe defaults applied":"Exact setup loaded as Custom");};
     q("#outputUseR2VV2").onclick=async()=>{try{const d=await api("/api/output-to-input",{method:"POST",body:{file}});dialog.close();setMode("r2v");addRef("video",d.file,true);switchTab("generate");refreshInputOptions();toast("Added as R2V video reference");}catch(e){toast(e.message);}};
     q("#outputDeleteV2").onclick=async()=>{
       if(!confirm("Delete this video?"))return;

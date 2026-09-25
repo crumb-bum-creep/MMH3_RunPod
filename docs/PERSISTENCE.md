@@ -17,6 +17,8 @@ Everything below survives image/container replacement when the same RunPod volum
 - `/workspace/mmh3/data/assets.json` — reusable asset nicknames/metadata
 - `/workspace/mmh3/data/input_thumbs/` — generated image thumbnails for the asset picker
 - `/workspace/mmh3/data/*.json` — catalogs and generation metadata
+- `/workspace/mmh3/data/runtime_controls.json` — live Phone UI controls such as Memory Protection and output naming
+- `/workspace/mmh3/config/runtime.yaml` — versioned launch/runtime configuration, including Comfy dynamic-VRAM behavior
 
 The application source itself remains image-local under `/opt/mmh3` and `/ComfyUI`.
 
@@ -53,4 +55,4 @@ The Generate page autosaves a separate draft for each of:
 
 Those drafts include prompt text, generation parameters, starting image, ordered R2V references, and selected LoRAs/strengths. The browser also keeps a local mirror so a page refresh can recover immediately; the persistent `/workspace` copy is authoritative across container replacements.
 
-Large media files stay on the persistent volume rather than in Git. A future Git-backed profile sync can version small portable configuration separately without changing these paths.
+Large media files stay on the persistent volume rather than in Git. vNext also stores the fully resolved generation recipe with completed-output metadata so Reuse Exact can restore the sampler/scheduler/Turbo configuration that produced a video. A future Git-backed profile sync can version small portable configuration separately without changing these paths.

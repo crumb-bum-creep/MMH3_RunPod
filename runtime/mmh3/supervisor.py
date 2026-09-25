@@ -38,6 +38,10 @@ def log_file(name: str):
     return (LOG_ROOT / name).open("ab", buffering=0)
 
 def start_comfy() -> subprocess.Popen:
+    # Re-assert persistent paths immediately before every Comfy launch. This
+    # prevents migration/warm-start races where Comfy indexes the image-local
+    # model tree before /workspace paths are finalized.
+    comfy.configure_persistent_paths()
     runtime = load_yaml(CONFIG_ROOT / "runtime.yaml", {}) or {}
     hw = detect()
     _, profile = select_profile(hw, IMAGE_ROOT / "config" / "hardware_profiles.yaml")
@@ -53,7 +57,7 @@ def start_comfy() -> subprocess.Popen:
         args += ["--enable-cors-header", str(cfg["cors"])]
     if cfg.get("use_sage_attention", True):
         args.append("--use-sage-attention")
-    if cfg.get("disable_dynamic_vram", True):
+    if cfg.get("disable_dynamic_vram", False):
         args.append("--disable-dynamic-vram")
 
     reserve = float(((profile.get("comfy") or {}).get("reserve_vram_gb")) or 0)
@@ -139,16 +143,14 @@ def main() -> int:
     #   * interactive shell/UI availability as fast as possible;
     #   * first-generation readiness on an empty volume.
     #
-    # Phone UI and Comfy start first. Give them a very short uncontested grace
-    # period, then start large model downloads while Comfy finishes importing.
-    # Jupyter is intentionally deferred until Comfy is healthy so notebook
-    # startup cannot steal CPU/I/O from the latency-critical service.
+    # Start all interactive services before any long Comfy health wait or model
+    # provisioning. In particular, Jupyter must remain available on degraded or
+    # CPU-only recovery pods even when Comfy cannot initialize CUDA.
     phone_proc = start_phone()
     comfy_proc = start_comfy()
-    startup_mark(phone_spawned=True, comfy_spawned=True)
+    jupyter_proc = start_jupyter()
+    startup_mark(phone_spawned=True, comfy_spawned=True, jupyter_spawned=bool(jupyter_proc))
 
-    STOP.wait(3)
-    provision_proc = start_provisioner()
     provision_attempt = 1
     provision_retry_at = 0.0
     provision_cfg = runtime.get("provisioning") or {}
@@ -160,15 +162,75 @@ def main() -> int:
         provision_backoff = max(2.0, float(provision_cfg.get("retry_backoff_seconds", 8)))
     except (TypeError, ValueError):
         provision_backoff = 8.0
-    startup_mark(provisioner_started=True, provisioner_attempt=provision_attempt)
+    try:
+        warm_grace = max(0.0, float(provision_cfg.get("warm_start_grace_seconds", 8)))
+    except (TypeError, ValueError):
+        warm_grace = 8.0
 
-    comfy_ready = comfy.wait_ready(180)
+    bootstrap_state = {}
+    try:
+        bootstrap_state = json.loads((STATE_ROOT / "provisioning.json").read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    warm_start = bool(bootstrap_state.get("core_ready"))
+
+    # Empty volumes need downloads as soon as possible, so preserve the short
+    # overlap there. Warm/migrated volumes already have their core files and
+    # benefit more from letting Comfy finish imports/indexing before optional
+    # verification/download work competes for persistent-volume I/O.
+    if not warm_start:
+        STOP.wait(3)
+        provision_proc = start_provisioner()
+        startup_mark(
+            provisioner_started=True,
+            provisioner_attempt=provision_attempt,
+            provisioner_start_mode="cold",
+        )
+        comfy_ready = comfy.wait_ready(180)
+    else:
+        # A migrated volume already has its core files, so prove Comfy can see
+        # them before starting any background provisioning I/O. This closes the
+        # historical migration race where the UI became usable while Comfy's
+        # loader filename cache was still empty/stale.
+        comfy_ready = comfy.wait_ready(180)
+        if comfy_ready:
+            missing = comfy.missing_ready_model_choices(bootstrap_state.get("model_progress") or {})
+            if missing:
+                print(
+                    "[mmh3] warm-start Comfy model cache is stale; restarting once before generation: "
+                    + ", ".join(missing[:6]),
+                    flush=True,
+                )
+                startup_mark(comfy_model_visibility_missing=missing, comfy_model_visibility_repair=True)
+                terminate(comfy_proc)
+                comfy_proc = start_comfy()
+                comfy_ready = comfy.wait_ready(240)
+                remaining = (
+                    comfy.missing_ready_model_choices(bootstrap_state.get("model_progress") or {})
+                    if comfy_ready
+                    else missing
+                )
+                startup_mark(
+                    comfy_ready=comfy_ready,
+                    comfy_model_visibility_missing=remaining,
+                    comfy_model_visibility_ready=bool(comfy_ready and not remaining),
+                )
+            else:
+                startup_mark(comfy_model_visibility_missing=[], comfy_model_visibility_ready=True)
+
+        if comfy_ready and warm_grace:
+            STOP.wait(warm_grace)
+        provision_proc = start_provisioner()
+        startup_mark(
+            provisioner_started=True,
+            provisioner_attempt=provision_attempt,
+            provisioner_start_mode="warm",
+            provisioner_warm_grace_seconds=warm_grace,
+        )
+
     startup_mark(comfy_ready=comfy_ready, comfy_ready_seconds=round(time.time() - START_EPOCH, 3))
     if not comfy_ready:
         print("[mmh3] ComfyUI did not become healthy within 180s; supervisor remains alive.", flush=True)
-
-    jupyter_proc = start_jupyter()
-    startup_mark(jupyter_spawned=bool(jupyter_proc))
 
     def _signal(_sig, _frame):
         STOP.set()
@@ -176,7 +238,42 @@ def main() -> int:
     signal.signal(signal.SIGINT, _signal)
 
     crash_times: list[float] = []
+    rescan_request = STATE_ROOT / "comfy_model_rescan.request"
+    restart_request = STATE_ROOT / "comfy_restart.request"
     while not STOP.is_set():
+        # Model-cache repairs and user-requested launch-setting changes both
+        # restart only Comfy, and only while its queue is idle.
+        pending_restart = rescan_request.exists() or restart_request.exists()
+        if pending_restart and comfy.queue_idle_stable(checks=2, delay=1.0):
+            reason = "model-index refresh" if rescan_request.exists() else "runtime setting change"
+            print(f"[mmh3] restarting Comfy for {reason}", flush=True)
+            startup_mark(
+                comfy_restart_requested=True,
+                comfy_model_rescan_requested=rescan_request.exists(),
+            )
+            terminate(comfy_proc)
+            comfy_proc = start_comfy()
+            ready_after_restart = comfy.wait_ready(240)
+            startup_mark(
+                comfy_restart_complete=ready_after_restart,
+                comfy_model_rescan_complete=ready_after_restart if rescan_request.exists() else None,
+                comfy_ready=ready_after_restart,
+            )
+            if ready_after_restart:
+                for request_path in (rescan_request, restart_request):
+                    try:
+                        request_path.unlink()
+                    except OSError:
+                        pass
+            else:
+                print(
+                    "[mmh3] Comfy restart did not become healthy; retaining restart request and forcing recovery",
+                    flush=True,
+                )
+                # A live-but-unhealthy process would otherwise evade the crash
+                # watchdog forever. Kill it so the normal recovery path can retry.
+                terminate(comfy_proc)
+
         if comfy_proc.poll() is not None:
             crash_times = [t for t in crash_times if time.time() - t < 600]
             crash_times.append(time.time())
@@ -185,7 +282,21 @@ def main() -> int:
             STOP.wait(delay)
             if not STOP.is_set():
                 comfy_proc = start_comfy()
-                comfy.wait_ready(240)
+                recovered = comfy.wait_ready(240)
+                if recovered:
+                    # If this crash-recovery launch satisfied an earlier managed
+                    # restart, consume the request now instead of restarting again.
+                    for request_path in (rescan_request, restart_request):
+                        try:
+                            request_path.unlink()
+                        except OSError:
+                            pass
+                else:
+                    print(
+                        "[mmh3] Comfy recovery launch is still unhealthy; forcing another retry",
+                        flush=True,
+                    )
+                    terminate(comfy_proc)
         if provision_proc is not None and provision_proc.poll() is not None:
             rc = provision_proc.returncode
             provision_proc = None

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,15 +11,23 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVER_PATH = ROOT / "services" / "phone-ui" / "server.py"
+SERVER_PATH = ROOT / "services" / "phone-ui" / "server_core.py"
 
 
 def load_server_module():
-    spec = importlib.util.spec_from_file_location("mmh3_phone_server_integration", SERVER_PATH)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-    return module
+    phone_root = str(SERVER_PATH.parent)
+    sys.path.insert(0, phone_root)
+    try:
+        spec = importlib.util.spec_from_file_location("mmh3_phone_server_integration", SERVER_PATH)
+        module = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        try:
+            sys.path.remove(phone_root)
+        except ValueError:
+            pass
 
 
 class JsonRequest:

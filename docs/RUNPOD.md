@@ -1,40 +1,44 @@
 # RunPod Deployment
 
-This document will become the authoritative deployment guide after the known-good environment has been pinned.
+MMH3 targets NVIDIA RunPod Pods with a persistent volume mounted at `/workspace`.
 
-## Planned exposed HTTP ports
+## Exposed HTTP ports
 
 - `7860/http` — MMH3 Phone UI
 - `8188/http` — ComfyUI
 - `8888/http` — JupyterLab
 
-RunPod supports HTTP/TCP port declarations on Pods, and the default persistent volume mount is `/workspace`.
+## Secrets
 
-## Planned secrets
-
-Create these in RunPod **Secrets**, not in Git:
+Create secrets in RunPod, not in Git:
 
 | Secret | Purpose | Required |
 |---|---|---|
 | `OPENROUTER_API_KEY` | Auto-prompt generation | Yes for Auto workflows |
-| `CIVITAI_TOKEN` | Authenticated LoRA downloads | Optional |
-| `HF_TOKEN` | Gated/authenticated Hugging Face downloads | Optional |
+| `CIVITAI_TOKEN` | Managed CivitAI LoRA downloads | Optional |
+| `HF_TOKEN` | Hugging Face model downloads | Recommended |
 | `JUPYTER_PASSWORD` | Jupyter authentication | Recommended |
 
-The production template will map those secrets into environment variables.
+Map them to the environment variables described in `docs/FIRST_RUNPOD_DEPLOY.md`.
+
+## Image policy
+
+Use immutable GHCR `sha-...` tags for normal templates. Do not pin a long-lived production template to `latest`.
+
+The historical production input to vNext is:
+
+`ghcr.io/crumb-bum-creep/mmh3-runpod:sha-9d134f338f53`
+
+The vNext candidate must pass the checklist in `docs/DEVELOPMENT_HANDOFF.md` before replacing that tag in a production template.
 
 ## Storage
 
-Use a persistent Pod volume or a network volume mounted at `/workspace`.
+Keep models, inputs, outputs and MMH3 user/configuration state on the persistent `/workspace` volume. Application code remains image-local and disposable.
 
-Keep model weights and outputs under `/workspace` so they survive container replacement.
+A network volume is useful when Pods are frequently destroyed/recreated; a normal Pod volume remains supported when GPU/location flexibility matters more.
 
-## Current next step
+## Hardware/runtime truth
 
-Before locking the Docker image and startup command, capture the exact environment from the current known-good H3 Pod:
+MMH3 uses direct GPU and cgroup probes as the source of truth for VRAM/RAM policy. RunPod environment variables are supplemental metadata only.
 
-```bash
-bash scripts/capture_known_good.sh
-```
-
-That capture lets us pin the exact ComfyUI commit, Python/PyTorch stack, and custom-node revisions instead of guessing.
+The primary validated high-memory target is the RTX PRO 6000 Blackwell class. See `docs/KNOWN_GOOD_AND_MEMORY.md` for captured hardware/runtime details and `docs/OPERATIONS.md` for health/recovery commands.

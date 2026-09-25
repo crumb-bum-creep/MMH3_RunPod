@@ -157,7 +157,9 @@ tail -100 /workspace/mmh3/logs/provisioning.log
 
 The 7860 UI also reports provisioning state.
 
-Generation remains disabled until the core H3 model set is ready.
+Generation remains disabled until the core H3 model set is ready. On warm/migrated volumes MMH3 verifies that Comfy can actually see the ready model filenames and automatically restarts only Comfy if its selector cache is stale.
+
+The System tab also exposes the Comfy dynamic-VRAM launch setting. vNext defaults to normal dynamic-VRAM behavior (the "Disable dynamic VRAM" toggle is OFF). Changing that setting writes the persistent runtime configuration and schedules a Comfy-only restart once the queue is idle.
 
 ## Files you should consider irreplaceable
 
