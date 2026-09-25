@@ -68,7 +68,7 @@ def test_fl2v_profiles_are_exactly_fast_and_balanced_from_9d():
     for mode in ("t2v", "i2v"):
         table = public_profiles(mode)
         assert table["default"] == "balanced8"
-        assert set(table["profiles"]) == {"balanced8", "fast4"}
+        assert set(table["profiles"]) == {"balanced8", "fast4", "community"}
         balanced = table["profiles"]["balanced8"]
         fast = table["profiles"]["fast4"]
         community = table["profiles"]["community"]
