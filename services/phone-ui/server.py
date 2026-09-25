@@ -18,7 +18,7 @@ import server_core as base
 
 import output_indexer
 
-APP_VERSION = "1.0.1-mmH3-profile-baseline"
+APP_VERSION = "1.1.0-mmH3-community-parity"
 LIBRARY_FILE = base.DATA_ROOT / "output_library.json"
 INDEX_FILE = output_indexer.INDEX_FILE
 _real_free_memory = base.comfy.free_memory
