@@ -18,7 +18,7 @@ import server_core as base
 
 import output_indexer
 
-APP_VERSION = "1.0.1-mmH3-profile-baseline"
+APP_VERSION = "1.1.0-mmH3-community-parity"
 LIBRARY_FILE = base.DATA_ROOT / "output_library.json"
 INDEX_FILE = output_indexer.INDEX_FILE
 _real_free_memory = base.comfy.free_memory
@@ -218,30 +218,57 @@ def _patch_generation_profile(
         for _, node in samplers:
             node.setdefault("inputs", {})["sigmas"] = sigma_source
     else:
-        shift_id, shift = _ensure_profile_node(
-            graph, "MiniMaxH3SigmaShift", "mmh3_profile_shift", "Generation Profile Sigma Shift"
-        )
-        shift["inputs"] = {
-            "model": [turbo_id, 0],
-            "shift_video": spec["shift_video"],
-            "shift_audio": spec["shift_audio"],
-        }
-        shift.setdefault("_meta", {})["title"] = f"Generation Profile Sigma Shift · {spec['label']}"
+        model_source = [turbo_id, 0]
+        sigma_shift_enabled = bool(spec.get("sigma_shift_enabled", True))
+        if sigma_shift_enabled:
+            shift_id, shift = _ensure_profile_node(
+                graph, "MiniMaxH3SigmaShift", "mmh3_profile_shift", "Generation Profile Sigma Shift"
+            )
+            shift["inputs"] = {
+                "model": [turbo_id, 0],
+                "shift_video": spec["shift_video"],
+                "shift_audio": spec["shift_audio"],
+            }
+            shift.setdefault("_meta", {})["title"] = f"Generation Profile Sigma Shift · {spec['label']}"
+            model_source = [shift_id, 0]
+        else:
+            # Community parity graphs intentionally bypass SigmaShift. Remove the
+            # stock node entirely so the queued graph mirrors the reference pod.
+            for shift_id, _ in list(base.find_nodes(graph, "MiniMaxH3SigmaShift")):
+                graph.pop(shift_id, None)
 
         scheduler_id, scheduler = _ensure_profile_node(
             graph, "BasicScheduler", "mmh3_profile_scheduler", "Generation Profile Scheduler"
         )
         scheduler["inputs"] = {
-            "model": [shift_id, 0],
+            "model": model_source,
             "scheduler": spec["scheduler"],
             "steps": spec["steps"],
             "denoise": 1.0,
         }
         scheduler.setdefault("_meta", {})["title"] = f"Generation Profile Scheduler · {spec['label']}"
+
+        sigma_source = [scheduler_id, 0]
+        if spec["extend_enabled"]:
+            extend_id, extend = _ensure_profile_node(
+                graph,
+                "ExtendIntermediateSigmas",
+                "mmh3_profile_sigmas",
+                "Generation Profile Sigma Extension",
+            )
+            extend["inputs"] = {
+                "steps": spec["extend_steps"],
+                "start_at_sigma": spec["extend_start"],
+                "end_at_sigma": spec["extend_end"],
+                "spacing": spec["extend_spacing"],
+                "sigmas": [scheduler_id, 0],
+            }
+            sigma_source = [extend_id, 0]
+
         for _, node in guiders:
-            node.setdefault("inputs", {})["model"] = [shift_id, 0]
+            node.setdefault("inputs", {})["model"] = model_source
         for _, node in samplers:
-            node.setdefault("inputs", {})["sigmas"] = [scheduler_id, 0]
+            node.setdefault("inputs", {})["sigmas"] = sigma_source
 
     return spec
 
@@ -342,8 +369,12 @@ def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str
     record["turbo_scheduler"] = (
         profile_spec["scheduler"] if profile_spec["schedule_type"] == "basic" else "legacy_beta"
     )
-    record["turbo_shift_video"] = profile_spec["shift_video"]
-    record["turbo_shift_audio"] = profile_spec["shift_audio"]
+    record["turbo_shift_video"] = (
+        profile_spec["shift_video"] if profile_spec.get("sigma_shift_enabled", True) else None
+    )
+    record["turbo_shift_audio"] = (
+        profile_spec["shift_audio"] if profile_spec.get("sigma_shift_enabled", True) else None
+    )
     record["generation_settings"] = profile_spec
     record["advanced_generation_overrides"] = advanced_generation_overrides
     record["ending_image"] = ending_image or None

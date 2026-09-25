@@ -26,6 +26,19 @@ modes:
         shift_video: 6.0
         shift_audio: 3.0
         ref_image_size: max
+      community:
+        label: Community · FL2V 8-step v1.0 · no SigmaShift
+        turbo_lora: minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
+        strength: 0.8
+        steps: 8
+        sampler: euler
+        schedule_type: basic
+        scheduler: simple
+        sigma_shift_enabled: false
+        extend_enabled: false
+        shift_video: 0.0
+        shift_audio: 0.0
+        ref_image_size: max
 
   i2v:
     default: balanced8
@@ -51,6 +64,19 @@ modes:
         scheduler: simple
         shift_video: 6.0
         shift_audio: 3.0
+        ref_image_size: max
+      community:
+        label: Community · FL2V 8-step v1.0 · no SigmaShift
+        turbo_lora: minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
+        strength: 0.8
+        steps: 8
+        sampler: euler
+        schedule_type: basic
+        scheduler: simple
+        sigma_shift_enabled: false
+        extend_enabled: false
+        shift_video: 0.0
+        shift_audio: 0.0
         ref_image_size: max
 
   r2v:
@@ -83,4 +109,21 @@ modes:
         extend_spacing: linear
         shift_video: 12.0
         shift_audio: 3.0
+        ref_image_size: max
+      community:
+        label: Community · Ref2V 8-step v1.0 · Euler/Simple+Extend
+        turbo_lora: minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
+        strength: 0.85
+        steps: 8
+        sampler: euler
+        schedule_type: basic
+        scheduler: simple
+        sigma_shift_enabled: false
+        extend_enabled: true
+        extend_steps: 2
+        extend_start: 0.8
+        extend_end: 0.0
+        extend_spacing: linear
+        shift_video: 0.0
+        shift_audio: 0.0
         ref_image_size: max

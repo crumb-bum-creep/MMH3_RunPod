@@ -157,3 +157,50 @@ def test_advanced_tuning_is_r2v_only_and_explicit():
     assert 'v.generation_settings=v.advanced_generation_overrides?readGenerationSettings():null' in ui
     assert 'mode == "r2v" and bool(payload.get("advanced_generation_overrides", False))' in server
     assert 'payload.get("generation_settings") if advanced_generation_overrides else None' in server
+
+
+def test_community_profiles_queue_reference_sampling_graphs():
+    wrapper = load_wrapper()
+    workflow_dir = ROOT / "workflows" / "api"
+
+    for mode, filename, strength in (
+        ("t2v", "t2v_custom.json", 0.8),
+        ("i2v", "i2v_custom.json", 0.8),
+        ("r2v", "r2v_custom.json", 0.85),
+    ):
+        graph = json.loads((workflow_dir / filename).read_text(encoding="utf-8"))
+        spec = wrapper._patch_generation_profile(graph, mode, "community")
+
+        turbo_id, turbo = wrapper._profile_turbo_node(graph)
+        assert turbo["inputs"]["strength_model"] == strength
+        assert spec["sampler"] == "euler"
+        assert spec["steps"] == 8
+        assert spec["sigma_shift_enabled"] is False
+        assert wrapper.base.find_nodes(graph, "MiniMaxH3SigmaShift") == []
+
+        schedulers = wrapper.base.find_nodes(graph, "BasicScheduler")
+        assert len(schedulers) == 1
+        scheduler_id, scheduler = schedulers[0]
+        assert scheduler["inputs"]["model"] == [turbo_id, 0]
+        assert scheduler["inputs"]["scheduler"] == "simple"
+        assert scheduler["inputs"]["steps"] == 8
+
+        guider = wrapper.base.find_nodes(graph, "BasicGuider")[0][1]
+        sampler = wrapper.base.find_nodes(graph, "SamplerCustomAdvanced")[0][1]
+        assert guider["inputs"]["model"] == [turbo_id, 0]
+
+        extenders = wrapper.base.find_nodes(graph, "ExtendIntermediateSigmas")
+        if mode == "r2v":
+            assert len(extenders) == 1
+            extend_id, extend = extenders[0]
+            assert extend["inputs"] == {
+                "steps": 2,
+                "start_at_sigma": 0.8,
+                "end_at_sigma": 0.0,
+                "spacing": "linear",
+                "sigmas": [scheduler_id, 0],
+            }
+            assert sampler["inputs"]["sigmas"] == [extend_id, 0]
+        else:
+            assert extenders == []
+            assert sampler["inputs"]["sigmas"] == [scheduler_id, 0]
