@@ -244,7 +244,7 @@ def main() -> int:
         # Model-cache repairs and user-requested launch-setting changes both
         # restart only Comfy, and only while its queue is idle.
         pending_restart = rescan_request.exists() or restart_request.exists()
-        if pending_restart and comfy.queue_idle():
+        if pending_restart and comfy.queue_idle_stable(checks=2, delay=1.0):
             reason = "model-index refresh" if rescan_request.exists() else "runtime setting change"
             print(f"[mmh3] restarting Comfy for {reason}", flush=True)
             startup_mark(
@@ -259,11 +259,20 @@ def main() -> int:
                 comfy_model_rescan_complete=ready_after_restart if rescan_request.exists() else None,
                 comfy_ready=ready_after_restart,
             )
-            for request_path in (rescan_request, restart_request):
-                try:
-                    request_path.unlink()
-                except OSError:
-                    pass
+            if ready_after_restart:
+                for request_path in (rescan_request, restart_request):
+                    try:
+                        request_path.unlink()
+                    except OSError:
+                        pass
+            else:
+                print(
+                    "[mmh3] Comfy restart did not become healthy; retaining restart request and forcing recovery",
+                    flush=True,
+                )
+                # A live-but-unhealthy process would otherwise evade the crash
+                # watchdog forever. Kill it so the normal recovery path can retry.
+                terminate(comfy_proc)
 
         if comfy_proc.poll() is not None:
             crash_times = [t for t in crash_times if time.time() - t < 600]
@@ -273,7 +282,21 @@ def main() -> int:
             STOP.wait(delay)
             if not STOP.is_set():
                 comfy_proc = start_comfy()
-                comfy.wait_ready(240)
+                recovered = comfy.wait_ready(240)
+                if recovered:
+                    # If this crash-recovery launch satisfied an earlier managed
+                    # restart, consume the request now instead of restarting again.
+                    for request_path in (rescan_request, restart_request):
+                        try:
+                            request_path.unlink()
+                        except OSError:
+                            pass
+                else:
+                    print(
+                        "[mmh3] Comfy recovery launch is still unhealthy; forcing another retry",
+                        flush=True,
+                    )
+                    terminate(comfy_proc)
         if provision_proc is not None and provision_proc.poll() is not None:
             rc = provision_proc.returncode
             provision_proc = None
