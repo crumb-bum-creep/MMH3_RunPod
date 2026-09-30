@@ -1,0 +1,87 @@
+# Generation recipes: everything about HOW a clip is sampled, as data.
+#
+# The graph never changes shape between recipes except for two optional
+# stages: sigma shift (omit `shift` to use ComfyUI's built-in 12 / 3) and
+# the extra low-noise sampling passes (`extend`). Everything else is a value.
+#
+#   lora      model id from models.yaml (the turbo LoRA)
+#   strength  turbo LoRA strength
+#   steps     sampling steps (the turbo LoRA's NFE)
+#   sampler   KSamplerSelect sampler
+#   scheduler BasicScheduler scheduler
+#   shift     [video, audio] sigma shift, or omit
+#   extend    {steps, start, end, spacing} for ExtendIntermediateSigmas, or omit
+#
+# `default` is what Create uses. `compare` is what the Compare button queues,
+# on one shared seed, so the difference you see is the recipe and nothing else.
+#
+# Starting point = the settings you were already running and trusted
+# (main @ 9d134f3). Reasoning for each alternative is in README.md.
+
+families:
+  fl2v:            # T2V and I2V
+    default: balanced
+    compare: [balanced, fast, upstream]
+    recipes:
+      balanced:
+        label: Balanced
+        note: 8-step turbo v1.0, shift 6/3 (LightX2V's trained shift for 768p)
+        lora: fl2v_turbo_8step
+        strength: 1.0
+        steps: 8
+        sampler: euler
+        scheduler: simple
+        shift: [6.0, 3.0]
+      fast:
+        label: Fast
+        note: 4-step turbo v1.2, shift 6/3. Roughly half the sampling time.
+        lora: fl2v_turbo_4step
+        strength: 1.0
+        steps: 4
+        sampler: euler
+        scheduler: simple
+        shift: [6.0, 3.0]
+      upstream:
+        label: Upstream v9
+        note: Hearmeman v9 graph. Strength 0.8, ComfyUI default shift 12/3, extra low-noise passes (slower).
+        lora: fl2v_turbo_8step
+        strength: 0.8
+        steps: 8
+        sampler: euler
+        scheduler: simple
+        extend: {steps: 2, start: 0.8, end: 0.0, spacing: linear}
+
+  ref2v:           # R2V
+    default: balanced
+    compare: [balanced, shift6, upstream]
+    recipes:
+      balanced:
+        label: Balanced
+        note: 8-step Ref2V turbo v1.0, shift 12/3. Your current known-good R2V setting.
+        lora: ref2v_turbo_8step
+        strength: 1.0
+        steps: 8
+        sampler: euler
+        scheduler: simple
+        shift: [12.0, 3.0]
+        ref_image_size: max
+      shift6:
+        label: Balanced · shift 6
+        note: Same, at shift 6/3 like every other 768p turbo LoRA. Unpublished for Ref2V; test it.
+        lora: ref2v_turbo_8step
+        strength: 1.0
+        steps: 8
+        sampler: euler
+        scheduler: simple
+        shift: [6.0, 3.0]
+        ref_image_size: max
+      upstream:
+        label: Upstream v9
+        note: Hearmeman v9 graph. Strength 0.85, default shift, extra low-noise passes (slower).
+        lora: ref2v_turbo_8step
+        strength: 0.85
+        steps: 8
+        sampler: euler
+        scheduler: simple
+        extend: {steps: 2, start: 0.8, end: 0.0, spacing: linear}
+        ref_image_size: max

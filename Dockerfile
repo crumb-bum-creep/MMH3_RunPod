@@ -1,131 +1,75 @@
-# Startup-optimized MMH3 image.
+# MMH3 Studio — MiniMax H3 on RunPod with a phone-first UI.
 #
-# The builder recreates the exact validated Python/Comfy/custom-node stack from
-# the known-good image family. The FINAL image does not inherit the community
-# template filesystem or its layer history: it carries only CUDA runtime,
-# runtime OS libraries, /opt/venv, /ComfyUI, and MMH3 itself.
-
-FROM hearmeman/comfyui-base:cu130-comfy0.32.0-torch2.11.0 AS builder
+# Base: the exact image Hearmeman's v9 template builds on (ComfyUI 3dd559d, just
+# after 0.36.0; CUDA 13.0; torch 2.11). ComfyUI >= 0.34 sizes its RAM cache
+# against the container's cgroup limit instead of the host's RAM, which is the
+# root cause of the RAM creep on the previous 0.32 image.
+ARG BASE_IMAGE=hearmeman/comfyui-base:cu130-comfy0.36.0-3dd559d8-torch2.11.0
+FROM ${BASE_IMAGE}
 
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG DEBIAN_FRONTEND=noninteractive
-ARG COMFYUI_COMMIT=c2bcbecd82ec5ae66594340b395c24ef0217b238
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl ffmpeg git jq libtcmalloc-minimal4 procps \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg libtcmalloc-minimal4 tini ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
-RUN git -C /ComfyUI fetch --depth=1 origin "${COMFYUI_COMMIT}" \
-    && git -C /ComfyUI reset --hard "${COMFYUI_COMMIT}"
-
+# Custom nodes, pinned. Validated against this ComfyUI commit with
+# scripts/validate_graphs.py (every mode x recipe graph passes ComfyUI's own
+# prompt validation). Only what the Studio graphs use:
+#   KJNodes              ModelPreviewOverrideKJ (live previews + per-step timing)
+#   VideoHelperSuite     VHS_VideoCombine (mp4 with the generated soundtrack)
+#   MiniMaxRefPack       R2V reference loading, and the R2V prompt writer
+#   Spectrum-MiniMax-H3  optional speed node, not used by default (kept for ComfyUI users)
 RUN set -eux; \
     install_node() { \
       name="$1"; url="$2"; rev="$3"; dst="/ComfyUI/custom_nodes/$name"; \
       rm -rf "$dst"; \
       git clone --filter=blob:none "$url" "$dst"; \
-      git -C "$dst" fetch --depth=1 origin "$rev"; \
       git -C "$dst" checkout --detach "$rev"; \
-      if [[ -f "$dst/requirements.txt" ]]; then /opt/venv/bin/pip install --no-cache-dir -r "$dst/requirements.txt"; fi; \
-      if [[ -f "$dst/install.py" ]]; then /opt/venv/bin/python "$dst/install.py"; fi; \
+      if [[ -f "$dst/requirements.txt" ]]; then pip install --no-cache-dir -r "$dst/requirements.txt"; fi; \
+      rm -rf "$dst/.git"; \
     }; \
-    install_node ComfyUI-KJNodes https://github.com/kijai/ComfyUI-KJNodes.git 3f20054214fec9f9234fd3841ae6f1e4287948f6; \
-    install_node ComfyUI-MiniMaxRefPack https://github.com/Hearmeman24/ComfyUI-MiniMaxRefPack.git 7012734eabf6f98063d6eaf8ce1f9264ee803664; \
-    install_node ComfyUI-OpenRouter-Simple https://github.com/Hearmeman24/ComfyUI-OpenRouter-Simple.git 404b67229dd0f88373d35824ba624cb563e734b3; \
-    install_node ComfyUI-Openrouter_node https://github.com/gabe-init/ComfyUI-Openrouter_node.git 45c67f94e335b978577773f05752e17ffe63a09e; \
-    install_node ComfyUI-Spectrum-MiniMax-H3 https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git ac247efcc2c9b6324fa106b3bd8e148a583db4a9; \
+    install_node ComfyUI-KJNodes          https://github.com/kijai/ComfyUI-KJNodes.git                3f20054214fec9f9234fd3841ae6f1e4287948f6; \
     install_node ComfyUI-VideoHelperSuite https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git 4ee72c065db22c9d96c2427954dc69e7b908444b; \
-    install_node rgthree-comfy https://github.com/rgthree/rgthree-comfy.git 6b76ee6f2c5a007710b5a16f97c94330d6ecc871
+    install_node ComfyUI-MiniMaxRefPack   https://github.com/Hearmeman24/ComfyUI-MiniMaxRefPack.git   7012734eabf6f98063d6eaf8ce1f9264ee803664; \
+    install_node ComfyUI-Spectrum-MiniMax-H3 https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git ac247efcc2c9b6324fa106b3bd8e148a583db4a9
 
-RUN /opt/venv/bin/pip install --no-cache-dir \
-      'PyYAML==6.0.3' 'requests==2.34.2' 'psutil==7.2.2' \
-      'huggingface_hub==1.27.0'
-
-RUN /opt/venv/bin/pip uninstall -y onnxruntime onnxruntime-gpu 2>/dev/null || true; \
-    /opt/venv/bin/pip install --no-cache-dir onnxruntime-gpu $ORT_INDEX_ARGS; \
-    /opt/venv/bin/python -c "import onnxruntime as o; p=o.get_available_providers(); assert 'CUDAExecutionProvider' in p, p"
-
-# Prune build/cache artifacts before COPY --from so they never become final
-# runtime bytes. Keep git metadata for the existing pin/drift diagnostics.
+# SageAttention: the base ships wheels but does not install them. Install at
+# build time; the supervisor runs a real kernel probe at boot and only passes
+# --use-sage-attention when it works on the pod's GPU.
 RUN set -eux; \
-    git -C /ComfyUI rev-parse HEAD > /ComfyUI/.mmh3_commit; \
-    for d in /ComfyUI/custom_nodes/*; do \
-      if [[ -d "$d/.git" ]]; then git -C "$d" rev-parse HEAD > "$d/.mmh3_commit"; fi; \
-    done; \
-    rm -rf /ComfyUI/custom_nodes/comfyui-manager; \
-    rm -rf /ComfyUI/.git /ComfyUI/custom_nodes/*/.git; \
-    rm -rf /root/.cache /tmp/* /var/tmp/*; \
-    find /opt/venv -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true; \
-    find /ComfyUI -type d -name __pycache__ -prune -exec rm -rf '{}' + 2>/dev/null || true
+    whl="$(ls /opt/sage/cu130/sageattention-*.whl 2>/dev/null | head -n1 || true)"; \
+    if [[ -n "$whl" ]]; then pip install --no-cache-dir --no-deps --force-reinstall "$whl"; \
+    else echo "no baked SageAttention wheel; ComfyUI will run without it"; fi
 
+# Studio's own dependencies (most already ship with ComfyUI; this only fills gaps).
+RUN python - <<'EOF'
+import importlib, subprocess, sys
+need = {"yaml": "PyYAML", "requests": "requests", "aiohttp": "aiohttp", "PIL": "pillow",
+        "psutil": "psutil", "huggingface_hub": "huggingface_hub", "hf_xet": "hf_xet"}
+missing = [pkg for mod, pkg in need.items() if importlib.util.find_spec(mod) is None]
+if missing:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", *missing])
+EOF
 
-# Repack the validated Python environment into balanced registry blobs. This
-# does not change a single final filesystem path; it only gives Docker's
-# concurrent layer downloader several similarly-sized units of work instead of
-# one 1.6+ GB compressed bottleneck.
-COPY scripts/split_runtime_layers.py /tmp/split_runtime_layers.py
-RUN /opt/venv/bin/python /tmp/split_runtime_layers.py \
-    && rm -f /tmp/split_runtime_layers.py \
-    && echo "=== venv skeleton after split ===" \
-    && du -sh /opt/venv /opt/mmh3-layer/*
-
-
-FROM ubuntu:24.04 AS runtime
-
-USER root
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-ARG DEBIAN_FRONTEND=noninteractive
-
-# Host NVIDIA drivers are injected by the NVIDIA container runtime. PyTorch's
-# cu130 wheel environment carries the CUDA userspace libraries it was built
-# against, so the image does not need a second copy from nvidia/cuda.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl ffmpeg git iproute2 jq libgl1 libglib2.0-0 \
-      libgomp1 libtcmalloc-minimal4 procps python3.12 python3.12-venv tini \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
-
-COPY --from=builder /opt/venv /opt/venv
-COPY --from=builder /opt/mmh3-layer/venv-1/ /
-COPY --from=builder /opt/mmh3-layer/venv-2/ /
-COPY --from=builder /opt/mmh3-layer/venv-3/ /
-COPY --from=builder /opt/mmh3-layer/torch/ /
-COPY --from=builder /opt/mmh3-layer/triton/ /
-COPY --from=builder /opt/mmh3-layer/onnxruntime/ /
-COPY --from=builder /opt/mmh3-layer/cudnn/ /
-COPY --from=builder /opt/mmh3-layer/nvidia-1/ /
-COPY --from=builder /opt/mmh3-layer/nvidia-2/ /
-COPY --from=builder /opt/mmh3-layer/nvidia-3/ /
-COPY --from=builder /ComfyUI /ComfyUI
-
-RUN set -eux; \
-    sed -i -E 's#^home = .*#home = /usr/bin#; s#^executable = .*#executable = /usr/bin/python3.12#' /opt/venv/pyvenv.cfg; \
-    rm -f /opt/venv/bin/python /opt/venv/bin/python3 /opt/venv/bin/python3.12; \
-    ln -s /usr/bin/python3.12 /opt/venv/bin/python; \
-    ln -s /usr/bin/python3.12 /opt/venv/bin/python3; \
-    ln -s /usr/bin/python3.12 /opt/venv/bin/python3.12; \
-    /opt/venv/bin/python -c 'import sys, torch; print(sys.version); print(torch.__version__, torch.version.cuda)'
-
-COPY runtime /opt/mmh3/runtime
-COPY config /opt/mmh3/config
-COPY workflows /opt/mmh3/workflows
-COPY services /opt/mmh3/services
+COPY studio  /opt/mmh3/studio
+COPY config  /opt/mmh3/config
 COPY scripts /opt/mmh3/scripts
 
-RUN chmod +x /opt/mmh3/runtime/entrypoint.sh /opt/mmh3/scripts/mmh3 \
-    && ln -sfn /opt/mmh3/scripts/mmh3 /usr/local/bin/mmh3
-
-ENV PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+ENV MMH3_IMAGE_ROOT=/opt/mmh3 \
+    MMH3_COMFY_CODE=/ComfyUI \
+    PYTHONPATH=/opt/mmh3 \
     PYTHONUNBUFFERED=1 \
-    MMH3_IMAGE_ROOT=/opt/mmh3 \
-    MMH3_WORKSPACE=/workspace \
-    MMH3_COMFY_DIR=/ComfyUI \
-    MMH3_COMFY_PORT=8188 \
-    MMH3_PHONE_UI_PORT=7860 \
-    MMH3_JUPYTER_PORT=8888 \
-    MMH3_MODEL_DOWNLOAD_WORKERS=3 \
-    MMH3_LORA_DOWNLOAD_WORKERS=3 \
-    MMH3_AUTO_DOWNLOAD_MODELS=true \
-    MMH3_AUTO_DOWNLOAD_LORAS=true
+    HF_XET_HIGH_PERFORMANCE=1
+
+# Fail the build, not the pod, if anything is wired wrong.
+RUN python -c "import studio.server, studio.supervisor, studio.provision, studio.jobs; print('studio imports ok')" \
+ && python -c "import sys; sys.path.insert(0, '/ComfyUI/custom_nodes/ComfyUI-MiniMaxRefPack'); from minimax_refpack import prompt, refs; print('refpack prompt writer ok')" \
+ && ffmpeg -version | head -n1 && test -x "$(command -v tini)"
 
 EXPOSE 7860 8188 8888
-ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/opt/mmh3/runtime/entrypoint.sh"]
+WORKDIR /workspace
+ENTRYPOINT ["tini", "-g", "--"]
+CMD ["python", "-m", "studio.supervisor"]

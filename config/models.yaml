@@ -1,110 +1,104 @@
+# Model manifest. Paths are relative to the persistent models folder
+# (/workspace/ComfyUI/models). Files that already exist at a large-enough size
+# are never re-downloaded, so an existing MMH3 volume is picked up as-is.
+#
+# group:
+#   core  - downloaded automatically on every boot until present
+#   eros  - optional base checkpoint; downloaded when enabled in System or with
+#           MMH3_DOWNLOAD_EROS=true
+# used_by: which generation families need the file (fl2v = T2V/I2V, ref2v = R2V)
+
 models:
   video_vae:
-    source: huggingface
-    repo_id: Comfy-Org/MiniMax-H3
-    source_path: vae/minimax_h3_video_vae_fp16.safetensors
-    destination: vae/minimax_h3_video_vae_fp16.safetensors
-    min_size_mb: 100
-    phase: core
-    label: MiniMax H3 Video VAE
-    show_in_ui: true
+    file: vae/minimax_h3_video_vae_fp16.safetensors
+    hf: Comfy-Org/MiniMax-H3
+    path: vae/minimax_h3_video_vae_fp16.safetensors
+    group: core
+    used_by: [fl2v, ref2v]
+    min_mb: 100
 
   audio_vae:
-    source: huggingface
-    repo_id: Comfy-Org/MiniMax-H3
-    source_path: vae/minimax_h3_audio_vae_fp32.safetensors
-    destination: vae/minimax_h3_audio_vae_fp32.safetensors
-    min_size_mb: 100
-    phase: core
-    label: MiniMax H3 Audio VAE
-    show_in_ui: true
+    file: vae/minimax_h3_audio_vae_fp32.safetensors
+    hf: Comfy-Org/MiniMax-H3
+    path: vae/minimax_h3_audio_vae_fp32.safetensors
+    group: core
+    used_by: [fl2v, ref2v]
+    min_mb: 100
 
-  text_encoder_int8:
-    source: huggingface
-    repo_id: Comfy-Org/MiniMax-H3
-    source_path: text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors
-    destination: text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors
-    min_size_mb: 1000
-    phase: core
-    label: Qwen3-VL H3 INT8 Text Encoder
-    show_in_ui: true
+  text_encoder:
+    file: text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors
+    hf: Comfy-Org/MiniMax-H3
+    path: text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors
+    group: core
+    used_by: [fl2v, ref2v]
+    min_mb: 1000
 
   fl2va_int8:
-    source: huggingface
-    repo_id: Comfy-Org/MiniMax-H3
-    source_path: diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
-    destination: diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
-    min_size_mb: 1000
-    phase: core
-    label: Stock H3 FL2VA ConvRot INT8
-    show_in_ui: true
+    file: diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
+    hf: Comfy-Org/MiniMax-H3
+    path: diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
+    group: core
+    used_by: [fl2v]
+    min_mb: 1000
 
   ref2va_int8:
-    source: huggingface
-    repo_id: Comfy-Org/MiniMax-H3
-    source_path: diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
-    destination: diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
-    min_size_mb: 1000
-    phase: core
-    label: Stock H3 Ref2VA ConvRot INT8
-    show_in_ui: true
+    file: diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
+    hf: Comfy-Org/MiniMax-H3
+    path: diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
+    group: core
+    used_by: [ref2v]
+    min_mb: 1000
 
-  taeh3_preview:
-    source: huggingface
-    repo_id: Hearmeman/comfyui-template-assets
-    source_path: vae_approx/taeh3.safetensors
-    destination: vae_approx/taeh3.safetensors
-    min_size_mb: 5
-    phase: core
-    label: TAEH3 Preview Decoder
-    show_in_ui: true
-
-  fl2v_turbo_4step:
-    source: huggingface
-    repo_id: lightx2v/Minimax-h3-Turbo
-    source_path: minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors
-    destination: loras/minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors
-    min_size_mb: 500
-    phase: accelerator
-    label: FL2V Fast Turbo 4-step v1.2 768p
-    show_in_ui: false
+  taeh3:
+    file: vae_approx/taeh3.safetensors
+    hf: Hearmeman/comfyui-template-assets
+    path: vae_approx/taeh3.safetensors
+    group: core
+    used_by: []          # live previews only; generation works without it
+    min_mb: 5
 
   fl2v_turbo_8step:
-    source: huggingface
-    repo_id: lightx2v/Minimax-h3-Turbo
-    source_path: minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
-    destination: loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
-    min_size_mb: 500
-    phase: accelerator
-    label: FL2V Balanced Turbo 8-step v1.0 768p
-    show_in_ui: false
+    file: loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
+    hf: lightx2v/Minimax-h3-Turbo
+    path: minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
+    group: core
+    used_by: [fl2v]
+    min_mb: 500
 
-  ref2v_turbo_4step:
-    source: huggingface
-    repo_id: lightx2v/Minimax-h3-Turbo
-    source_path: minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
-    destination: loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
-    min_size_mb: 500
-    phase: accelerator
-    label: Ref2V Fast Legacy Turbo 4-step v0.1
-    show_in_ui: false
+  fl2v_turbo_4step:
+    file: loras/minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors
+    hf: lightx2v/Minimax-h3-Turbo
+    path: minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors
+    group: core
+    used_by: [fl2v]
+    min_mb: 500
 
   ref2v_turbo_8step:
-    source: huggingface
-    repo_id: lightx2v/Minimax-h3-Turbo
-    source_path: minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
-    destination: loras/minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
-    min_size_mb: 500
-    phase: accelerator
-    label: Ref2V Balanced Turbo 8-step v1.0 768p
-    show_in_ui: false
+    file: loras/minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
+    hf: lightx2v/Minimax-h3-Turbo
+    path: minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
+    group: core
+    used_by: [ref2v]
+    min_mb: 500
 
   eros_beta5_int8:
-    source: huggingface
-    repo_id: TenStrip/10Eros-Max
-    source_path: 10Eros_Max_h3_hybrid_beta5_int8.safetensors
-    destination: diffusion_models/10Eros_Max_h3_hybrid_beta5_int8.safetensors
-    min_size_mb: 1000
-    phase: addon
-    label: Eros Max Beta5 INT8
-    show_in_ui: true
+    file: diffusion_models/10Eros_Max_h3_hybrid_beta5_int8.safetensors
+    hf: TenStrip/10Eros-Max
+    path: 10Eros_Max_h3_hybrid_beta5_int8.safetensors
+    group: eros
+    used_by: []
+    min_mb: 1000
+
+# Base checkpoints selectable per generation. "stock" picks the family's own
+# diffusion model; any other entry replaces it for every family it lists.
+checkpoints:
+  stock:
+    label: Stock H3 (INT8 ConvRot)
+    files:
+      fl2v: fl2va_int8
+      ref2v: ref2va_int8
+  eros:
+    label: Eros Max beta5 (INT8)
+    files:
+      fl2v: eros_beta5_int8
+      ref2v: eros_beta5_int8

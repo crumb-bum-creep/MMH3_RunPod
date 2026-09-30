@@ -1,0 +1,48 @@
+# Image defaults. Your own overrides live in /workspace/mmh3/config/settings.yaml
+# (only the keys you change) and are merged on top of this file at boot, so new
+# defaults in a newer image still reach an existing volume.
+
+ports:
+  studio: 7860
+  comfy: 8188
+  jupyter: 8888
+
+services:
+  jupyter: true           # set JUPYTER_TOKEN on the pod to require a login
+
+comfy:
+  # Required for MiniMax INT8: dynamic VRAM hits a CUDA illegal-memory-access
+  # bug (Comfy-Org/ComfyUI#15271). Upstream v9 ships the same flag.
+  disable_dynamic_vram: true
+  sage_attention: auto    # auto = use it when the kernel probe passes
+  # RAM ComfyUI keeps free before it starts dropping cached node outputs.
+  # ComfyUI >= 0.34 measures this against the container limit, not the host.
+  # auto = 12% of the container limit, clamped to 12..32 GB.
+  cache_ram_headroom_gb: auto
+  extra_args: []          # appended last; also COMFY_EXTRA_ARGS on the pod
+
+memory:
+  # Switching model family (T2V/I2V <-> R2V) or base checkpoint fully unloads
+  # the previous models before the next job starts. This is the rule that kept
+  # RAM flat in your d2103 build.
+  unload_on_family_switch: true
+  # After a job, if the container's working set is above this fraction of its
+  # limit, ask ComfyUI to drop cached outputs (models stay loaded).
+  trim_after_job_above: 0.70
+  # Idle safety net: above this fraction with nothing running, unload everything.
+  idle_unload_above: 0.85
+  poll_seconds: 5
+
+prompting:
+  model: google/gemini-3-flash-preview
+  reasoning_effort: medium
+  timeout_seconds: 150
+
+output:
+  folder: MMH3            # outputs land in /workspace/ComfyUI/output/MMH3/<MODE>_#####-audio.mp4
+  crf: 12
+  delete_silent_twin: true   # VHS writes a silent copy next to every audio mp4; drop it
+
+provisioning:
+  workers: 3
+  retries: 4

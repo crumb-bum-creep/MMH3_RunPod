@@ -1,0 +1,92 @@
+name: Studio image
+
+on:
+  push:
+    branches: [main, studio]
+    paths: [Dockerfile, studio/**, config/**, scripts/**, tests/**, .github/workflows/studio.yml]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: studio-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  COMFY_COMMIT: 3dd559d            # the ComfyUI commit in the base image
+  REFPACK_COMMIT: 7012734eabf6f98063d6eaf8ce1f9264ee803664
+  KJ_COMMIT: 3f20054214fec9f9234fd3841ae6f1e4287948f6
+  VHS_COMMIT: 4ee72c065db22c9d96c2427954dc69e7b908444b
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install pyyaml aiohttp requests pillow psutil huggingface_hub pytest numpy
+          git clone --filter=blob:none https://github.com/Hearmeman24/ComfyUI-MiniMaxRefPack /tmp/refpack
+          git -C /tmp/refpack checkout "$REFPACK_COMMIT"
+      - name: Tests (unit + end to end against a fake ComfyUI)
+        env: { MMH3_REFPACK_DIR: /tmp/refpack }
+        run: python -m pytest -q tests
+
+  validate-graphs:
+    # Every mode x recipe graph goes through the real ComfyUI's prompt validation
+    # (node types, input names, enum values, links) at the pinned commit + nodes.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: ComfyUI (CPU) at the base image's commit, with the pinned nodes
+        run: |
+          git clone --filter=blob:none https://github.com/comfyanonymous/ComfyUI /tmp/comfy
+          git -C /tmp/comfy checkout "$COMFY_COMMIT"
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install -r /tmp/comfy/requirements.txt pyyaml
+          cd /tmp/comfy/custom_nodes
+          for spec in "ComfyUI-KJNodes https://github.com/kijai/ComfyUI-KJNodes $KJ_COMMIT" \
+                      "ComfyUI-VideoHelperSuite https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite $VHS_COMMIT" \
+                      "ComfyUI-MiniMaxRefPack https://github.com/Hearmeman24/ComfyUI-MiniMaxRefPack $REFPACK_COMMIT"; do
+            set -- $spec; git clone --filter=blob:none "$2" "$1"; git -C "$1" checkout "$3"
+            [ -f "$1/requirements.txt" ] && pip install -r "$1/requirements.txt"
+          done
+      - name: Validate graphs
+        run: |
+          cd /tmp/comfy && (python main.py --cpu --listen 127.0.0.1 --port 8188 --disable-dynamic-vram > /tmp/comfy.log 2>&1 &)
+          for i in $(seq 1 90); do curl -sf 127.0.0.1:8188/system_stats >/dev/null && break; sleep 2; done
+          cd "$GITHUB_WORKSPACE" && python scripts/validate_graphs.py --setup-dummies /tmp/comfy || { tail -60 /tmp/comfy.log; exit 1; }
+
+  build:
+    needs: [test, validate-graphs]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free runner disk for the CUDA base image
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache || true
+          docker system prune -af --volumes || true
+          df -h /
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mmh3-runpod"
+          TAG_BRANCH="studio"; [ "$GITHUB_REF_NAME" = "main" ] && TAG_BRANCH="latest"
+          docker build --progress=plain -t "$IMAGE:$TAG_BRANCH" -t "$IMAGE:studio-${GITHUB_SHA::12}" .
+          docker push "$IMAGE:$TAG_BRANCH"
+          docker push "$IMAGE:studio-${GITHUB_SHA::12}"
+          echo "### Pushed" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$IMAGE:$TAG_BRANCH\` and \`$IMAGE:studio-${GITHUB_SHA::12}\`" >> "$GITHUB_STEP_SUMMARY"
