@@ -46,7 +46,7 @@ RUN set -eux; \
 
 # Studio's own dependencies (most already ship with ComfyUI; this only fills gaps).
 RUN python - <<'EOF'
-import importlib, subprocess, sys
+import importlib.util, subprocess, sys
 need = {"yaml": "PyYAML", "requests": "requests", "aiohttp": "aiohttp", "PIL": "pillow",
         "psutil": "psutil", "huggingface_hub": "huggingface_hub", "hf_xet": "hf_xet"}
 missing = [pkg for mod, pkg in need.items() if importlib.util.find_spec(mod) is None]
