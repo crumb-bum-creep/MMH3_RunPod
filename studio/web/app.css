@@ -371,3 +371,10 @@ details.more[open] > summary svg { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+.lora-chip.multi { display: block; }
+.lora-chip.multi .row { display: flex; align-items: center; gap: 10px; }
+.lora-part { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.lora-part > .faint { width: 48px; font-size: 12px; }
+.lora-part input[type=range] { flex: 1; }
+.lora-part .val { width: 36px; text-align: right; font-size: 13px; }

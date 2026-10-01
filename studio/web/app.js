@@ -39,7 +39,7 @@ const ICON = {
 const KIND_ICON = { image: ICON.image, video: ICON.video, audio: ICON.audio };
 const MODES = { t2v: "Text", i2v: "Image", r2v: "Reference" };
 const FAMILY = { t2v: "fl2v", i2v: "fl2v", r2v: "ref2v" };
-const QUALITY = [[0.5, "Draft"], [0.7, "Standard"], [0.9, "High"]];
+const qualityName = (mp) => (mp < 0.6 ? "draft" : mp < 0.85 ? "standard" : mp < 1.05 ? "high" : "max");
 
 async function api(path, opts = {}) {
   const init = { method: opts.method || (opts.body !== undefined ? "POST" : "GET"), headers: {} };
@@ -275,7 +275,10 @@ VIEWS.create = function () {
         <label class="field" for="dur">Length <span class="num">${F.duration} s</span></label>
         <input type="range" id="dur" min="${b.limits.duration[0]}" max="${b.limits.duration[1]}" step="0.5" value="${F.duration}">
       </div>
-      <div class="chips" id="quality">${QUALITY.map(([v, n]) => `<button class="chip ${Math.abs(F.megapixels - v) < 0.01 ? "on" : ""}" data-mp="${v}">${n} <span class="faint num">${v} MP</span></button>`).join("")}</div>
+      <div style="margin-top:12px">
+        <label class="field" for="mp">Quality <span class="num">${Number(F.megapixels).toFixed(2)} MP</span> <span class="faint">${qualityName(F.megapixels)}</span></label>
+        <input type="range" id="mp" min="${b.limits.megapixels[0]}" max="${b.limits.megapixels[1]}" step="0.05" value="${F.megapixels}">
+      </div>
     </section>
 
     <section class="block">
@@ -376,11 +379,27 @@ function advancedBlock(r) {
   </details>`;
 }
 
+function loraParts(l, fam) {
+  const act = (l.active || {})[fam] || [];
+  return act.length > 1 ? act : [];
+}
+
 function loraChips() {
   const fam = FAMILY[F.mode];
   return F.loras.map((l, i) => {
     const fams = l.families || ["fl2v", "ref2v"];
     const warn = !fams.includes(fam) ? `<div class="warn">No ${fam === "ref2v" ? "R2V" : "T2V/I2V"} file. Skipped for this mode.</div>` : "";
+    const parts = loraParts(l, fam);
+    if (parts.length) {
+      const rows = parts.map((p, j) => {
+        const val = (l.parts || {})[p.name] ?? Number(l.strength) * p.scale;
+        return `<div class="lora-part"><span class="faint">${p.role === "helper" ? "Helper" : "Main"}</span>
+          <input type="range" min="0" max="2" step="0.05" value="${val}" data-lpart="${i}" data-lname="${esc(p.name)}" aria-label="${p.role} strength">
+          <span class="val num" id="lpv${i}_${j}">${Number(val).toFixed(2)}</span></div>`;
+      }).join("");
+      return `<div class="lora-chip multi"><div class="row"><div class="grow" style="min-width:0"><div class="name">${esc(l.nickname || l.key)}</div>${warn}</div>
+        <button class="icon-btn" data-lrm="${i}" aria-label="Remove">${ICON.x}</button></div>${rows}</div>`;
+    }
     return `<div class="lora-chip"><div class="grow" style="min-width:0"><div class="name">${esc(l.nickname || l.key)}</div>${warn}</div>
       <input type="range" min="0" max="2" step="0.05" value="${l.strength}" data-lstr="${i}" aria-label="Strength">
       <span class="val num" id="lval${i}">${Number(l.strength).toFixed(2)}</span>
@@ -433,7 +452,10 @@ function bindCreate() {
 
   // shape
   $$("[data-aspect]", v).forEach((b) => b.onclick = () => { F.aspect = b.dataset.aspect; saveForm(); render(); });
-  $$("[data-mp]", v).forEach((b) => b.onclick = () => { F.megapixels = +b.dataset.mp; saveForm(); render(); });
+  const mp = $("#mp", v);
+  if (mp) {
+    mp.oninput = () => { F.megapixels = Number(mp.value); saveForm(); const lab = mp.previousElementSibling; lab.innerHTML = `Quality <span class="num">${F.megapixels.toFixed(2)} MP</span> <span class="faint">${qualityName(F.megapixels)}</span>`; const [w, h] = resolution(F.aspect, F.megapixels); const hint = $(".block-head .hint.num", v); if (hint) hint.textContent = `${w}×${h} · ${(frames(F.duration) / 24).toFixed(2)} s · ${frames(F.duration)} frames`; };
+  }
   const dur = $("#dur"); dur.oninput = () => { F.duration = +dur.value; $("label[for=dur] .num").textContent = `${F.duration} s`; };
   dur.onchange = () => { saveForm(); render(); };
 
@@ -455,6 +477,10 @@ function bindCreate() {
 
   // loras
   $("#addLora").onclick = openLoraPicker;
+  $$("[data-lpart]", v).forEach((el) => el.oninput = () => {
+    const l = F.loras[+el.dataset.lpart]; l.parts = l.parts || {}; l.parts[el.dataset.lname] = Number(el.value);
+    el.nextElementSibling.textContent = Number(el.value).toFixed(2); saveForm();
+  });
   $$("[data-lstr]", v).forEach((el) => el.oninput = () => { const i = +el.dataset.lstr; F.loras[i].strength = Number(el.value); $("#lval" + i).textContent = Number(el.value).toFixed(2); saveForm(); });
   $$("[data-lrm]", v).forEach((b) => b.onclick = () => { F.loras.splice(+b.dataset.lrm, 1); saveForm(); render(); });
 
@@ -507,7 +533,7 @@ async function submit(compare) {
     mode: F.mode, aspect: F.aspect, megapixels: F.megapixels, duration: F.duration, checkpoint: F.checkpoint,
     recipe_id: recipeFor(F.mode).id, overrides: overridesPayload(), compare, count: F.count,
     seed: F.lockSeed && F.seed !== "" ? Number(F.seed) : null,
-    loras: F.loras.filter((l) => (l.families || ["fl2v", "ref2v"]).includes(fam)).map((l) => ({ key: l.key, file: l.file, strength: l.strength, nickname: l.nickname })),
+    loras: F.loras.filter((l) => (l.families || ["fl2v", "ref2v"]).includes(fam)).map((l) => ({ key: l.key, file: l.file, strength: l.strength, parts: l.parts, nickname: l.nickname })),
   };
   if (F.mode === "i2v") { body.start_image = F.start_image; body.end_image = F.end_image; }
   if (F.mode === "r2v") body.refs = F.refs;
@@ -546,7 +572,7 @@ async function openLoraPicker() {
         $$("[data-key]", body).forEach((b) => b.onclick = () => {
           const l = items.find((x) => x.key === b.dataset.key);
           if (F.loras.some((x) => x.key === l.key)) return toast("Already added");
-          F.loras.push({ key: l.key, file: l.untracked ? l.filename : undefined, nickname: l.nickname || l.key, strength: Number(l.recommended_strength || 1), families: l.families });
+          F.loras.push({ key: l.key, file: l.untracked ? l.filename : undefined, nickname: l.nickname || l.key, strength: Number(l.recommended_strength || 1), families: l.families, active: l.active });
           saveForm(); closeSheet(); render();
           if ((l.trigger_words || []).length) toast(`Triggers: ${l.trigger_words.slice(0, 3).join(", ")}`);
         });
@@ -807,7 +833,14 @@ function applyRecord(rec) {
   Object.entries(rec.overrides || {}).forEach(([k, v]) => { F.adv[k] = k === "extend" ? (v && v !== "off" ? "on" : "off") : v; });
   if (rec.seed) { F.seed = String(rec.seed); F.lockSeed = true; }
   const known = S.loras ? S.loras.items : [];
-  F.loras = (rec.loras || []).map((l) => { const k = known.find((x) => x.key === String(l.key) || x.filename === l.file); return { key: k ? k.key : String(l.key || l.file), file: k ? undefined : l.file, nickname: (k && k.nickname) || l.nickname || l.file || l.key, strength: Number(l.strength ?? 1), families: k ? k.families : undefined }; });
+  F.loras = [];
+  for (const l of rec.loras || []) {
+    const k = known.find((x) => x.key === String(l.key) || x.filename === l.file);
+    const key = k ? k.key : String(l.key || l.file);
+    let e = F.loras.find((x) => x.key === key);
+    if (!e) { e = { key, file: k ? undefined : l.file, nickname: (k && k.nickname) || l.nickname || l.file || l.key, strength: Number(l.strength ?? 1), families: k ? k.families : undefined, active: k ? k.active : undefined, parts: {} }; F.loras.push(e); }
+    if (k) { e.parts[l.file] = Number(l.strength ?? 1); if (l.role !== "helper") e.strength = Number(l.strength ?? 1); }
+  }
   saveForm();
 }
 function groupPicker(i) {

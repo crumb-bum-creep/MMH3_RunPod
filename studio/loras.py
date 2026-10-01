@@ -113,9 +113,12 @@ def resolve_selection(selected: list[dict[str, Any]], family: str) -> tuple[list
             warnings.append(f"{entry.get('nickname') or _key(entry)} has no installed file for "
                             f"{'R2V' if family == 'ref2v' else 'T2V/I2V'}")
             continue
+        parts = s.get("parts") or {}
         for f in files:
             scale = float(f.get("scale", 1.0))
-            out.append({"file": f["name"], "strength": round(strength * scale, 3),
+            own = parts.get(f["name"])  # an independent per-file strength beats strength x scale
+            value = min(2.0, max(0.0, float(own))) if own is not None else strength * scale
+            out.append({"file": f["name"], "strength": round(value, 3), "key": _key(entry),
                         "nickname": entry.get("nickname") or f["name"], "role": f.get("role", "main")})
     return out, warnings
 
@@ -135,7 +138,9 @@ def listing() -> dict[str, Any]:
                           "error": None if installed else st.get("error"),
                           "done": st.get("done"), "total": st.get("total")})
         families = sorted({f.get("family", "any") for f in files if f["installed"]})
-        items.append({**{k: v for k, v in e.items() if k != "files"}, "key": _key(e), "files": files,
+        active = {fam: [{"name": f["name"], "role": f.get("role", "main"), "scale": float(f.get("scale", 1.0))}
+                        for f in files_for(e, fam)] for fam in ("fl2v", "ref2v")}
+        items.append({**{k: v for k, v in e.items() if k != "files"}, "key": _key(e), "files": files, "active": active,
                       "installed": any(f["installed"] for f in files),
                       "families": ["fl2v", "ref2v"] if "any" in families else families})
     for fn in sorted(disk - known):

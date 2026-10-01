@@ -82,6 +82,22 @@ def test_multi_file_lora_picks_file_per_family(workspace):
     assert [f["file"] for f in r2] == ["MysticXXX_MMH3-V4-ref2va.safetensors", "Mystic_motion.safetensors"]
 
 
+def test_per_file_strengths_are_independent(workspace):
+    _catalog(workspace, [{
+        "version_id": 5, "nickname": "Visual+helper",
+        "files": [
+            {"id": 1, "name": "vis.safetensors", "family": "any", "role": "main", "install": True},
+            {"id": 2, "name": "help.safetensors", "family": "any", "role": "helper", "install": True, "scale": 0.5},
+        ]}])
+    _touch_lora("vis.safetensors")
+    _touch_lora("help.safetensors")
+    out, _ = loras.resolve_selection([{"key": "5", "strength": 1.0,
+                                       "parts": {"vis.safetensors": 0.9, "help.safetensors": 0.5}}], "fl2v")
+    assert {f["file"]: f["strength"] for f in out} == {"vis.safetensors": 0.9, "help.safetensors": 0.5}
+    item = next(i for i in loras.listing()["items"] if i["key"] == "5")
+    assert [a["name"] for a in item["active"]["fl2v"]] == ["vis.safetensors", "help.safetensors"]
+
+
 def test_legacy_single_file_entry_and_untracked(workspace):
     _catalog(workspace, [{"version_id": 3224980, "nickname": "Digicam", "filename": "minimax-h3-digicam.safetensors"},
                          {"version_id": 9, "nickname": "R2V only", "files": [

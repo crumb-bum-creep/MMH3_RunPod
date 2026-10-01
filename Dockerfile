@@ -71,5 +71,6 @@ RUN python -c "import studio.server, studio.supervisor, studio.provision, studio
 
 EXPOSE 7860 8188 8888
 WORKDIR /workspace
+ENV TINI_SUBREAPER=1
 ENTRYPOINT ["tini", "-g", "--"]
 CMD ["python", "-m", "studio.supervisor"]

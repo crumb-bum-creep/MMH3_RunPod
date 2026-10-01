@@ -132,7 +132,8 @@ class Runner:
         if loras.checkpoint_file(checkpoint, family) is None:
             raise JobError("that base checkpoint has no model for this mode")
         picks = [{"key": str(i.get("key") or i.get("file") or ""), "file": i.get("file"),
-                  "strength": float(i.get("strength", 1.0)), "nickname": i.get("nickname") or ""}
+                  "strength": float(i.get("strength", 1.0)), "nickname": i.get("nickname") or "",
+                  "parts": i.get("parts") if isinstance(i.get("parts"), dict) else {}}
                  for i in form.get("loras") or [] if (i.get("key") or i.get("file"))]
         lora_list, warnings = loras.resolve_selection(picks, family)
         if warnings:
