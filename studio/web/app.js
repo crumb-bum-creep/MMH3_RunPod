@@ -213,14 +213,48 @@ function assetTile(a, sel = false) {
 
 // ------------------------------------------------------------------ CREATE
 
+/* The recipe Create will use: your pick if it's still offered (or is the audio/video
+   recipe), else the family default. */
 function recipeFor(mode) {
   const fam = S.boot.recipes[FAMILY[mode]];
   const id = F.recipe[FAMILY[mode]] || fam.default;
-  return fam.recipes.find((r) => r.id === id) || fam.recipes[0];
+  const offered = (r) => !fam.hidden.includes(r.id) || r.id === fam.av_recipe;
+  return fam.recipes.find((r) => r.id === id && offered(r)) || fam.recipes.find((r) => r.id === fam.default) || fam.recipes[0];
+}
+function visibleRecipes(famId, current) {
+  const fam = S.boot.recipes[famId];
+  const list = fam.recipes.filter((r) => !fam.hidden.includes(r.id));
+  if (current && !list.some((r) => r.id === current.id)) list.push(current);
+  return list;
+}
+
+/* R2V: when a video or audio reference appears, switch to the family's audio/video recipe
+   (Legacy · Euler by default), and switch back when the last one goes. Only on changes,
+   so picking another recipe by hand sticks. */
+function syncAvRecipe() {
+  if (F.mode !== "r2v") return;
+  const now = F.refs.some((r) => r.kind === "video" || r.kind === "audio");
+  if (F.avState === undefined || F.avState === null) { F.avState = now; return; }
+  if (now === F.avState) return;
+  F.avState = now;
+  const fam = S.boot.recipes.ref2v;
+  const av = fam.recipes.find((r) => r.id === fam.av_recipe);
+  if (!av) return;
+  const cur = recipeFor("r2v");
+  if (now && cur.id !== av.id) {
+    F.recipeBeforeAv = cur.id; F.recipe.ref2v = av.id; F.adv = {};
+    toast(`Video/audio reference: using ${av.label}`);
+  } else if (!now && F.recipeBeforeAv && cur.id === av.id) {
+    const back = fam.recipes.find((r) => r.id === F.recipeBeforeAv);
+    F.recipe.ref2v = F.recipeBeforeAv; F.recipeBeforeAv = null; F.adv = {};
+    if (back) toast(`Back to ${back.label}`);
+  }
+  saveForm();
 }
 
 VIEWS.create = function () {
   const b = S.boot; if (!b) return;
+  syncAvRecipe();
   const fam = FAMILY[F.mode];
   const famInfo = S.live && S.live.families ? S.live.families[fam] : null;
   const recipe = recipeFor(F.mode);
@@ -291,8 +325,14 @@ VIEWS.create = function () {
 
     <section class="block">
       <div class="block-head"><h3>Speed</h3><span class="hint">${recipePasses(recipe)} model passes</span></div>
-      <div class="seg" id="recipes">${S.boot.recipes[fam].recipes.map((r) => `<button data-recipe="${r.id}" class="${r.id === recipe.id ? "on" : ""}">${esc(r.label)}</button>`).join("")}</div>
-      <p class="note">${esc(recipe.note || "")}</p>
+      ${(() => {
+        const vis = visibleRecipes(fam, recipe);
+        return vis.length <= 3
+          ? `<div class="seg" id="recipes">${vis.map((r) => `<button data-recipe="${esc(r.id)}" class="${r.id === recipe.id ? "on" : ""}">${esc(r.label)}</button>`).join("")}</div>`
+          : `<div class="chips scroll" id="recipes">${vis.map((r) => `<button data-recipe="${esc(r.id)}" class="chip ${r.id === recipe.id ? "on" : ""}">${esc(r.label)}</button>`).join("")}</div>`;
+      })()}
+      <div class="row" style="align-items:flex-start;margin-top:6px"><p class="note grow" style="margin:0">${esc(recipe.note || "")}</p>
+        <button class="btn small ghost" id="fullCfg" title="Every setting this clip will be sampled with">Full settings</button></div>
       ${advancedBlock(recipe)}
     </section>
 
@@ -325,7 +365,7 @@ VIEWS.create = function () {
     </details>
   </div>
   <div class="actionbar"><div class="actionbar-inner">
-    <button class="btn" id="compareBtn" title="Same prompt and seed, one clip per recipe">Compare ${S.boot.recipes[fam].compare.length}</button>
+    ${S.boot.recipes[fam].compare.length >= 2 ? `<button class="btn" id="compareBtn" title="Same prompt and seed, one clip per recipe: ${esc(S.boot.recipes[fam].compare.map((id) => (S.boot.recipes[fam].recipes.find((r) => r.id === id) || {}).label || id).join(", "))}">Compare ${S.boot.recipes[fam].compare.length}</button>` : ""}
     <button class="btn primary" id="genBtn">${F.count > 1 ? `Generate ${F.count}` : "Generate"}</button>
   </div></div>`;
   bindCreate();
@@ -385,6 +425,128 @@ function bindTweak(root, o) {
   if (u) u.onclick = () => { const prev = o.pop(); if (prev != null) { o.set(prev); toast("Change undone"); } };
 }
 
+// ------------------------------------------------------------------ recipes: effective settings, editor
+
+/* The recipe with this form's Tune values applied, exactly as the server will resolve it. */
+function effectiveRecipe() {
+  const r = JSON.parse(JSON.stringify(recipeFor(F.mode)));
+  const a = F.adv;
+  for (const k of ["strength", "steps", "sampler", "scheduler", "ref_image_size"]) if (a[k] !== undefined) r[k] = a[k];
+  if (a.shift === "off") delete r.shift; else if (Array.isArray(a.shift)) r.shift = a.shift.slice();
+  if (a.extend === "on") r.extend = { steps: 2, start: 0.8, end: 0, spacing: "linear" };
+  if (a.extend === "off") delete r.extend;
+  return r;
+}
+
+const SCHED_DETAIL = { beta: "beta (alpha 0.6, beta 0.6)" };
+const REF_SIZE_DETAIL = { max: "max: full detail, short edge up to 2048 px", match: "match: scaled to the clip's pixel area" };
+
+function recipeSummary(r) {
+  return [`${r.steps} steps`, `${r.sampler}/${r.scheduler}`, r.lora ? `turbo ${Number(r.strength).toFixed(2)}` : "no turbo",
+    r.shift ? `shift ${r.shift.join("/")}` : "default shift", r.extend ? "extra passes" : ""].filter(Boolean).join(" · ");
+}
+
+/* Every value a clip is (or was) sampled with. o: {recipe, family, checkpoint, tuned[], size[w,h], frames} */
+function settingsRows(o) {
+  const r = o.recipe || {};
+  const fam = S.boot.recipes[o.family] || { turbo: {} };
+  const ck = S.boot.checkpoints.find((c) => c.id === o.checkpoint);
+  const ckFile = ck && ck.files ? ck.files[o.family] : null;
+  const turbo = r.lora ? fam.turbo[r.lora] : null;
+  const passes = Number(r.steps) + (r.extend ? 2 * (r.extend.steps || 2) : 0);
+  const tuned = (o.tuned || []).length ? ` <span class="status">tuned: ${esc(o.tuned.join(", "))}</span>` : "";
+  const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
+  return `<dl class="kv cfg">
+    ${row("Recipe", `${esc(r.label || r.id || "—")}${tuned}`)}
+    ${row("Base model", ck ? `${esc(ck.label)}${ckFile ? `<div class="faint">${esc(nameOf(ckFile))}</div>` : ""}` : esc(o.checkpoint || "stock"))}
+    ${row("Turbo LoRA", r.lora ? `${esc(turbo ? turbo.label : r.lora)}${turbo ? `<div class="faint">${esc(nameOf(turbo.file))}</div>` : ""}` : "None (base model)")}
+    ${r.lora ? row("Turbo strength", Number(r.strength).toFixed(2)) : ""}
+    ${row("Steps", `${r.steps} <span class="faint">(${passes} model passes)</span>`)}
+    ${row("Sampler", esc(r.sampler))}
+    ${row("Scheduler", esc(SCHED_DETAIL[r.scheduler] || r.scheduler))}
+    ${row("Sigma shift", r.shift ? `video ${r.shift[0]} · audio ${r.shift[1]}` : "model default (video 12 · audio 3)")}
+    ${row("Extra low-noise passes", r.extend ? `${r.extend.steps} steps, sigma ${r.extend.start} → ${r.extend.end}, ${esc(r.extend.spacing)}` : "off")}
+    ${o.family === "ref2v" ? row("Reference size", esc(REF_SIZE_DETAIL[r.ref_image_size] || r.ref_image_size || "max")) : ""}
+    ${o.size ? row("Output", `${o.size[0]}×${o.size[1]} · ${o.frames} frames · ${(o.frames / 24).toFixed(2)} s`) : ""}
+  </dl>`;
+}
+function settingsSheet(title, o) {
+  openSheet(title, `${settingsRows(o)}<p class="note">These are the values sent to ComfyUI. Every output keeps its own copy (Library → open a clip → Settings used).</p>`);
+}
+
+async function loadSamplerLists() {
+  if (!samplerLists) { try { samplerLists = await api("/api/choices"); } catch { /* ComfyUI starting */ } }
+  return samplerLists || { samplers: [], schedulers: [] };
+}
+
+/* Create, view or edit a recipe. A built-in opens read-only with Duplicate. opts.select: use it in Create after saving. */
+async function recipeEditor(famId, recipe, opts = {}) {
+  const fam = S.boot.recipes[famId];
+  const lists = await loadSamplerLists();
+  const r = JSON.parse(JSON.stringify(recipe || { ...fam.recipes.find((x) => x.id === fam.default), id: null, builtin: false, label: "" }));
+  const ro = !!r.builtin;
+  const dis = ro ? "disabled" : "";
+  const opt = (list, cur) => [...new Set([cur, ...list].filter(Boolean))].map((o) => `<option ${o === cur ? "selected" : ""}>${esc(o)}</option>`).join("");
+  const ext = r.extend || { steps: 2, start: 0.8, end: 0, spacing: "linear" };
+  const sh = r.shift || [12, 3];
+  openSheet(ro ? r.label : r.id ? `Edit ${r.label}` : "New recipe", `
+    ${ro ? `<p class="note" style="margin-top:0">Built-in recipe. Duplicate it to make your own version.</p>` : ""}
+    <div class="stack">
+      <div><label class="field">Name</label><input type="text" id="reLabel" value="${esc(r.label || "")}" maxlength="40" ${dis}></div>
+      <div><label class="field">Note</label><input type="text" id="reNote" value="${esc(r.note || "")}" maxlength="200" placeholder="What it's for" ${dis}></div>
+      <div><label class="field">Turbo LoRA</label><select id="reLora" ${dis}>${Object.entries(fam.turbo).map(([id, t]) => `<option value="${esc(id)}" ${r.lora === id ? "selected" : ""}>${esc(t.label)}</option>`).join("")}<option value="none" ${r.lora ? "" : "selected"}>None (base model, use ~20 steps)</option></select></div>
+      <div class="grid2">
+        <div><label class="field">Turbo strength</label><input type="number" id="reStrength" step="0.05" min="0" max="2" value="${esc(r.strength ?? 1)}" ${dis}></div>
+        <div><label class="field">Steps</label><input type="number" id="reSteps" step="1" min="1" max="60" value="${esc(r.steps ?? 8)}" ${dis}></div>
+        <div><label class="field">Sampler</label><select id="reSampler" ${dis}>${opt(lists.samplers, r.sampler || "euler")}</select></div>
+        <div><label class="field">Scheduler</label><select id="reScheduler" ${dis}>${opt(lists.schedulers, r.scheduler || "simple")}</select></div>
+        <div><label class="field">Sigma shift</label><select id="reShiftMode" ${dis}><option value="default" ${r.shift ? "" : "selected"}>Default 12 / 3</option><option value="custom" ${r.shift ? "selected" : ""}>Custom</option></select></div>
+        <div class="re-shift"><label class="field">Video / audio</label><div class="row"><input type="number" id="reShiftV" step="0.5" value="${esc(sh[0])}" ${dis}><input type="number" id="reShiftA" step="0.5" value="${esc(sh[1])}" ${dis}></div></div>
+        <div><label class="field">Extra low-noise passes</label><select id="reExtMode" ${dis}><option value="off" ${r.extend ? "" : "selected"}>Off</option><option value="on" ${r.extend ? "selected" : ""}>On</option></select></div>
+        ${famId === "ref2v" ? `<div><label class="field">Reference size</label><select id="reRefSize" ${dis}>${["max", "match"].map((o) => `<option ${o === (r.ref_image_size || "max") ? "selected" : ""}>${o}</option>`).join("")}</select></div>` : "<div></div>"}
+        <div class="re-ext"><label class="field">Pass steps</label><input type="number" id="reExtSteps" step="1" min="1" max="8" value="${esc(ext.steps)}" ${dis}></div>
+        <div class="re-ext"><label class="field">Sigma from → to</label><div class="row"><input type="number" id="reExtStart" step="0.05" min="0" max="1" value="${esc(ext.start)}" ${dis}><input type="number" id="reExtEnd" step="0.05" min="0" max="1" value="${esc(ext.end)}" ${dis}></div></div>
+      </div>
+    </div>
+    <div class="sheet-foot">
+      ${ro ? `<button class="btn primary" id="reDup">Duplicate</button>`
+        : `${r.id ? `<button class="btn danger" id="reDel" aria-label="Delete recipe">${ICON.trash}</button>` : ""}<button class="btn primary" id="reSave">Save recipe</button>`}
+    </div>`, (body) => {
+    const sync = () => {
+      $$(".re-shift", body).forEach((el) => (el.hidden = $("#reShiftMode", body).value !== "custom"));
+      $$(".re-ext", body).forEach((el) => (el.hidden = $("#reExtMode", body).value !== "on"));
+    };
+    sync();
+    ["#reShiftMode", "#reExtMode"].forEach((id) => ($(id, body).onchange = sync));
+    const dup = $("#reDup", body);
+    if (dup) dup.onclick = () => recipeEditor(famId, { ...r, id: null, builtin: false, label: `${r.label} copy`.slice(0, 40) }, opts);
+    const del = $("#reDel", body);
+    if (del) del.onclick = async () => {
+      if (!confirm(`Delete the recipe "${r.label}"?`)) return;
+      try { await api(`/api/recipes/${famId}/${encodeURIComponent(r.id)}`, { method: "DELETE" }); S.boot.recipes = await api("/api/recipes"); toast("Deleted"); closeSheet(); render(); } catch (e) { fail(e); }
+    };
+    const save = $("#reSave", body);
+    if (save) save.onclick = async () => {
+      const num = (id) => Number($(id, body).value);
+      const payload = {
+        id: r.id || null, label: $("#reLabel", body).value, note: $("#reNote", body).value,
+        lora: $("#reLora", body).value, strength: num("#reStrength"), steps: num("#reSteps"),
+        sampler: $("#reSampler", body).value, scheduler: $("#reScheduler", body).value,
+        shift: $("#reShiftMode", body).value === "custom" ? [num("#reShiftV"), num("#reShiftA")] : "default",
+        extend: $("#reExtMode", body).value === "on" ? { steps: num("#reExtSteps"), start: num("#reExtStart"), end: num("#reExtEnd"), spacing: "linear" } : "off",
+        ref_image_size: famId === "ref2v" ? $("#reRefSize", body).value : undefined,
+      };
+      try {
+        const saved = await api(`/api/recipes/${famId}`, { body: payload });
+        S.boot.recipes = await api("/api/recipes");
+        if (opts.select) { F.recipe[famId] = saved.id; F.adv = {}; saveForm(); }
+        toast(opts.select ? `Saved and selected ${saved.label}` : "Recipe saved");
+        closeSheet(); render();
+      } catch (e) { fail(e); }
+    };
+  });
+}
+
 function recipePasses(r) {
   const steps = Number(F.adv.steps ?? r.steps);
   const extend = F.adv.extend === "on" || (F.adv.extend !== "off" && r.extend);
@@ -435,9 +597,9 @@ function advancedBlock(r) {
       <div><label class="field">Sigma shift</label><select id="advShiftMode"><option value="recipe" ${shiftMode === "recipe" ? "selected" : ""}>Recipe (${r.shift ? r.shift.join(" / ") : "default 12 / 3"})</option><option value="custom" ${shiftMode === "custom" ? "selected" : ""}>Custom</option><option value="off" ${shiftMode === "off" ? "selected" : ""}>ComfyUI default</option></select></div>
       <div><label class="field">Extra low-noise passes</label><select data-adv="extend"><option value="" ${a.extend === undefined ? "selected" : ""}>Recipe (${r.extend ? "on" : "off"})</option><option value="on" ${a.extend === "on" ? "selected" : ""}>On</option><option value="off" ${a.extend === "off" ? "selected" : ""}>Off</option></select></div>
       ${shiftMode === "custom" ? `<div><label class="field">Shift video</label><input type="number" step="0.5" id="shiftV" value="${esc(sv[0])}"></div><div><label class="field">Shift audio</label><input type="number" step="0.5" id="shiftA" value="${esc(sv[1])}"></div>` : ""}
-      ${FAMILY[F.mode] === "ref2v" ? `<div><label class="field">Reference size</label><select data-adv="ref_image_size">${["max", "match", "original"].map((o) => `<option ${o === (a.ref_image_size ?? r.ref_image_size) ? "selected" : ""}>${o}</option>`).join("")}</select></div>` : ""}
+      ${FAMILY[F.mode] === "ref2v" ? `<div><label class="field">Reference size</label><select data-adv="ref_image_size">${["max", "match"].map((o) => `<option ${o === (a.ref_image_size ?? r.ref_image_size) ? "selected" : ""}>${o}</option>`).join("")}</select></div>` : ""}
     </div>
-    <div class="row" style="margin-top:10px"><span class="grow note">Saved with every output, so you can compare later.</span><button class="btn small ghost" id="advReset" ${any ? "" : "disabled"}>Reset</button></div>
+    <div class="row" style="margin-top:10px"><span class="grow note">Saved with every output, so you can compare later.</span><button class="btn small ghost" id="advSaveRecipe" title="Save these values as your own recipe">Save as recipe</button><button class="btn small ghost" id="advReset" ${any ? "" : "disabled"}>Reset</button></div>
   </details>`;
 }
 
@@ -547,6 +709,11 @@ function bindCreate() {
   sm.onchange = () => { if (sm.value === "recipe") delete F.adv.shift; else if (sm.value === "off") F.adv.shift = "off"; else F.adv.shift = (recipeFor(F.mode).shift || [12, 3]).slice(); saveForm(); render(); };
   ["shiftV", "shiftA"].forEach((id, i) => { const el = $("#" + id); if (el) el.onchange = () => { F.adv.shift[i] = Number(el.value); saveForm(); }; });
   $("#advReset").onclick = () => { F.adv = {}; saveForm(); render(); };
+  $("#advSaveRecipe").onclick = () => recipeEditor(FAMILY[F.mode], { ...effectiveRecipe(), id: null, builtin: false, label: `${recipeFor(F.mode).label} (tuned)` }, { select: true });
+  $("#fullCfg").onclick = () => settingsSheet("Full settings", {
+    recipe: effectiveRecipe(), family: FAMILY[F.mode], checkpoint: F.checkpoint, tuned: Object.keys(F.adv),
+    size: resolution(F.aspect, F.megapixels), frames: frames(F.duration),
+  });
 
   // loras
   $("#addLora").onclick = openLoraPicker;
@@ -565,7 +732,7 @@ function bindCreate() {
   $$("[data-count]", v).forEach((b) => b.onclick = () => { F.count = +b.dataset.count; saveForm(); render(); });
 
   $("#genBtn").onclick = () => submit(false);
-  $("#compareBtn").onclick = () => submit(true);
+  const cmp = $("#compareBtn"); if (cmp) cmp.onclick = () => submit(true);
 }
 
 let samplerLists = null;
@@ -593,6 +760,7 @@ async function addReference(a) {
 
 function overridesPayload() {
   const o = {}; const a = F.adv;
+  if (a.ref_image_size === "original") delete a.ref_image_size;  // retired option; ComfyUI never accepted it
   for (const k of ["strength", "steps", "sampler", "scheduler", "ref_image_size"]) if (a[k] !== undefined) o[k] = a[k];
   if (a.shift !== undefined) o.shift = a.shift;
   if (a.extend === "on") o.extend = { steps: 2, start: 0.8, end: 0, spacing: "linear" };
@@ -781,6 +949,9 @@ function jobSheet(j) {
       <dt>Shape</dt><dd>${j.aspect} · ${j.megapixels} MP</dd>
       ${j.loras && j.loras.length ? `<dt>LoRAs</dt><dd>${j.loras.map((l) => `${esc(l.nickname || l.file)} ${l.strength}`).join("<br>")}</dd>` : ""}
     </dl>
+    ${j.recipe ? `<details class="more cfg-box"><summary>${ICON.chev} Settings ${pending ? "it will use" : "used"}</summary>${settingsRows({
+      recipe: { ...j.recipe, label: j.label || j.recipe.label }, family: j.recipe.family || FAMILY[j.mode], checkpoint: j.checkpoint,
+      tuned: Object.keys(j.overrides || {}), size: resolution(j.aspect, j.megapixels), frames: frames(j.duration) })}</details>` : ""}
     ${j.idea ? `<h3>Idea</h3><div class="prompt-text">${esc(j.idea)}</div>` : ""}
     <h3 style="margin-top:12px">Prompt</h3>
     ${j.status === "queued" ? `<textarea id="jp" style="min-height:200px">${esc(j.prompt || "")}</textarea><div id="jTweak">${tweakBox({ hidden: !j.prompt, canUndo: false })}</div><p class="note">${j.prompt ? "You can still edit it, or ask for a change." : "Will be written when it's this job's turn (or sooner, in the background)."}</p>`
@@ -955,6 +1126,9 @@ function openOutput(start, list) {
       ${(m.loras || []).length ? `<dt>LoRAs</dt><dd>${m.loras.map((l) => `${esc(l.nickname || l.file || l.filename)} ${l.strength}`).join("<br>")}</dd>` : ""}
       <dt>File</dt><dd class="faint">${esc(i.file)}</dd>
     </dl>
+    ${m.recipe ? `<details class="more cfg-box"><summary>${ICON.chev} Settings used</summary>${settingsRows({
+      recipe: { ...m.recipe, label: m.label || m.recipe.label }, family: m.recipe.family || FAMILY[m.mode], checkpoint: m.checkpoint,
+      tuned: Object.keys(m.overrides || {}), size: m.width ? [m.width, m.height] : null, frames: m.frames })}</details>` : ""}
     ${(m.idea || m.prompt_idea) ? `<h3>Idea</h3><div class="prompt-text">${esc(m.idea || m.prompt_idea)}</div>` : ""}
     <div class="row" style="margin-top:12px"><h3 class="grow">Prompt</h3>${prompt ? `<button class="btn small ghost" data-a="copy">Copy</button>` : ""}</div>
     <div class="prompt-text">${esc(prompt || "No record for this file.")}</div>
@@ -1024,6 +1198,7 @@ function applyRecord(rec) {
   if (rec.duration) F.duration = Number(rec.duration);
   F.start_image = rec.start_image || null; F.end_image = rec.end_image || null;
   F.refs = rec.refs || [];
+  F.avState = F.refs.some((r) => r.kind === "video" || r.kind === "audio"); F.recipeBeforeAv = null;  // a reused clip keeps its own recipe
   F.checkpoint = rec.checkpoint || "stock";
   if (rec.recipe_id) F.recipe[FAMILY[rec.mode]] = rec.recipe_id;
   F.adv = {};
@@ -1129,12 +1304,14 @@ VIEWS.more = function () {
   const sub = (location.hash.split("/")[1] || "");
   if (sub === "loras") return viewLoras();
   if (sub === "system") return viewSystem();
+  if (sub === "recipes") return viewRecipes();
   const L = S.live;
   const mem = L ? L.memory : null;
   $("#view").innerHTML = `<div class="page">
     <div class="page-head"><h1>More</h1></div>
     <div class="list">
       <a href="#more/loras">${ICON.cube}<div class="grow"><h3>LoRAs &amp; models</h3><div class="sub">Your catalog, CivitAI search, bookmarks and collections</div></div>${ICON.chev}</a>
+      <a href="#more/recipes">${ICON.spark}<div class="grow"><h3>Recipes</h3><div class="sub">Speed presets: make your own, pick what Create shows and what Compare runs</div></div>${ICON.chev}</a>
       <a href="#more/system">${ICON.cpu}<div class="grow"><h3>System</h3><div class="sub">${mem ? `RAM ${mem.used_gb} of ${mem.limit_gb} GB` : "Memory, downloads, services"}</div></div>${ICON.chev}</a>
       <button class="item" id="spBtn">${ICON.text}<div class="grow"><h3>Auto prompt instructions</h3><div class="sub">The system prompts behind Auto and Tweak</div></div>${ICON.chev}</button>
       <button class="item" id="logBtn">${ICON.log}<div class="grow"><h3>Logs</h3><div class="sub">ComfyUI, Studio, downloads</div></div>${ICON.chev}</button>
@@ -1367,6 +1544,56 @@ function installSheet(m, v, onDone) {
       } catch (e) { fail(e); }
     };
   });
+}
+
+// ------------------------------------------------------------------ MORE → RECIPES
+
+function viewRecipes() {
+  const famId = S.recipeFam || "ref2v";
+  const fam = S.boot.recipes[famId];
+  const v = $("#view");
+  const cmpN = fam.compare.length;
+  v.innerHTML = `<div class="page">
+    <div class="page-head"><a class="icon-btn" href="#more" aria-label="Back" style="transform:scaleX(-1)">${ICON.chev}</a><h1>Recipes</h1><span class="spacer"></span>
+      <button class="btn small primary" id="rNew">${ICON.plus} New</button></div>
+    <div class="seg" style="margin-bottom:12px">${[["fl2v", "Text & Image"], ["ref2v", "Reference"]].map(([k, n]) => `<button data-rf="${k}" class="${famId === k ? "on" : ""}">${n}</button>`).join("")}</div>
+    <p class="note" style="margin-top:0"><b>Create</b> shows the recipe in Speed. <b>Compare</b> renders every ticked recipe on one seed (${cmpN < 2 ? "tick at least two" : `${cmpN} ticked`}). Tap a recipe to see all its values, duplicate it, or edit your own.</p>
+    <div class="list recipes">${fam.recipes.map((r) => {
+      const shown = !fam.hidden.includes(r.id);
+      return `<div class="rrow">
+        <button class="rinfo" data-redit="${esc(r.id)}"><h3>${esc(r.label)}${r.id === fam.default ? ` <span class="status done">default</span>` : ""}${r.id === fam.av_recipe ? ` <span class="status">video/audio</span>` : ""}${r.builtin ? "" : ` <span class="status">yours</span>`}</h3>
+          <div class="sub">${esc(recipeSummary(r))}</div></button>
+        <div class="rtoggles">
+          <label class="rt"><span>Create</span><span class="switch"><input type="checkbox" data-vis="${esc(r.id)}" ${shown ? "checked" : ""} ${r.id === fam.default ? "disabled" : ""}><span></span></span></label>
+          <label class="rt"><span>Compare</span><span class="switch"><input type="checkbox" data-cmp="${esc(r.id)}" ${fam.compare.includes(r.id) ? "checked" : ""}><span></span></span></label>
+        </div></div>`;
+    }).join("")}</div>
+    <div class="section-title"><h2>Choices</h2></div>
+    <div class="list">
+      <div><div class="grow">Default<div class="sub">What Create starts on</div></div>
+        <select id="rDefault" style="width:auto">${fam.recipes.filter((r) => !fam.hidden.includes(r.id)).map((r) => `<option value="${esc(r.id)}" ${r.id === fam.default ? "selected" : ""}>${esc(r.label)}</option>`).join("")}</select></div>
+      ${famId === "ref2v" ? `<div><div class="grow">With video or audio references<div class="sub">Create switches to this recipe when you add one, and back when you remove it</div></div>
+        <select id="rAv" style="width:auto"><option value="">Don't switch</option>${fam.recipes.map((r) => `<option value="${esc(r.id)}" ${r.id === fam.av_recipe ? "selected" : ""}>${esc(r.label)}</option>`).join("")}</select></div>` : ""}
+    </div>
+  </div>`;
+  const choose = async (patch) => {
+    try { S.boot.recipes[famId] = await api(`/api/recipes/${famId}/choices`, { method: "PUT", body: patch }); viewRecipes(); }
+    catch (e) { fail(e); viewRecipes(); }
+  };
+  $$("[data-rf]").forEach((b) => b.onclick = () => { S.recipeFam = b.dataset.rf; viewRecipes(); });
+  $("#rNew").onclick = () => recipeEditor(famId, null);
+  $$("[data-redit]").forEach((b) => b.onclick = () => recipeEditor(famId, fam.recipes.find((r) => r.id === b.dataset.redit)));
+  $$("[data-vis]").forEach((el) => el.onchange = () => {
+    const hidden = fam.hidden.filter((h) => h !== el.dataset.vis);
+    if (!el.checked) hidden.push(el.dataset.vis);
+    choose({ hidden });
+  });
+  $$("[data-cmp]").forEach((el) => el.onchange = () => {
+    const compare = fam.recipes.map((r) => r.id).filter((id) => (id === el.dataset.cmp ? el.checked : fam.compare.includes(id)));
+    choose({ compare });
+  });
+  $("#rDefault").onchange = (e) => choose({ default: e.target.value });
+  const av = $("#rAv"); if (av) av.onchange = (e) => choose({ av_recipe: e.target.value || null });
 }
 
 async function viewSystem() {

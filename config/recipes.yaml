@@ -14,6 +14,11 @@
 #
 # `default` is what Create uses. `compare` is what the Compare button queues,
 # on one shared seed, so the difference you see is the recipe and nothing else.
+# `av_recipe` (R2V) is what Create switches to when a reference has video or
+# audio; omit it to never switch.
+#
+# These are the image's defaults. Your own recipes and choices (More → Recipes)
+# live in /workspace/mmh3/config/recipes.yaml and are layered on top.
 #
 # Starting point = the settings you were already running and trusted
 # (main @ 9d134f3). Reasoning for each alternative is in README.md.
@@ -54,6 +59,7 @@ families:
   ref2v:           # R2V
     default: balanced
     compare: [balanced, shift6, upstream]
+    av_recipe: legacy_euler
     recipes:
       balanced:
         label: Balanced
@@ -85,3 +91,13 @@ families:
         scheduler: simple
         extend: {steps: 2, start: 0.8, end: 0.0, spacing: linear}
         ref_image_size: max
+      legacy_euler:
+        label: Legacy · Euler
+        note: Ref2V turbo v0.1 at 0.85, 4 steps, Euler + Beta (0.6/0.6), extra low-noise passes, default shift 12/3. Your low-drift baseline for video and audio references.
+        lora: ref2v_turbo_4step_v01
+        strength: 0.85
+        steps: 4
+        sampler: euler
+        scheduler: beta
+        extend: {steps: 2, start: 0.8, end: 0.0, spacing: linear}
+        ref_image_size: match

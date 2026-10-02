@@ -93,9 +93,10 @@ def build(job: dict[str, Any], files: dict[str, str]) -> dict[str, Any]:
         nid = g.add("LoraLoaderModelOnly", f"LoRA {i}: {lora['file']}",
                     model=model, lora_name=lora["file"], strength_model=strength)
         model = [nid, 0]
-    turbo = g.add("LoraLoaderModelOnly", f"Turbo LoRA ({recipe['id']})",
-                  model=model, lora_name=_name(files["turbo"]), strength_model=recipe["strength"])
-    model = [turbo, 0]
+    if recipe.get("lora") and files.get("turbo"):  # a recipe may run the base model without a turbo LoRA
+        turbo = g.add("LoraLoaderModelOnly", f"Turbo LoRA ({recipe['id']})",
+                      model=model, lora_name=_name(files["turbo"]), strength_model=recipe["strength"])
+        model = [turbo, 0]
     if recipe.get("shift"):
         sv, sa = recipe["shift"]
         shift = g.add("MiniMaxH3SigmaShift", "Sigma shift", model=model, shift_video=sv, shift_audio=sa)

@@ -65,12 +65,17 @@ def status() -> dict[str, Any]:
             "updated_at": live.get("updated_at")}
 
 
-def family_ready(family: str, checkpoint: str = "stock") -> tuple[bool, list[str]]:
-    """Whether every file a family needs is on disk; returns what is missing."""
+def family_ready(family: str, checkpoint: str = "stock", turbo: str | None = None) -> tuple[bool, list[str]]:
+    """Whether every file a family needs is on disk; returns what is missing.
+
+    Of the turbo LoRAs only `turbo` (the recipe's) counts, so one that is still
+    downloading never holds up recipes that don't use it."""
     from . import loras  # local import: loras pulls in the CivitAI client
 
     models = manifest().get("models") or {}
-    missing = [mid for mid, e in models.items() if family in (e.get("used_by") or []) and not is_present(e)]
+    missing = [mid for mid, e in models.items()
+               if family in (e.get("used_by") or []) and not is_present(e)
+               and (e.get("role") != "turbo" or mid == turbo)]
     rel = loras.checkpoint_file(checkpoint, family)
     if rel is None:
         missing.append(f"checkpoint '{checkpoint}' has no {family} model")

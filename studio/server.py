@@ -95,7 +95,7 @@ async def index(request: web.Request) -> web.StreamResponse:
 
 def _checkpoints() -> list[dict[str, Any]]:
     return [{"id": c["id"], "label": c["label"], "available": c["available"], "builtin": c["builtin"],
-             "image": c.get("image")} for c in loras.checkpoints()]
+             "image": c.get("image"), "files": c.get("files") or {}} for c in loras.checkpoints()]
 
 
 async def boot(request: web.Request) -> web.Response:
@@ -117,8 +117,10 @@ async def state(request: web.Request) -> web.Response:
     comfy: Comfy = request.app["comfy"]
     prov = await asyncio.to_thread(provision.status)
     fam = {}
+    cat = recipes.catalog()
     for f in ("fl2v", "ref2v"):
-        ready, missing = provision.family_ready(f)
+        default = (cat.get(f) or {}).get("recipes", {}).get((cat.get(f) or {}).get("default"), {})
+        ready, missing = provision.family_ready(f, turbo=default.get("lora"))
         fam[f] = {"ready": ready, "missing": missing}
     downloading = [m for m in prov["models"].values() if m.get("state") in ("downloading", "queued")]
     return ok({
@@ -447,6 +449,26 @@ async def civitai_version(request: web.Request) -> web.Response:
     return ok(await asyncio.to_thread(civitai.version, int(request.match_info["id"])))
 
 
+# ---------------------------------------------------------------------- recipes
+
+async def recipes_get(request: web.Request) -> web.Response:
+    return ok(recipes.public_catalog())
+
+
+async def recipe_save(request: web.Request) -> web.Response:
+    body = await request.json()
+    return ok(recipes.save_recipe(request.match_info["family"], body, body.get("id") or None))
+
+
+async def recipe_delete(request: web.Request) -> web.Response:
+    recipes.delete_recipe(request.match_info["family"], request.match_info["id"])
+    return ok()
+
+
+async def recipe_choices(request: web.Request) -> web.Response:
+    return ok(recipes.save_choices(request.match_info["family"], await request.json()))
+
+
 # ---------------------------------------------------------------------- system
 
 async def system(request: web.Request) -> web.Response:
@@ -626,6 +648,10 @@ def make_app() -> web.Application:
     r.add_get("/api/civitai/collections", civitai_collections)
     r.add_get("/api/civitai/collections/{id}", civitai_collection)
     r.add_get("/api/civitai/version/{id}", civitai_version)
+    r.add_get("/api/recipes", recipes_get)
+    r.add_put("/api/recipes/{family}/choices", recipe_choices)
+    r.add_post("/api/recipes/{family}", recipe_save)
+    r.add_delete("/api/recipes/{family}/{id}", recipe_delete)
     r.add_get("/api/system", system)
     r.add_put("/api/system/settings", system_settings)
     r.add_post("/api/system/{action}", system_action)

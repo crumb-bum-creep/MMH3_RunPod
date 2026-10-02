@@ -154,6 +154,8 @@ class Runner:
         overrides = form.get("overrides") or {}
         if form.get("compare"):
             recipe_ids = (recipes.catalog().get(family) or {}).get("compare") or []
+            if len(recipe_ids) < 2:
+                raise JobError("pick at least two recipes for Compare (More → Recipes)")
             overrides = {}  # a comparison is between the named recipes as written
         else:
             recipe_ids = [form.get("recipe_id") or None]
@@ -273,7 +275,7 @@ class Runner:
             "id", "status", "mode", "idea", "prompt", "aspect", "megapixels", "duration", "seed", "checkpoint",
             "recipe_id", "label", "group", "compare", "stage", "note", "error", "step", "total_steps",
             "avg_step_ms", "created", "started", "finished", "output", "loras", "refs", "start_image",
-            "end_image", "prompt_mode", "overrides", "timings", "eta", "lora_picks")}
+            "end_image", "prompt_mode", "overrides", "timings", "eta", "lora_picks", "recipe")}
         out["preview_seq"] = seq
         return out
 
@@ -310,7 +312,7 @@ class Runner:
             return
 
         # 2. models on disk + ComfyUI up
-        ready, missing = provision.family_ready(job["family"], job["checkpoint"])
+        ready, missing = provision.family_ready(job["family"], job["checkpoint"], job["recipe"].get("lora"))
         if not ready:
             prog = provision.status()["models"]
             pct = _download_pct([prog[m] for m in missing if m in prog])
@@ -434,7 +436,7 @@ class Runner:
             "text_encoder": models["text_encoder"]["file"],
             "video_vae": models["video_vae"]["file"],
             "audio_vae": models["audio_vae"]["file"],
-            "turbo": models[job["recipe"]["lora"]]["file"],
+            "turbo": models[job["recipe"]["lora"]]["file"] if job["recipe"].get("lora") else "",
             "preview_vae": taeh3["file"] if provision.is_present(taeh3) else "",
         }
 
