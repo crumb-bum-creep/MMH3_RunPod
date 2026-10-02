@@ -3,14 +3,14 @@
 # that persistent file does not already exist. Edits made in the 7860 UI
 # therefore survive later image upgrades and are never overwritten by this seed.
 #
-# auto_install: true   downloaded on every boot until present
-# auto_install: false  listed under Quick install in LoRAs (one tap to download);
-#                      not downloaded on its own. An existing catalog that predates
-#                      this flag picks up the value from here once, per version_id.
+# None of these download on their own (auto_install: false). They're listed under
+# Quick install in LoRAs, one tap to download. Turn "Download on startup" on per LoRA
+# to change that. An existing catalog that predates this flag picks up the value
+# from here once, per version_id.
 loras:
 - version_id: 3224980
   enabled: true
-  auto_install: true
+  auto_install: false
   recommended_strength: 1.2
   nickname: Digicam
   tags:
@@ -21,7 +21,7 @@ loras:
   filename: minimax-h3-digicam.safetensors
 - version_id: 3266628
   enabled: true
-  auto_install: true
+  auto_install: false
   recommended_strength: 0.6
   nickname: Mystic XXX v4
   tags:
@@ -54,7 +54,7 @@ loras:
   filename: MysticXXX_MMH3-V2.safetensors
 - version_id: 3268303
   enabled: true
-  auto_install: true
+  auto_install: false
   recommended_strength: 0.5
   nickname: HearMeMan - AIO Sex v2.5
   tags:
@@ -121,7 +121,7 @@ loras:
   filename: vagassist_e40.safetensors
 - version_id: 3252213
   enabled: true
-  auto_install: true
+  auto_install: false
   recommended_strength: 1.0
   nickname: HearMeManPussy v1.0
   tags:
@@ -256,7 +256,7 @@ loras:
   filename: moawxx_000002000.safetensors
 - version_id: 3250559
   enabled: true
-  auto_install: true
+  auto_install: false
   recommended_strength: 1.0
   nickname: Male Anatomy
   tags:

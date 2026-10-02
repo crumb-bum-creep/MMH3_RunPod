@@ -386,7 +386,7 @@ def test_existing_catalog_takes_seed_auto_install_once(workspace):
                          {"version_id": 777, "nickname": "Mine"}])
     loras.ensure_seeded()
     by = {e["version_id"]: e for e in loras.catalog()}
-    assert by[3260276]["auto_install"] is False and by[3224980]["auto_install"] is True
+    assert by[3260276]["auto_install"] is False and by[3224980]["auto_install"] is False
     assert "auto_install" not in by[777]  # not in the seed: untouched, downloads as before
     loras.upsert({"version_id": 3260276, "auto_install": True})  # your choice sticks
     loras.ensure_seeded()

@@ -25,9 +25,8 @@
   a New filter and Mark all watched. Thumbnails show the file name (`T2V_00042`). The player has
   previous/next buttons, swipe on the video and ← → keys, and favourite/delete update in place.
   Copy prompt button.
-- **LoRAs**: the seed catalog no longer downloads everything on boot. Five general LoRAs still do;
-  the rest are under **Quick install** (one tap to Get, live progress) in the LoRA screen and in
-  Create's LoRA picker. Per-LoRA "Download on startup" switch, and Uninstall (deletes the files,
+- **LoRAs**: the seed catalog no longer downloads on boot. All of it is under **Quick install**
+  (one tap to Get, live progress) in the LoRA screen and in Create's LoRA picker. Per-LoRA "Download on startup" switch, and Uninstall (deletes the files,
   keeps it under Quick install). An existing volume picks up the split once.
 
 **Fixed**
