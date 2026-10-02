@@ -138,8 +138,8 @@ async def generate(request: web.Request) -> web.Response:
     return ok({"jobs": [j["id"] for j in jobs], "seed": jobs[0]["seed"]})
 
 
-async def draft(request: web.Request) -> web.Response:
-    form = await request.json()
+def _prompt_job(form: dict[str, Any]) -> dict[str, Any]:
+    """The parts of a Create form the prompt writer needs."""
     mode = str(form.get("mode") or "")
     recipes.family_for(mode)
     job = {k: form.get(k) for k in ("mode", "idea", "aspect", "megapixels", "duration", "start_image",
@@ -147,8 +147,25 @@ async def draft(request: web.Request) -> web.Response:
     job["aspect"] = job.get("aspect") or "9:16"
     job["megapixels"] = float(job.get("megapixels") or 0.7)
     job["duration"] = float(job.get("duration") or 5)
+    for key in ("start_image", "end_image"):
+        if job.get(key) and not library.safe_rel(paths.INPUT, job[key]).is_file():
+            raise prompting.PromptError(f"input file is missing: {job[key]}")
+    return job
+
+
+async def draft(request: web.Request) -> web.Response:
+    job = _prompt_job(await request.json())
     started = time.time()
     text = await prompting.write(job)
+    return ok({"prompt": text, "seconds": round(time.time() - started, 1)})
+
+
+async def refine(request: web.Request) -> web.Response:
+    """Tweak: edit an existing prompt from a short change request."""
+    form = await request.json()
+    job = _prompt_job(form)
+    started = time.time()
+    text = await prompting.refine(job, str(form.get("prompt") or ""), str(form.get("request") or ""))
     return ok({"prompt": text, "seconds": round(time.time() - started, 1)})
 
 
@@ -211,6 +228,12 @@ async def output_patch(request: web.Request) -> web.Response:
 
 async def output_delete(request: web.Request) -> web.Response:
     await asyncio.to_thread(library.delete_output, request.query["file"])
+    return ok()
+
+
+async def outputs_seen(request: web.Request) -> web.Response:
+    body = await request.json()
+    library.mark_seen(body.get("files") or [], everything=bool(body.get("all")))
     return ok()
 
 
@@ -351,7 +374,7 @@ async def lora_upsert(request: web.Request) -> web.Response:
     if not body.get("key"):
         return bad("nothing to save")
     fields = {k: body[k] for k in ("enabled", "recommended_strength", "nickname", "tags", "trigger_words",
-                                   "notes", "files") if k in body}
+                                   "notes", "files", "auto_install") if k in body}
     entry = loras.upsert({"key": body["key"], "version_id": body.get("version_id"),
                           "filename": body.get("filename"), **fields})
     await asyncio.to_thread(loras.enqueue_entry, entry)
@@ -362,6 +385,16 @@ async def lora_delete(request: web.Request) -> web.Response:
     loras.remove(request.match_info["key"], delete_files=request.query.get("file") == "1")
     request.app["comfy"].forget_object_info()
     return ok()
+
+
+async def lora_install(request: web.Request) -> web.Response:
+    return ok(await asyncio.to_thread(loras.install, request.match_info["key"]))
+
+
+async def lora_uninstall(request: web.Request) -> web.Response:
+    entry = await asyncio.to_thread(loras.uninstall, request.match_info["key"])
+    request.app["comfy"].forget_object_info()
+    return ok(entry)
 
 
 async def lora_sync(request: web.Request) -> web.Response:
@@ -490,13 +523,13 @@ async def system_action(request: web.Request) -> web.Response:
 
 async def prompts_get(request: web.Request) -> web.Response:
     base = util.image_yaml("system_prompts.yaml").get("prompts") or {}
-    return ok({"prompts": prompting.system_prompts(), "defaults": base})
+    return ok({"prompts": prompting.system_prompts(), "defaults": base, "stale": prompting.stale_prompts()})
 
 
 async def prompts_put(request: web.Request) -> web.Response:
     body = await request.json()
     name = body.get("name")
-    if name not in ("t2v_auto", "i2v_auto", "r2v_auto"):
+    if name not in prompting.PROMPT_NAMES:
         return bad("unknown prompt")
     prompting.save_system_prompt(name, str(body.get("text") or ""))
     return ok()
@@ -556,6 +589,7 @@ def make_app() -> web.Application:
     r.add_get("/api/state", state)
     r.add_post("/api/generate", generate)
     r.add_post("/api/draft", draft)
+    r.add_post("/api/refine", refine)
     r.add_get("/api/choices", choices)
     r.add_post("/api/jobs/{id}/{action}", job_action)
     r.add_get("/api/jobs/{id}/preview", job_preview)
@@ -563,6 +597,7 @@ def make_app() -> web.Application:
     r.add_get("/api/outputs", outputs)
     r.add_patch("/api/outputs", output_patch)
     r.add_delete("/api/outputs", output_delete)
+    r.add_post("/api/outputs/seen", outputs_seen)
     r.add_put("/api/groups", groups_put)
     r.add_get("/api/outputs/reuse", output_reuse)
     r.add_post("/api/outputs/continue", output_continue)
@@ -583,6 +618,8 @@ def make_app() -> web.Application:
     r.add_post("/api/loras", lora_upsert)
     r.add_delete("/api/loras/{key}", lora_delete)
     r.add_post("/api/loras/sync", lora_sync)
+    r.add_post("/api/loras/{key}/install", lora_install)
+    r.add_post("/api/loras/{key}/uninstall", lora_uninstall)
     r.add_post("/api/checkpoints", checkpoint_add)
     r.add_delete("/api/checkpoints/{id}", checkpoint_delete)
     r.add_get("/api/civitai/search", civitai_search)

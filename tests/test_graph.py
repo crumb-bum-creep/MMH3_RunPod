@@ -119,6 +119,15 @@ def test_i2v_frames():
         graph.build(job("i2v"), FILES)
 
 
+def test_i2v_end_frame_only():
+    """L2V: the node accepts last_frame without first_frame."""
+    g = graph.build(job("i2v", end_image="mmh3/b.png"), FILES)
+    (load_id, load), = by_class(g, "LoadImage")
+    cond = one(g, "MiniMaxH3ImageToVideo")[1]["inputs"]
+    assert load["inputs"]["image"] == "mmh3/b.png" and load["_meta"]["title"] == "End frame"
+    assert cond["last_frame"] == [load_id, 0] and "first_frame" not in cond
+
+
 def test_r2v_wiring():
     refs = [{"kind": "image", "file": "a.png"}, {"kind": "video", "file": "v.mp4"}, {"kind": "audio", "file": "s.wav"}]
     g = graph.build(job("r2v", refs=refs), {**FILES, "unet": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors"})

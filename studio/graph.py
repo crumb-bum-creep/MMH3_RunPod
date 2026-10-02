@@ -110,10 +110,11 @@ def build(job: dict[str, Any], files: dict[str, str]) -> dict[str, Any]:
         cond_inputs: dict[str, Any] = dict(clip=[clip, 0], vae=[vae_v, 0], prompt=prompt,
                                            width=width, height=height, length=length)
         if mode == "i2v":
-            if not job.get("start_image"):
-                raise GraphError("image-to-video needs a start image")
-            start = g.add("LoadImage", "Start frame", image=job["start_image"])
-            cond_inputs["first_frame"] = [start, 0]
+            if not (job.get("start_image") or job.get("end_image")):
+                raise GraphError("image-to-video needs a start frame, an end frame, or both")
+            if job.get("start_image"):
+                start = g.add("LoadImage", "Start frame", image=job["start_image"])
+                cond_inputs["first_frame"] = [start, 0]
             if job.get("end_image"):
                 end = g.add("LoadImage", "End frame", image=job["end_image"])
                 cond_inputs["last_frame"] = [end, 0]

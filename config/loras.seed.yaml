@@ -2,9 +2,15 @@
 # Bootstrap copies this file to /workspace/mmh3/config/loras.yaml only when
 # that persistent file does not already exist. Edits made in the 7860 UI
 # therefore survive later image upgrades and are never overwritten by this seed.
+#
+# None of these download on their own (auto_install: false). They're listed under
+# Quick install in LoRAs, one tap to download. Turn "Download on startup" on per LoRA
+# to change that. An existing catalog that predates this flag picks up the value
+# from here once, per version_id.
 loras:
 - version_id: 3224980
   enabled: true
+  auto_install: false
   recommended_strength: 1.2
   nickname: Digicam
   tags:
@@ -15,6 +21,7 @@ loras:
   filename: minimax-h3-digicam.safetensors
 - version_id: 3266628
   enabled: true
+  auto_install: false
   recommended_strength: 0.6
   nickname: Mystic XXX v4
   tags:
@@ -25,6 +32,7 @@ loras:
   filename: MysticXXX_MMH3-V4.safetensors
 - version_id: 3260276
   enabled: true
+  auto_install: false
   recommended_strength: 0.6
   nickname: Mystic XXX v3
   tags:
@@ -35,6 +43,7 @@ loras:
   filename: MysticXXX_MMH3-V3.safetensors
 - version_id: 3242519
   enabled: true
+  auto_install: false
   recommended_strength: 0.55
   nickname: Mystic XXX v2
   tags:
@@ -45,6 +54,7 @@ loras:
   filename: MysticXXX_MMH3-V2.safetensors
 - version_id: 3268303
   enabled: true
+  auto_install: false
   recommended_strength: 0.5
   nickname: HearMeMan - AIO Sex v2.5
   tags:
@@ -56,6 +66,7 @@ loras:
   filename: HMNSFW-AIO-V2.5.safetensors
 - version_id: 3206518
   enabled: true
+  auto_install: false
   recommended_strength: 0.5
   nickname: HearMeMan - AIO Sex v2.0
   tags:
@@ -67,6 +78,7 @@ loras:
   filename: HMNSFW_AIO_V2.safetensors
 - version_id: 3226989
   enabled: true
+  auto_install: false
   recommended_strength: 1.0
   nickname: Daring's Deepthroat
   tags:
@@ -95,6 +107,7 @@ loras:
   filename: deepthroat_v02.safetensors
 - version_id: 3215304
   enabled: true
+  auto_install: false
   recommended_strength: 0.5
   nickname: HearMeMan Pussy v0.5
   tags:
@@ -108,6 +121,7 @@ loras:
   filename: vagassist_e40.safetensors
 - version_id: 3252213
   enabled: true
+  auto_install: false
   recommended_strength: 1.0
   nickname: HearMeManPussy v1.0
   tags:
@@ -120,6 +134,7 @@ loras:
   filename: Vagina_minimax-h3_epoch20.safetensors
 - version_id: 3228867
   enabled: true
+  auto_install: false
   recommended_strength: 0.6
   nickname: H3 Motion Booster
   tags:
@@ -131,6 +146,7 @@ loras:
   filename: H3_Motion_BoosterV2.safetensors
 - version_id: 3264805
   enabled: true
+  auto_install: false
   recommended_strength: 0.8
   nickname: Side Fuck
   tags:
@@ -165,6 +181,7 @@ loras:
   filename: side_fuck_h3_000000750.safetensors
 - version_id: 3243753
   enabled: true
+  auto_install: false
   recommended_strength: 0.7
   nickname: Pillow Humping
   tags:
@@ -177,6 +194,7 @@ loras:
   filename: MM-H3 - Pillow Humping v2.safetensors
 - version_id: 3264127
   enabled: true
+  auto_install: false
   recommended_strength: 1.0
   nickname: Fingering
   tags:
@@ -187,6 +205,7 @@ loras:
   filename: MinimaxH3-Fingering_000002000.safetensors
 - version_id: 3205014
   enabled: true
+  auto_install: false
   recommended_strength: 0.7
   nickname: Hand in Panties Rub
   tags:
@@ -200,6 +219,7 @@ loras:
   filename: MM-H3 - Hand in Panties.safetensors
 - version_id: 3258236
   enabled: true
+  auto_install: false
   recommended_strength: 1.0
   nickname: Cowgirl Position
   tags:
@@ -212,6 +232,7 @@ loras:
   filename: Minimaxh3-cowgirl_position-Ref2V-512_000000550.safetensors
 - version_id: 3236596
   enabled: true
+  auto_install: false
   recommended_strength: 1.0
   nickname: Sagging Breasts
   tags:
@@ -222,6 +243,7 @@ loras:
   filename: MM-H3 - Naturally Sagging Breasts v1.01.safetensors
 - version_id: 3228089
   enabled: true
+  auto_install: false
   recommended_strength: 0.7
   nickname: Moaning/Writhing
   tags: []
@@ -234,6 +256,7 @@ loras:
   filename: moawxx_000002000.safetensors
 - version_id: 3250559
   enabled: true
+  auto_install: false
   recommended_strength: 1.0
   nickname: Male Anatomy
   tags:

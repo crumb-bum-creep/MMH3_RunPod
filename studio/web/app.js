@@ -105,7 +105,9 @@ function saveForm() {
 // ------------------------------------------------------------------ sheet
 
 let sheetOnClose = null;
+let sheetKeys = null;  // extra key handling for the open sheet (the clip player's ← →)
 function openSheet(title, html, onMount, onClose) {
+  sheetKeys = null;
   $("#sheetTitle").textContent = title;
   $("#sheetBody").innerHTML = html;
   $("#sheet").hidden = false; $("#scrim").hidden = false;
@@ -121,7 +123,11 @@ function closeSheet() {
 }
 $("#sheetClose").onclick = closeSheet;
 $("#scrim").onclick = closeSheet;
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#sheet").hidden) closeSheet(); });
+document.addEventListener("keydown", (e) => {
+  if ($("#sheet").hidden) return;
+  if (e.key === "Escape") closeSheet();
+  else if (sheetKeys && !e.target.matches("input, textarea, select")) sheetKeys(e);
+});
 
 // ------------------------------------------------------------------ routing
 
@@ -242,17 +248,19 @@ VIEWS.create = function () {
           <button class="btn small" id="draftBtn">${ICON.spark} ${drafted ? "Rewrite prompt" : "Preview the prompt"}</button>
           <span class="faint" style="font-size:12px">${b.prompting.key ? "" : "Needs an OpenRouter key (More → System)"}</span>
         </div>
-        ${drafted ? `<div class="drafted"><div class="row"><span class="grow muted">This exact prompt will be used. Edit freely.</span><button class="btn small ghost" id="dropDraft">Discard</button></div><textarea id="draftBox">${esc(F.drafted.prompt)}</textarea></div>` : ""}
-      ` : `<div class="prompt-tools"><button class="btn small ghost" id="toAuto">${ICON.spark} Start from an idea instead</button></div>`}
+        ${drafted ? `<div class="drafted"><div class="row"><span class="grow muted">This exact prompt will be used. Edit freely.</span><button class="btn small ghost" id="dropDraft">Discard</button></div><textarea id="draftBox">${esc(F.drafted.prompt)}</textarea>${tweakBox()}</div>` : ""}
+      ` : `<div class="prompt-tools"><button class="btn small ghost" id="toAuto">${ICON.spark} Start from an idea instead</button></div>
+        ${tweakBox({ hidden: !F.prompt.trim() })}`}
     </section>
 
     ${F.mode === "i2v" ? `
     <section class="block">
-      <div class="block-head"><h3>Frames</h3><span class="hint">Start is required. End is optional.</span></div>
+      <div class="block-head"><h3>Frames</h3><span class="hint">Start, end, or both</span></div>
       <div class="frames">
         ${frameSlot("start_image", "Start frame")}
-        ${frameSlot("end_image", "End frame (optional)")}
+        ${frameSlot("end_image", "End frame")}
       </div>
+      <p class="note">${F.start_image && F.end_image ? "The clip travels from the start frame to the end frame." : F.end_image ? "The clip builds up to and lands on the end frame." : F.start_image ? "The clip starts on this frame. Add an end frame to choose where it lands." : "Pick a start frame, an end frame, or both."}</p>
     </section>` : ""}
 
     ${F.mode === "r2v" ? `
@@ -323,6 +331,60 @@ VIEWS.create = function () {
   bindCreate();
 };
 
+// ------------------------------------------------------------------ tweak (edit a prompt by asking)
+
+const TWEAKS = ["More detail", "Tighter", "Add dialogue", "Slower camera", "One continuous shot", "No music"];
+
+/* What the prompt writer needs to know about the clip: mode, shape, frames, references. */
+function promptContext() {
+  return { mode: F.mode, idea: F.idea, aspect: F.aspect, megapixels: F.megapixels, duration: F.duration,
+    start_image: F.start_image, end_image: F.end_image, refs: F.refs };
+}
+
+function tweakBox({ hidden = false, canUndo } = {}) {
+  const undo = canUndo ?? (F.tweakUndo || []).some((u) => u.auto === F.auto);
+  return `<div class="tweak" id="tweak" ${hidden ? "hidden" : ""}>
+    <form class="tweak-row" data-tweak-form>
+      <span class="tweak-icon" aria-hidden="true">${ICON.spark}</span>
+      <input type="text" data-tweak-in placeholder="Ask for a change, e.g. “make it night”" autocomplete="off" enterkeyhint="send" aria-label="Describe a change to the prompt">
+      <button class="tweak-go" aria-label="Apply the change">${ICON.arrowUp}</button>
+    </form>
+    <div class="chips scroll tweak-quick">
+      ${undo ? `<button type="button" class="chip" data-tweak-undo>↶ Undo</button>` : ""}
+      ${TWEAKS.map((t) => `<button type="button" class="chip" data-tweak-chip>${esc(t)}</button>`).join("")}
+    </div>
+  </div>`;
+}
+
+/* Wire a tweakBox. o: { ctx() -> prompt context, get() -> current prompt, set(text),
+   push(previous) and pop() -> previous, for undo }. */
+function bindTweak(root, o) {
+  if (!root) return;
+  const input = $("[data-tweak-in]", root);
+  const busy = (on) => {
+    root.classList.toggle("busy", on);
+    $$("button, input", root).forEach((el) => (el.disabled = on));
+    input.placeholder = on ? "Rewriting the prompt…" : "Ask for a change, e.g. “make it night”";
+  };
+  const go = async (request) => {
+    request = request.trim();
+    if (!request) return input.focus();
+    const before = o.get();
+    if (!before.trim()) return toast("Write a prompt first", true);
+    busy(true);
+    try {
+      const r = await api("/api/refine", { body: { ...o.ctx(), prompt: before, request } });
+      o.push(before);
+      o.set(r.prompt);
+      toast(`Updated in ${r.seconds} s`);
+    } catch (e) { fail(e); busy(false); }
+  };
+  $("[data-tweak-form]", root).onsubmit = (e) => { e.preventDefault(); go(input.value); };
+  $$("[data-tweak-chip]", root).forEach((b) => b.onclick = () => go(b.textContent));
+  const u = $("[data-tweak-undo]", root);
+  if (u) u.onclick = () => { const prev = o.pop(); if (prev != null) { o.set(prev); toast("Change undone"); } };
+}
+
 function recipePasses(r) {
   const steps = Number(F.adv.steps ?? r.steps);
   const extend = F.adv.extend === "on" || (F.adv.extend !== "off" && r.extend);
@@ -332,7 +394,7 @@ function recipePasses(r) {
 function frameSlot(key, label) {
   const f = F[key];
   if (!f) return `<div class="frame-slot" data-slot="${key}">${ICON.image}<br>${label}</div>`;
-  return `<div class="frame-slot filled" data-slot="${key}"><img src="${thumbIn(f)}" alt=""><button class="x" data-clear="${key}" aria-label="Remove">${ICON.x}</button><span class="cap">${label.replace(" (optional)", "")}</span></div>`;
+  return `<div class="frame-slot filled" data-slot="${key}"><img src="${thumbIn(f)}" alt=""><button class="x" data-clear="${key}" aria-label="Remove">${ICON.x}</button><span class="cap">${label}</span></div>`;
 }
 
 function refCounts() {
@@ -412,7 +474,11 @@ function bindCreate() {
   $$("[data-mode]", v).forEach((b) => b.onclick = () => { F.mode = b.dataset.mode; F.adv = {}; saveForm(); render(); });
   $$("[data-auto]", v).forEach((b) => b.onclick = () => { F.auto = b.dataset.auto === "1"; saveForm(); render(); });
   const pb = $("#promptBox");
-  pb.oninput = () => { if (F.auto) F.idea = pb.value; else F.prompt = pb.value; saveForm(); };
+  pb.oninput = () => {
+    if (F.auto) F.idea = pb.value; else F.prompt = pb.value;
+    saveForm();
+    const tw = $("#tweak", v); if (tw && !F.auto) tw.hidden = !F.prompt.trim();
+  };
   pb.onblur = () => { if (F.auto && F.drafted && F.drafted.idea !== F.idea) render(); };
   const toAuto = $("#toAuto"); if (toAuto) toAuto.onclick = () => { F.auto = true; saveForm(); render(); };
   const draftBtn = $("#draftBtn");
@@ -420,13 +486,20 @@ function bindCreate() {
     if (!F.idea.trim()) return toast("Write an idea first", true);
     draftBtn.disabled = true; draftBtn.innerHTML = `${ICON.spark} Writing…`;
     try {
-      const r = await api("/api/draft", { body: { mode: F.mode, idea: F.idea, aspect: F.aspect, megapixels: F.megapixels, duration: F.duration, start_image: F.start_image, end_image: F.end_image, refs: F.refs } });
-      F.drafted = { mode: F.mode, idea: F.idea, prompt: r.prompt }; saveForm(); render();
+      const r = await api("/api/draft", { body: promptContext() });
+      F.drafted = { mode: F.mode, idea: F.idea, prompt: r.prompt }; F.tweakUndo = []; saveForm(); render();
       toast(`Prompt written in ${r.seconds} s`);
     } catch (e) { fail(e); render(); }
   };
   const db = $("#draftBox"); if (db) db.oninput = () => { F.drafted.prompt = db.value; saveForm(); };
-  const dd = $("#dropDraft"); if (dd) dd.onclick = () => { F.drafted = null; saveForm(); render(); };
+  const dd = $("#dropDraft"); if (dd) dd.onclick = () => { F.drafted = null; F.tweakUndo = []; saveForm(); render(); };
+  bindTweak($("#tweak", v), {
+    ctx: promptContext,
+    get: () => (F.auto ? F.drafted.prompt : F.prompt),
+    set: (text) => { if (F.auto) F.drafted.prompt = text; else F.prompt = text; saveForm(); render(); },
+    push: (text) => { F.tweakUndo = [...(F.tweakUndo || []).filter((u) => u.auto === F.auto).slice(-9), { auto: F.auto, text }]; },
+    pop: () => { const list = F.tweakUndo || []; const i = list.map((u) => u.auto).lastIndexOf(F.auto); return i < 0 ? null : list.splice(i, 1)[0].text; },
+  });
 
   // frames
   $$("[data-slot]", v).forEach((el) => el.onclick = async (e) => {
@@ -557,7 +630,8 @@ async function openLoraPicker() {
       const fam = FAMILY[F.mode];
       const items = data.items.filter((l) => l.installed && l.enabled !== false);
       const draw = (q = "") => {
-        const list = items.filter((l) => !q || `${l.nickname} ${(l.tags || []).join(" ")} ${(l.trigger_words || []).join(" ")}`.toLowerCase().includes(q.toLowerCase()));
+        const list = items.filter((l) => loraMatches(l, q));
+        const quick = S.loras.items.filter((l) => isQuick(l) && loraMatches(l, q));
         body.innerHTML = `<input type="search" id="lq" placeholder="Search your LoRAs" value="${esc(q)}">
           <div style="margin-top:8px">${list.map((l) => `
             <button class="lora item" data-key="${esc(l.key)}" style="width:100%;background:none;border:0;border-bottom:1px solid var(--line);text-align:left;color:inherit;cursor:pointer">
@@ -567,8 +641,15 @@ async function openLoraPicker() {
                 <div class="faint" style="font-size:12px">${esc((l.trigger_words || []).slice(0, 4).join(", "))}</div>
               </div>
               <span class="faint" style="font-size:12px">${(l.families || []).includes(fam) ? "" : "other mode"}</span>
-            </button>`).join("") || `<div class="empty"><h2>No LoRAs installed</h2><p>Browse CivitAI in More → LoRAs.</p></div>`}</div>`;
+            </button>`).join("") || `<div class="empty"><h2>No LoRAs installed</h2><p>Browse CivitAI in More → LoRAs.</p></div>`}</div>
+          ${quick.length ? `<div class="section-title"><h2>Quick install</h2><span class="faint" style="font-size:12px">tap Get, then add it once it's downloaded</span></div>
+            <div class="list quick">${quick.map(quickRow).join("")}</div>` : ""}`;
         const lq = $("#lq", body); lq.oninput = () => { const pos = lq.selectionStart; draw(lq.value); const n = $("#lq", body); n.focus(); n.setSelectionRange(pos, pos); };
+        $$("[data-get]", body).forEach((b) => b.onclick = async () => {
+          b.disabled = true;
+          try { await api(`/api/loras/${encodeURIComponent(b.dataset.get)}/install`, { body: {} }); b.outerHTML = `<span class="faint" style="font-size:13px">Downloading…</span>`; }
+          catch (e) { fail(e); b.disabled = false; }
+        });
         $$("[data-key]", body).forEach((b) => b.onclick = () => {
           const l = items.find((x) => x.key === b.dataset.key);
           if (F.loras.some((x) => x.key === l.key)) return toast("Already added");
@@ -702,13 +783,32 @@ function jobSheet(j) {
     </dl>
     ${j.idea ? `<h3>Idea</h3><div class="prompt-text">${esc(j.idea)}</div>` : ""}
     <h3 style="margin-top:12px">Prompt</h3>
-    ${j.status === "queued" ? `<textarea id="jp" style="min-height:200px">${esc(j.prompt || "")}</textarea><p class="note">${j.prompt ? "You can still edit it." : "Will be written when it's this job's turn (or sooner, in the background)."}</p>`
+    ${j.status === "queued" ? `<textarea id="jp" style="min-height:200px">${esc(j.prompt || "")}</textarea><div id="jTweak">${tweakBox({ hidden: !j.prompt, canUndo: false })}</div><p class="note">${j.prompt ? "You can still edit it, or ask for a change." : "Will be written when it's this job's turn (or sooner, in the background)."}</p>`
       : `<div class="prompt-text">${esc(j.prompt || "—")}</div>`}
     <div class="sheet-foot">
       ${j.status === "queued" ? `<button class="btn" id="jSave">Save prompt</button>` : ""}
       ${pending ? `<button class="btn danger" id="jCancel">Cancel</button>` : `<button class="btn" id="jRetry">${ICON.reuse} Run again</button><button class="btn" id="jEdit">Edit in Create</button>`}
     </div>`, (body) => {
+    if (j.output) markSeen(j.output.file);
     const s = $("#jSave", body); if (s) s.onclick = () => api(`/api/jobs/${j.id}/prompt`, { body: { prompt: $("#jp", body).value } }).then(() => { toast("Saved"); closeSheet(); pollSoon(); }).catch(fail);
+    const jp = $("#jp", body);
+    if (jp) {
+      const stack = [];
+      const mount = () => {
+        const holder = $("#jTweak", body);
+        holder.innerHTML = tweakBox({ hidden: !jp.value.trim(), canUndo: stack.length > 0 });
+        bindTweak($("#tweak", holder), {
+          ctx: () => ({ mode: j.mode, idea: j.idea, aspect: j.aspect, megapixels: j.megapixels, duration: j.duration,
+            start_image: j.start_image, end_image: j.end_image, refs: j.refs }),
+          get: () => jp.value,
+          set: (text) => { jp.value = text; j.prompt = text; mount(); api(`/api/jobs/${j.id}/prompt`, { body: { prompt: text } }).then(pollSoon).catch(fail); },
+          push: (prev) => stack.push(prev),
+          pop: () => (stack.length ? stack.pop() : null),
+        });
+      };
+      mount();
+      jp.oninput = () => { const tw = $("#tweak", body); if (tw) tw.hidden = !jp.value.trim(); };
+    }
     const c = $("#jCancel", body); if (c) c.onclick = () => api(`/api/jobs/${j.id}/cancel`, { body: {} }).then(() => { closeSheet(); pollSoon(); }).catch(fail);
     const r = $("#jRetry", body); if (r) r.onclick = () => api(`/api/jobs/${j.id}/retry`, { body: {} }).then(() => { toast("Queued again"); closeSheet(); pollSoon(); }).catch(fail);
     const ed = $("#jEdit", body); if (ed) ed.onclick = () => { applyRecord(jobToRecord(j)); closeSheet(); location.hash = "#create"; };
@@ -726,35 +826,69 @@ VIEWS.library = async function () {
   const v = $("#view");
   if (!S.outputs) v.innerHTML = `<div class="page"><div class="page-head"><h1>Library</h1></div><div class="empty">Loading…</div></div>`;
   try { S.outputs = await api("/api/outputs"); } catch (e) { fail(e); return; }
+  updateLibBadge();
   if (S.route !== "library") return;
   const { items, groups } = S.outputs;
   const f = S.lib.filter;
+  const fresh = items.filter((i) => i.new).length;
   let list = items;
-  if (f === "fav") list = list.filter((i) => i.favorite);
+  if (f === "new") list = list.filter((i) => i.new);
+  else if (f === "fav") list = list.filter((i) => i.favorite);
   else if (["t2v", "i2v", "r2v"].includes(f)) list = list.filter((i) => i.mode === f);
   else if (f === "group") list = list.filter((i) => i.group === S.lib.group);
   else if (f === "compare") list = list.filter((i) => i.meta && i.meta.group && i.meta.compare);
+  S.lib.list = list;
+  const emptyMsg = f === "new" ? ["All caught up", "Every clip has been watched."]
+    : items.length ? ["Nothing matches", "Try another filter."] : ["No videos yet", "Finished clips land here."];
   v.innerHTML = `<div class="page">
-    <div class="page-head"><h1>Library</h1><span class="faint num">${items.length}</span><span class="spacer"></span><button class="btn small ghost" id="grpBtn">Groups</button></div>
+    <div class="page-head"><h1>Library</h1><span class="faint num">${items.length}</span><span class="spacer"></span>
+      ${fresh ? `<button class="btn small ghost" id="seenAll">Mark all watched</button>` : ""}<button class="btn small ghost" id="grpBtn">Groups</button></div>
     <div class="chips scroll" style="margin-bottom:14px">
-      ${[["all", "All"], ["fav", "★ Favorites"], ["t2v", "Text"], ["i2v", "Image"], ["r2v", "Reference"], ["compare", "Comparisons"]].map(([k, n]) => `<button class="chip ${f === k ? "on" : ""}" data-f="${k}">${n}</button>`).join("")}
+      ${[["all", "All"], ["new", fresh ? `<span class="new-dot" aria-hidden="true"></span>New ${fresh}` : "New"], ["fav", "★ Favorites"], ["t2v", "Text"], ["i2v", "Image"], ["r2v", "Reference"], ["compare", "Comparisons"]].map(([k, n]) => `<button class="chip ${f === k ? "on" : ""}" data-f="${k}">${n}</button>`).join("")}
       ${groups.map((g) => `<button class="chip ${f === "group" && S.lib.group === g ? "on" : ""}" data-g="${esc(g)}">${esc(g)}</button>`).join("")}
     </div>
     ${f === "compare" ? compareGroups(list) : list.length ? `<div class="contact">${list.map(shot).join("")}</div>`
-      : `<div class="empty"><h2>${items.length ? "Nothing matches" : "No videos yet"}</h2><p>${items.length ? "Try another filter." : "Finished clips land here."}</p></div>`}
+      : `<div class="empty"><h2>${emptyMsg[0]}</h2><p>${emptyMsg[1]}</p></div>`}
   </div>`;
   $$("[data-f]").forEach((b) => b.onclick = () => { S.lib.filter = b.dataset.f; render(); });
   $$("[data-g]").forEach((b) => b.onclick = () => { S.lib.filter = "group"; S.lib.group = b.dataset.g; render(); });
-  $$("[data-out]").forEach((b) => b.onclick = () => openOutput(items.find((i) => i.file === b.dataset.out)));
+  $$("[data-out]").forEach((b) => b.onclick = () => openOutput(items.find((i) => i.file === b.dataset.out), S.lib.list));
   $$("[data-cmp]").forEach((b) => b.onclick = () => openCompare(items.filter((i) => i.meta && i.meta.group === b.dataset.cmp)));
   $("#grpBtn").onclick = groupsSheet;
+  const sa = $("#seenAll"); if (sa) sa.onclick = () => api("/api/outputs/seen", { body: { all: true } }).then(() => { toast("All marked as watched"); render(); }).catch(fail);
 };
+
+/* "T2V_00042" from "MMH3/T2V_00042-audio.mp4" */
+const clipName = (f) => nameOf(f).replace(/\.mp4$/i, "").replace(/-audio$/i, "");
+
 function shot(i) {
   const d = i.meta && (i.meta.duration || i.meta.frames / 24);
-  return `<button class="shot" data-out="${esc(i.file)}"><img loading="lazy" src="${thumbOut(i.file)}" alt="">
-    ${i.favorite ? `<span class="fav">${ICON.star}</span>` : ""}${i.group ? `<span class="grp">${esc(i.group)}</span>` : ""}
-    <span class="meta">${(i.mode || "").toUpperCase()}${i.meta && i.meta.label && i.meta.compare ? ` · ${esc(i.meta.label)}` : ""}<span class="d">${d ? `${Number(d).toFixed(1)}s` : ""}</span></span></button>`;
+  const label = i.meta && i.meta.label && i.meta.compare ? ` · ${esc(i.meta.label)}` : "";
+  return `<button class="shot${i.new ? " is-new" : ""}" data-out="${esc(i.file)}" title="${esc(i.file)}"><img loading="lazy" src="${thumbOut(i.file)}" alt="">
+    <span class="tl">${i.new ? `<span class="new-pill">New</span>` : ""}${i.group ? `<span class="grp">${esc(i.group)}</span>` : ""}</span>
+    ${i.favorite ? `<span class="fav">${ICON.star}</span>` : ""}
+    <span class="meta"><span class="fn">${esc(clipName(i.file))}${label}</span><span class="d">${d ? `${Number(d).toFixed(1)}s` : ""}</span></span></button>`;
 }
+
+function updateLibBadge() {
+  const n = S.outputs ? S.outputs.items.filter((i) => i.new).length : 0;
+  const b = $("#libBadge"); b.hidden = !n; b.textContent = n > 99 ? "99+" : n;
+}
+
+/* Mark an output watched (opened in a player). */
+function markSeen(file) {
+  const it = S.outputs && S.outputs.items.find((x) => x.file === file);
+  if (it && !it.new) return;
+  if (it) it.new = false;
+  updateLibBadge();
+  api("/api/outputs/seen", { body: { files: [file] } }).catch(() => {});
+}
+
+function refreshOutputs() {
+  if (S.route === "library") { render(); return; }
+  api("/api/outputs").then((o) => { S.outputs = o; updateLibBadge(); }).catch(() => {});
+}
+
 function compareGroups(list) {
   const groups = {};
   list.forEach((i) => (groups[i.meta.group] = groups[i.meta.group] || []).push(i));
@@ -762,28 +896,49 @@ function compareGroups(list) {
   if (!keys.length) return `<div class="empty"><h2>No comparisons yet</h2><p>Use Compare in Create to render one clip per recipe on the same seed.</p></div>`;
   return keys.map((k) => `<button class="kit" data-cmp="${esc(k)}" style="width:100%;margin-bottom:10px;color:inherit;text-align:left;cursor:pointer">
     <div class="kit-strip">${groups[k].slice(0, 4).map((i) => `<img src="${thumbOut(i.file)}" alt="">`).join("")}</div>
-    <div class="grow"><h3>${esc(jobTitle(groups[k][0].meta).slice(0, 50))}</h3><div class="faint" style="font-size:12px">${groups[k].map((i) => esc(i.meta.label || i.meta.recipe_id)).join(" vs ")}</div></div>${ICON.chev}</button>`).join("");
+    <div class="grow"><h3>${esc(jobTitle(groups[k][0].meta).slice(0, 50))}</h3><div class="faint" style="font-size:12px">${groups[k].some((i) => i.new) ? `<span class="new-dot" aria-label="new"></span>` : ""}${groups[k].map((i) => esc(i.meta.label || i.meta.recipe_id)).join(" vs ")}</div></div>${ICON.chev}</button>`).join("");
 }
 function openCompare(items) {
   items.sort((a, b) => (a.meta.label || "").localeCompare(b.meta.label || ""));
+  items.forEach((i) => markSeen(i.file));
   openSheet("Compare", `
     <div class="compare-grid">${items.map((i) => `<figure><video src="${mediaOut(i.file)}" playsinline loop muted preload="auto"></video><figcaption>${esc(i.meta.label || i.meta.recipe_id)} <span class="faint num">${i.meta.timings && i.meta.timings.total_s ? clock(i.meta.timings.total_s) : ""}</span></figcaption></figure>`).join("")}</div>
     <div class="row" style="margin-top:12px"><button class="btn primary grow" id="cmpPlay">${ICON.play} Play together</button><button class="btn" id="cmpSound">Sound: off</button></div>
-    <p class="note">Same prompt and seed; only the recipe differs. Tap a clip to open it.</p>`, (body) => {
+    <p class="note">Same prompt and seed; only the recipe differs. Tap a label to open that clip.</p>`, (body) => {
     const vids = $$("video", body);
     let soundIdx = -1;
     $("#cmpPlay", body).onclick = () => { vids.forEach((v) => { v.currentTime = 0; v.play(); }); };
     $("#cmpSound", body).onclick = (e) => { soundIdx = (soundIdx + 2) % (vids.length + 1) - 1; vids.forEach((v, i) => (v.muted = i !== soundIdx)); e.target.textContent = soundIdx < 0 ? "Sound: off" : `Sound: ${items[soundIdx].meta.label}`; };
-    $$("figcaption", body).forEach((c, i) => c.onclick = () => openOutput(items[i]));
-  });
+    $$("figcaption", body).forEach((c, i) => c.onclick = () => openOutput(items[i], items));
+  }, () => { if (S.route === "library") render(); });
 }
-function openOutput(i) {
+
+function outputTitle(i) {
   const m = i.meta || {};
-  const title = jobTitle(m.studio ? m : { prompt: m.actual_prompt || m.prompt, idea: m.prompt_idea, prompt_mode: m.prompt_mode, mode: i.mode });
-  openSheet(title.slice(0, 60), `
+  return jobTitle(m.studio ? m : { prompt: m.actual_prompt || m.prompt, idea: m.prompt_idea, prompt_mode: m.prompt_mode, mode: i.mode });
+}
+
+/* The clip player. `list` is what the Library was showing, so ‹ › (and swipes, and the
+   arrow keys) step through the same clips in the same order. */
+function openOutput(start, list) {
+  list = (list && list.length ? list : [start]).slice();
+  let idx = Math.max(0, list.findIndex((x) => x.file === start.file));
+  let changed = false;
+  const draw = (body) => {
+    const i = list[idx];
+    const m = i.meta || {};
+    $("#sheetTitle").textContent = outputTitle(i).slice(0, 60);
+    if (i.new) { markSeen(i.file); changed = true; }
+    const prompt = m.prompt || m.actual_prompt || "";
+    body.innerHTML = `
     <div class="player"><video src="${mediaOut(i.file)}" controls playsinline loop autoplay></video></div>
+    <div class="clip-line">
+      ${list.length > 1 ? `<button class="nav prev" data-nav="-1" aria-label="Previous clip" ${idx === 0 ? "disabled" : ""}>${ICON.chev}</button>` : ""}
+      <div class="grow"><div class="fn">${esc(clipName(i.file))}</div>${list.length > 1 ? `<div class="faint num">${idx + 1} of ${list.length} · swipe the video to step</div>` : ""}</div>
+      ${list.length > 1 ? `<button class="nav next" data-nav="1" aria-label="Next clip" ${idx === list.length - 1 ? "disabled" : ""}>${ICON.chev}</button>` : ""}
+    </div>
     <div class="actions">
-      <button class="btn" data-a="fav">${ICON.star} ${i.favorite ? "Unfavorite" : "Favorite"}</button>
+      <button class="btn${i.favorite ? " on" : ""}" data-a="fav">${ICON.star} ${i.favorite ? "Favorited" : "Favorite"}</button>
       <button class="btn" data-a="reuse">${ICON.reuse} Reuse</button>
       <button class="btn" data-a="continue">${ICON.next} Continue</button>
       <button class="btn" data-a="ref">${ICON.ref} As reference</button>
@@ -801,20 +956,62 @@ function openOutput(i) {
       <dt>File</dt><dd class="faint">${esc(i.file)}</dd>
     </dl>
     ${(m.idea || m.prompt_idea) ? `<h3>Idea</h3><div class="prompt-text">${esc(m.idea || m.prompt_idea)}</div>` : ""}
-    <h3 style="margin-top:12px">Prompt</h3><div class="prompt-text">${esc(m.prompt || m.actual_prompt || "No record for this file.")}</div>
-    <button class="btn danger" data-a="del" style="width:100%;margin-top:18px">${ICON.trash} Delete this video</button>`, (body) => {
+    <div class="row" style="margin-top:12px"><h3 class="grow">Prompt</h3>${prompt ? `<button class="btn small ghost" data-a="copy">Copy</button>` : ""}</div>
+    <div class="prompt-text">${esc(prompt || "No record for this file.")}</div>
+    <button class="btn danger" data-a="del" style="width:100%;margin-top:18px">${ICON.trash} Delete this video</button>`;
+    body.scrollTop = 0;
+    $$("[data-nav]", body).forEach((b) => b.onclick = () => go(+b.dataset.nav));
+    bindSwipe($(".player", body));
     $$("[data-a]", body).forEach((b) => b.onclick = async () => {
       const a = b.dataset.a;
       try {
-        if (a === "fav") { await api("/api/outputs", { method: "PATCH", body: { file: i.file, favorite: !i.favorite } }); i.favorite = !i.favorite; closeSheet(); render(); }
+        if (a === "fav") {
+          await api("/api/outputs", { method: "PATCH", body: { file: i.file, favorite: !i.favorite } });
+          i.favorite = !i.favorite; changed = true;
+          b.classList.toggle("on", i.favorite); b.innerHTML = `${ICON.star} ${i.favorite ? "Favorited" : "Favorite"}`;
+        }
+        if (a === "copy") { await copyText(prompt); toast("Prompt copied"); }
         if (a === "reuse") { const rec = await api(`/api/outputs/reuse?file=${encodeURIComponent(i.file)}`); applyRecord(rec); closeSheet(); location.hash = "#create"; toast("Loaded into Create"); }
         if (a === "continue") { const r = await api("/api/outputs/continue", { body: { file: i.file } }); const rec = await api(`/api/outputs/reuse?file=${encodeURIComponent(i.file)}`); applyRecord({ ...rec, mode: "i2v", start_image: r.start_image, end_image: null, seed: null }); F.lockSeed = false; F.drafted = null; F.prompt = ""; F.auto = true; F.idea = ""; saveForm(); closeSheet(); location.hash = "#create"; toast("Last frame set as the start. Describe what happens next."); }
         if (a === "ref") { const r = await api("/api/outputs/to-input", { body: { file: i.file } }); F.mode = "r2v"; await addReference({ kind: "video", file: r.file, has_audio: true }); saveForm(); closeSheet(); location.hash = "#create"; toast("Added as a reference"); }
-        if (a === "group") groupPicker(i);
-        if (a === "del") { if (!confirm("Delete this video? This can't be undone.")) return; await api(`/api/outputs?file=${encodeURIComponent(i.file)}`, { method: "DELETE" }); toast("Deleted"); closeSheet(); render(); }
+        if (a === "group") groupPicker(i, () => openOutput(i, list));
+        if (a === "del") {
+          if (!confirm("Delete this video? This can't be undone.")) return;
+          await api(`/api/outputs?file=${encodeURIComponent(i.file)}`, { method: "DELETE" });
+          toast("Deleted"); changed = true;
+          if (S.outputs) S.outputs.items = S.outputs.items.filter((x) => x.file !== i.file);
+          list.splice(idx, 1);
+          if (!list.length) { closeSheet(); return; }
+          idx = Math.min(idx, list.length - 1); draw(body);
+        }
       } catch (e) { fail(e); }
     });
-  });
+  };
+  const go = (d) => { const n = idx + d; if (n < 0 || n >= list.length) return; idx = n; draw($("#sheetBody")); };
+  openSheet(outputTitle(start).slice(0, 60), "", draw, () => { sheetKeys = null; if (changed && S.route === "library") render(); });
+  sheetKeys = (e) => { if (e.key === "ArrowLeft") go(-1); if (e.key === "ArrowRight") go(1); };
+}
+
+/* Horizontal swipe on the player steps clips. Touches on the control bar are left alone. */
+function bindSwipe(el) {
+  if (!el) return;
+  let x0 = null, y0 = 0;
+  el.addEventListener("touchstart", (e) => {
+    const t = e.touches[0]; const r = el.getBoundingClientRect();
+    x0 = t.clientY > r.bottom - 64 ? null : t.clientX; y0 = t.clientY;
+  }, { passive: true });
+  el.addEventListener("touchend", (e) => {
+    if (x0 === null) return;
+    const t = e.changedTouches[0]; const dx = t.clientX - x0, dy = t.clientY - y0; x0 = null;
+    if (Math.abs(dx) > 60 && Math.abs(dy) < 50) { const b = $(`[data-nav="${dx < 0 ? 1 : -1}"]`, el.parentElement); if (b && !b.disabled) b.click(); }
+  }, { passive: true });
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return; } catch { /* not a secure context: fall back */ }
+  const ta = Object.assign(document.createElement("textarea"), { value: text });
+  ta.style.cssText = "position:fixed;opacity:0"; document.body.append(ta); ta.select();
+  document.execCommand("copy"); ta.remove();
 }
 function applyRecord(rec) {
   if (!rec || !rec.mode) return toast("No settings were saved with this clip", true);
@@ -843,13 +1040,17 @@ function applyRecord(rec) {
   }
   saveForm();
 }
-function groupPicker(i) {
+function groupPicker(i, onDone) {
   const groups = S.outputs.groups;
   openSheet("Put in a group", `
     <div class="chips">${groups.map((g) => `<button class="chip ${i.group === g ? "on" : ""}" data-g="${esc(g)}">${esc(g)}</button>`).join("")}
       ${i.group ? `<button class="chip" data-g="">No group</button>` : ""}</div>
     <div class="row" style="margin-top:14px"><input type="text" id="ng" class="grow" placeholder="New group"><button class="btn" id="ngAdd">Add</button></div>`, (body) => {
-    const set = async (g) => { await api("/api/outputs", { method: "PATCH", body: { file: i.file, group: g } }); closeSheet(); render(); };
+    const set = async (g) => {
+      await api("/api/outputs", { method: "PATCH", body: { file: i.file, group: g } });
+      i.group = g; render();
+      if (onDone) onDone(); else closeSheet();
+    };
     $$("[data-g]", body).forEach((b) => b.onclick = () => set(b.dataset.g).catch(fail));
     $("#ngAdd", body).onclick = () => { const g = $("#ng", body).value.trim(); if (g) set(g).catch(fail); };
   });
@@ -935,7 +1136,7 @@ VIEWS.more = function () {
     <div class="list">
       <a href="#more/loras">${ICON.cube}<div class="grow"><h3>LoRAs &amp; models</h3><div class="sub">Your catalog, CivitAI search, bookmarks and collections</div></div>${ICON.chev}</a>
       <a href="#more/system">${ICON.cpu}<div class="grow"><h3>System</h3><div class="sub">${mem ? `RAM ${mem.used_gb} of ${mem.limit_gb} GB` : "Memory, downloads, services"}</div></div>${ICON.chev}</a>
-      <button class="item" id="spBtn">${ICON.text}<div class="grow"><h3>Auto prompt instructions</h3><div class="sub">The system prompts used by Auto</div></div>${ICON.chev}</button>
+      <button class="item" id="spBtn">${ICON.text}<div class="grow"><h3>Auto prompt instructions</h3><div class="sub">The system prompts behind Auto and Tweak</div></div>${ICON.chev}</button>
       <button class="item" id="logBtn">${ICON.log}<div class="grow"><h3>Logs</h3><div class="sub">ComfyUI, Studio, downloads</div></div>${ICON.chev}</button>
       <a href="${location.origin.replace(/-7860\./, "-8188.")}" target="_blank" rel="noopener">${ICON.globe}<div class="grow"><h3>Open ComfyUI</h3><div class="sub">The full node editor, on port 8188</div></div>${ICON.chev}</a>
     </div>
@@ -945,45 +1146,113 @@ VIEWS.more = function () {
   $("#logBtn").onclick = () => logsSheet("comfyui");
 };
 
+/* Catalog entries that are not downloaded on startup and not on disk yet: one tap to get. */
+const isQuick = (l) => !l.installed && l.auto_install === false && !l.untracked && l.enabled !== false && l.version_id;
+const loraMatches = (l, q) => !q || `${l.nickname} ${l.key} ${(l.tags || []).join(" ")} ${(l.trigger_words || []).join(" ")}`.toLowerCase().includes(q.toLowerCase());
+
+function loraProgress(l) {
+  const files = l.files || [];
+  const busy = files.find((f) => f.state === "downloading");
+  const failed = files.find((f) => f.state === "failed");
+  const queued = files.find((f) => f.state === "queued" && f.install !== false);
+  return { busy, failed, queued,
+    pct: busy && busy.total ? Math.round(100 * (busy.done || 0) / busy.total) : null };
+}
+
 async function viewLoras() {
   const v = $("#view");
-  v.innerHTML = `<div class="page"><div class="page-head"><a class="icon-btn" href="#more" aria-label="Back" style="transform:scaleX(-1)">${ICON.chev}</a><h1>LoRAs</h1></div><div class="empty">Loading…</div></div>`;
+  if (!S.loras) v.innerHTML = `<div class="page"><div class="page-head"><a class="icon-btn" href="#more" aria-label="Back" style="transform:scaleX(-1)">${ICON.chev}</a><h1>LoRAs</h1></div><div class="empty">Loading…</div></div>`;
   let d; try { d = await loadLoras(true); } catch (e) { fail(e); return; }
   if (!location.hash.startsWith("#more/loras")) return;
-  const q = S.loraQ || "";
-  const items = d.items.filter((l) => !q || `${l.nickname} ${l.key} ${(l.tags || []).join(" ")}`.toLowerCase().includes(q.toLowerCase()));
   v.innerHTML = `<div class="page">
     <div class="page-head"><a class="icon-btn" href="#more" aria-label="Back" style="transform:scaleX(-1)">${ICON.chev}</a><h1>LoRAs</h1><span class="spacer"></span>
       <button class="btn small primary" id="browse">${ICON.globe} Browse CivitAI</button></div>
     ${d.has_token ? "" : `<p class="note warn">Set CIVITAI_TOKEN on the pod for downloads, bookmarks and collections.</p>`}
-    <div class="row" style="margin-bottom:6px"><input type="search" id="lq" class="grow" placeholder="Search your catalog" value="${esc(q)}"><button class="btn small" id="sync">Sync</button></div>
-    <div>${items.map(loraRow).join("") || `<div class="empty"><h2>Empty catalog</h2><p>Browse CivitAI to add some.</p></div>`}</div>
+    <div class="row" style="margin-bottom:6px"><input type="search" id="lq" class="grow" placeholder="Search your catalog" value="${esc(S.loraQ || "")}"><button class="btn small" id="sync" title="Download anything set to download on startup that's missing">Sync</button></div>
+    <div id="loraLists"></div>
     <div class="section-title"><h2>Base models</h2></div>
     <div class="list">${d.checkpoints.map((c) => `<div><div class="grow"><h3>${esc(c.label)}</h3><div class="sub">${Object.entries(c.available).map(([f, ok]) => `${f === "ref2v" ? "R2V" : "T2V/I2V"} ${ok ? "ready" : "missing"}`).join(" · ")}</div></div>
       ${c.builtin ? (Object.values(c.available).some((x) => !x) && c.id === "eros" ? `<button class="btn small" data-eros>Download</button>` : "") : `<button class="icon-btn" data-rmck="${esc(c.id)}" aria-label="Remove">${ICON.trash}</button>`}</div>`).join("")}</div>
   </div>`;
-  const lq = $("#lq"); lq.oninput = debounce(() => { S.loraQ = lq.value; viewLoras(); }, 250);
-  $("#sync").onclick = () => api("/api/loras/sync", { body: {} }).then(() => toast("Checking for missing files…")).catch(fail);
+  drawLoraLists();
+  const lq = $("#lq"); lq.oninput = debounce(() => { S.loraQ = lq.value; drawLoraLists(); }, 200);
+  $("#sync").onclick = () => api("/api/loras/sync", { body: {} }).then(() => { toast("Checking for missing files…"); watchLoraDownloads(true); }).catch(fail);
   $("#browse").onclick = () => civitaiBrowser();
-  $$("[data-lkey]").forEach((el) => el.onclick = () => loraSheet(d.items.find((l) => l.key === el.dataset.lkey)));
   const eros = $("[data-eros]"); if (eros) eros.onclick = () => api("/api/system/settings", { method: "PUT", body: { eros_enabled: true } }).then(() => toast("Downloading Eros…")).catch(fail);
   $$("[data-rmck]").forEach((b) => b.onclick = async () => { if (!confirm("Remove this base model? Delete its file too?")) return; await api(`/api/checkpoints/${b.dataset.rmck}?file=1`, { method: "DELETE" }).catch(fail); S.boot = await api("/api/boot"); viewLoras(); });
+  watchLoraDownloads();
 }
+
+/* Redraws only the lists, so typing in the search box keeps focus (and the keyboard up). */
+function drawLoraLists() {
+  const box = $("#loraLists"); if (!box || !S.loras) return;
+  const q = S.loraQ || "";
+  const all = S.loras.items.filter((l) => loraMatches(l, q));
+  const quick = all.filter(isQuick);
+  const mine = all.filter((l) => !isQuick(l));
+  box.innerHTML = `
+    ${quick.length ? `<details class="more quick-box" id="quickBox" ${q || S.quickOpen ? "open" : ""}>
+      <summary>${ICON.chev}<span class="grow">Quick install <span class="faint num">${quick.length}</span></span><span class="faint" style="font-size:12px;font-weight:500">not downloaded on startup</span></summary>
+      <div class="list quick">${quick.map(quickRow).join("")}</div></details>` : ""}
+    <div class="section-title" style="margin-top:${quick.length ? 12 : 10}px"><h2>Your LoRAs</h2><span class="faint num">${mine.length}</span></div>
+    <div>${mine.map(loraRow).join("") || `<div class="empty"><p>${q ? "No matches." : "Nothing installed yet. Tap Get above, or browse CivitAI."}</p></div>`}</div>`;
+  $$("[data-lkey]", box).forEach((el) => el.onclick = (e) => {
+    if (e.target.closest("[data-get]")) return;
+    loraSheet(S.loras.items.find((l) => l.key === el.dataset.lkey));
+  });
+  $$("[data-get]", box).forEach((b) => b.onclick = () => getLora(b.dataset.get));
+  const qb = $("#quickBox", box); if (qb) qb.ontoggle = () => { if (!S.loraQ) S.quickOpen = qb.open; };
+}
+
+function quickRow(l) {
+  const p = loraProgress(l);
+  const action = p.busy ? `<span class="faint num" style="font-size:13px">${p.pct != null ? `${p.pct}%` : "…"}</span>`
+    : p.queued && S.loras.busy ? `<span class="faint" style="font-size:13px">Queued</span>`
+      : `<button class="btn small ${p.failed ? "" : "primary"}" data-get="${esc(l.key)}">${p.failed ? "Retry" : `${ICON.down} Get`}</button>`;
+  return `<div class="qrow" data-lkey="${esc(l.key)}">
+    <div class="lora-img sm">${l.image ? `<img src="${esc(l.image)}" alt="" loading="lazy">` : ICON.cube}</div>
+    <div class="grow"><h3>${esc(l.nickname || l.key)}</h3>
+      <div class="sub">${p.failed ? `<span class="err">${esc((p.failed.error || "download failed").slice(0, 80))}</span>` : esc([...(l.tags || []).slice(0, 3), Number(l.recommended_strength || 1).toFixed(2)].join(" · "))}</div>
+      ${p.busy ? `<div class="bar amber" style="margin:6px 0 0"><i style="width:${p.pct || 3}%"></i></div>` : ""}
+    </div>${action}</div>`;
+}
+
+async function getLora(key) {
+  try {
+    await api(`/api/loras/${encodeURIComponent(key)}/install`, { body: {} });
+    toast("Downloading…");
+    watchLoraDownloads(true);
+  } catch (e) { fail(e); }
+}
+
+/* While the download worker is busy, refresh the LoRA screen every few seconds. */
+let loraWatch = null;
+function watchLoraDownloads(soon = false) {
+  clearTimeout(loraWatch);
+  if (!soon && !(S.loras && S.loras.busy)) return;
+  loraWatch = setTimeout(async () => {
+    if (!location.hash.startsWith("#more/loras")) return;
+    try { await loadLoras(true); } catch { return; }
+    if (!location.hash.startsWith("#more/loras") || !$("#loraLists")) return;
+    drawLoraLists();
+    watchLoraDownloads();
+  }, soon ? 900 : 2500);
+}
+
 function loraRow(l) {
-  const files = l.files || [];
-  const busy = files.find((f) => f.state === "downloading");
-  const failed = files.find((f) => f.state === "failed");
-  const status = busy ? `Downloading ${busy.total ? Math.round(100 * (busy.done || 0) / busy.total) + "%" : "…"}`
-    : failed ? `Couldn't download: ${(failed.error || "").slice(0, 90)}` : l.installed ? "" : l.enabled === false ? "Disabled" : "Not downloaded";
+  const p = loraProgress(l);
+  const status = p.busy ? `Downloading ${p.pct != null ? p.pct + "%" : "…"}`
+    : p.failed ? `Couldn't download: ${(p.failed.error || "").slice(0, 90)}` : l.installed ? "" : l.enabled === false ? "Disabled" : "Not downloaded yet";
   return `<button class="lora" data-lkey="${esc(l.key)}" style="width:100%;background:none;border:0;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);text-align:left;color:inherit;cursor:pointer">
     <div class="lora-img">${l.image ? `<img src="${esc(l.image)}" alt="" loading="lazy">` : ICON.cube}</div>
     <div class="grow"><h3>${esc(l.nickname || l.key)}</h3>
-      <div>${(l.families || []).map((f) => `<span class="fam ${f}">${f === "ref2v" ? "R2V" : "T2V/I2V"}</span>`).join("")}${files.length > 1 ? `<span class="fam">${files.length} files</span>` : ""}${l.untracked ? `<span class="fam">local file</span>` : ""}</div>
-      ${status ? `<div class="${failed ? "job-sub err" : "faint"}" style="font-size:12px">${esc(status)}</div>` : ""}
+      <div>${(l.families || []).map((f) => `<span class="fam ${f}">${f === "ref2v" ? "R2V" : "T2V/I2V"}</span>`).join("")}${(l.files || []).length > 1 ? `<span class="fam">${l.files.length} files</span>` : ""}${l.untracked ? `<span class="fam">local file</span>` : ""}${l.auto_install === false && !l.untracked ? `<span class="fam">quick install</span>` : ""}</div>
+      ${status ? `<div class="${p.failed ? "job-sub err" : "faint"}" style="font-size:12px">${esc(status)}</div>` : ""}
     </div><span class="faint num" style="font-size:12px">${Number(l.recommended_strength || 1).toFixed(2)}</span></button>`;
 }
 function loraSheet(l) {
   const files = l.files || [];
+  const civ = !!l.version_id && !l.untracked;
   openSheet(l.nickname || l.key, `
     <div class="stack">
       <div><label class="field">Nickname</label><input type="text" id="lnick" value="${esc(l.nickname || "")}"></div>
@@ -991,25 +1260,35 @@ function loraSheet(l) {
         <div><label class="field">Default strength</label><input type="number" step="0.05" id="lstr" value="${esc(l.recommended_strength ?? 1)}"></div>
         <div><label class="field">Enabled</label><label class="switch"><input type="checkbox" id="len" ${l.enabled !== false ? "checked" : ""}><span></span></label></div>
       </div>
+      ${civ ? `<div class="row"><div class="grow"><label class="field" style="margin:0">Download on startup</label><div class="faint" style="font-size:12px">Off: stays under Quick install until you tap Get.</div></div><label class="switch"><input type="checkbox" id="lauto" ${l.auto_install !== false ? "checked" : ""}><span></span></label></div>` : ""}
       <div><label class="field">Trigger words (comma separated)</label><input type="text" id="ltrig" value="${esc((l.trigger_words || []).join(", "))}"></div>
       <div><label class="field">Tags</label><input type="text" id="ltags" value="${esc((l.tags || []).join(", "))}"></div>
       <div><h3>Files</h3><p class="note">Which file loads for which mode. Helpers load alongside the main file.</p>
         ${files.map((f, i) => `<div class="file-row"><label class="switch" title="Install"><input type="checkbox" data-inst="${i}" ${f.install !== false ? "checked" : ""} ${l.untracked ? "disabled" : ""}><span></span></label>
-          <div class="grow">${esc(f.name)}<div class="faint">${f.installed ? "on disk" : esc(f.state || "not downloaded")}${f.error ? ` · ${esc(f.error)}` : ""}</div></div>
+          <div class="grow">${esc(f.name)}<div class="faint">${f.installed ? "on disk" : f.state === "available" ? "not downloaded" : esc(f.state || "not downloaded")}${f.error ? ` · ${esc(f.error)}` : ""}</div></div>
           <select data-ffam="${i}">${[["any", "All modes"], ["fl2v", "T2V/I2V"], ["ref2v", "R2V"]].map(([k, n]) => `<option value="${k}" ${f.family === k ? "selected" : ""}>${n}</option>`).join("")}</select>
           <select data-frole="${i}">${[["main", "Main"], ["helper", "Helper"]].map(([k, n]) => `<option value="${k}" ${f.role === k ? "selected" : ""}>${n}</option>`).join("")}</select></div>`).join("")}
       </div>
       ${l.version_id ? `<p class="note faint">CivitAI version ${esc(l.version_id)}${l.base_model ? ` · ${esc(l.base_model)}` : ""}</p>` : ""}
     </div>
-    <div class="sheet-foot"><button class="btn danger" id="lDel">${ICON.trash}</button><button class="btn primary" id="lSave">Save</button></div>`, (body) => {
+    <div class="sheet-foot"><button class="btn danger" id="lDel" title="Remove from the catalog and delete its files">${ICON.trash}</button>
+      ${civ && l.installed ? `<button class="btn" id="lUninst" title="Delete the files but keep it under Quick install">Uninstall</button>` : ""}
+      ${civ && !l.installed ? `<button class="btn" id="lGet">${ICON.down} Get now</button>` : ""}
+      <button class="btn primary" id="lSave">Save</button></div>`, (body) => {
     $("#lSave", body).onclick = async () => {
       const nf = files.map((f, i) => ({ id: f.id ?? null, name: f.name, family: $(`[data-ffam="${i}"]`, body).value, role: $(`[data-frole="${i}"]`, body).value, install: $(`[data-inst="${i}"]`, body).checked }));
       const split = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
+      const auto = $("#lauto", body);
       try {
-        await api("/api/loras", { body: { key: l.key, version_id: l.version_id, filename: l.untracked ? l.filename : undefined, nickname: $("#lnick", body).value, recommended_strength: Number($("#lstr", body).value), enabled: $("#len", body).checked, trigger_words: split($("#ltrig", body).value), tags: split($("#ltags", body).value), files: l.untracked ? undefined : nf } });
+        await api("/api/loras", { body: { key: l.key, version_id: l.version_id, filename: l.untracked ? l.filename : undefined, nickname: $("#lnick", body).value, recommended_strength: Number($("#lstr", body).value), enabled: $("#len", body).checked, trigger_words: split($("#ltrig", body).value), tags: split($("#ltags", body).value), files: l.untracked ? undefined : nf, auto_install: auto ? auto.checked : undefined } });
         toast("Saved"); closeSheet(); viewLoras();
       } catch (e) { fail(e); }
     };
+    const un = $("#lUninst", body); if (un) un.onclick = async () => {
+      if (!confirm("Delete this LoRA's files? It stays under Quick install, one tap to get it back.")) return;
+      try { await api(`/api/loras/${encodeURIComponent(l.key)}/uninstall`, { body: {} }); toast("Uninstalled"); closeSheet(); viewLoras(); } catch (e) { fail(e); }
+    };
+    const get = $("#lGet", body); if (get) get.onclick = () => { closeSheet(); getLora(l.key).then(() => viewLoras()); };
     $("#lDel", body).onclick = async () => {
       if (!confirm("Remove from the catalog and delete its files?")) return;
       await api(`/api/loras/${encodeURIComponent(l.key)}?file=1`, { method: "DELETE" }).catch(fail); closeSheet(); viewLoras();
@@ -1126,7 +1405,7 @@ async function viewSystem() {
       <div><div class="grow">Drop cache after a job above<div class="sub">fraction of the container's RAM</div></div><input type="number" step="0.05" min="0.3" max="0.95" style="width:86px" data-set="memory.trim_after_job_above" value="${st["memory.trim_after_job_above"]}"></div>
       <div><div class="grow">Delete VHS's silent duplicate<div class="sub">keeps only the mp4 with sound</div></div><label class="switch"><input type="checkbox" data-set="output.delete_silent_twin" ${st["output.delete_silent_twin"] ? "checked" : ""}><span></span></label></div>
       <div><div class="grow">Video quality (CRF)<div class="sub">lower = better and bigger</div></div><input type="number" min="8" max="30" style="width:86px" data-set="output.crf" value="${st["output.crf"]}"></div>
-      <div><div class="grow">Auto prompt model<div class="sub">any OpenRouter model id</div></div><input type="text" style="width:170px" data-set="prompting.model" value="${esc(st["prompting.model"] || "")}"></div>
+      <div><div class="grow">Auto prompt &amp; Tweak model<div class="sub">any OpenRouter model id</div></div><input type="text" style="width:170px" data-set="prompting.model" value="${esc(st["prompting.model"] || "")}"></div>
       <div><div class="grow">CivitAI site</div><select style="width:150px" data-set="civitai.domain">${["civitai.red", "civitai.com"].map((x) => `<option ${d.civitai_domain.endsWith(x) ? "selected" : ""}>${x}</option>`).join("")}</select></div>
     </div>
   </div>`;
@@ -1152,14 +1431,26 @@ async function viewSystem() {
 async function promptsSheet() {
   let d; try { d = await api("/api/system/prompts"); } catch (e) { return fail(e); }
   let cur = "t2v_auto";
-  const names = { t2v_auto: "Text", i2v_auto: "Image", r2v_auto: "Reference" };
+  const names = { t2v_auto: "Text", i2v_auto: "Image · start", fl2v_auto: "Image · start + end", l2v_auto: "Image · end", r2v_auto: "Reference", refine: "Tweak" };
+  const about = {
+    t2v_auto: "Auto in Text mode (MiniMax T2VA).",
+    i2v_auto: "Auto in Image mode with a start frame only (I2VA).",
+    fl2v_auto: "Auto in Image mode with start and end frames (FL2VA).",
+    l2v_auto: "Auto in Image mode with an end frame only (L2VA).",
+    r2v_auto: "Auto in Reference mode (full-reference format).",
+    refine: "Tweak: edits a prompt from a short request. The mode's own instructions are appended as its rules.",
+  };
   const draw = (body) => {
-    body.innerHTML = `<div class="seg" style="margin-bottom:10px">${Object.entries(names).map(([k, n]) => `<button data-p="${k}" class="${cur === k ? "on" : ""}">${n}</button>`).join("")}</div>
+    const stale = d.stale[cur];
+    body.innerHTML = `<div class="chips scroll" style="margin-bottom:10px">${Object.entries(names).map(([k, n]) => `<button data-p="${k}" class="chip ${cur === k ? "on" : ""}">${n}</button>`).join("")}</div>
+      <p class="note" style="margin:0 0 8px">${about[cur]}</p>
+      ${stale ? `<div class="note warn stale">Your earlier edit of this prompt was made for an older version. The updated default, written from MiniMax's prompt guide, is in use now. <button class="btn small" id="pOld">Load my old version</button></div>` : ""}
       <textarea class="code" id="pt">${esc(d.prompts[cur] || "")}</textarea>
       <div class="sheet-foot"><button class="btn" id="pReset">Restore default</button><button class="btn primary" id="pSave">Save</button></div>`;
     $$("[data-p]", body).forEach((b) => b.onclick = () => { cur = b.dataset.p; draw(body); });
-    $("#pSave", body).onclick = () => api("/api/system/prompts", { method: "PUT", body: { name: cur, text: $("#pt", body).value } }).then(() => { d.prompts[cur] = $("#pt", body).value; toast("Saved"); }).catch(fail);
-    $("#pReset", body).onclick = () => { $("#pt", body).value = d.defaults[cur] || ""; };
+    $("#pSave", body).onclick = () => api("/api/system/prompts", { method: "PUT", body: { name: cur, text: $("#pt", body).value } }).then(() => { d.prompts[cur] = $("#pt", body).value; delete d.stale[cur]; toast("Saved"); draw(body); }).catch(fail);
+    $("#pReset", body).onclick = () => { $("#pt", body).value = d.defaults[cur] || ""; toast("Default loaded. Save to use it."); };
+    const old = $("#pOld", body); if (old) old.onclick = () => { $("#pt", body).value = stale; toast("Old version loaded. Save to use it."); };
   };
   openSheet("Auto prompt instructions", "", draw);
 }
@@ -1186,7 +1477,7 @@ async function poll() {
     const running = L.pending.find((j) => j.status === "running");
     if (lastRunningId && (!running || running.id !== lastRunningId)) {
       const fin = L.finished.find((j) => j.id === lastRunningId);
-      if (fin && fin.status === "done") { toast("Clip finished"); S.outputs = null; }
+      if (fin && fin.status === "done") { toast("Clip finished"); refreshOutputs(); }
       if (fin && fin.status === "failed") toast(`Failed: ${fin.error}`, true);
     }
     lastRunningId = running ? running.id : null;
@@ -1238,6 +1529,7 @@ async function start() {
   } catch {}
   loadLoras().catch(() => {});
   route();
+  if (S.route !== "library") refreshOutputs();
   poll();
 }
 start();

@@ -9,6 +9,7 @@ carries over untouched:
 New:
   data/kits.json             saved reference sets
   data/library_index.json    cached scan of the output folder
+  data/seen.json             which outputs you have opened ("new" badges)
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ LEGACY_META = paths.DATA / "output_meta.json"
 ASSETS_FILE = paths.DATA / "assets.json"
 KITS_FILE = paths.DATA / "kits.json"
 INDEX_FILE = paths.DATA / "library_index.json"
+SEEN_FILE = paths.DATA / "seen.json"
 _SAFE = re.compile(r"[^A-Za-z0-9._() +\-]+")
 _lock = threading.RLock()
 
@@ -126,14 +128,39 @@ def library_meta() -> dict[str, Any]:
     return {"groups": list(data.get("groups") or []), "videos": dict(data.get("videos") or {})}
 
 
+def _seen() -> dict[str, Any]:
+    """{"baseline": t, "files": {rel: t}}. Outputs older than the baseline count as seen,
+    so the first run doesn't flag a whole existing library as new."""
+    data = util.read_json(SEEN_FILE, None)
+    if not isinstance(data, dict) or not data.get("baseline"):
+        data = {"baseline": time.time(), "files": {}}
+        util.write_json(SEEN_FILE, data)
+    data.setdefault("files", {})
+    return data
+
+
+def mark_seen(files: list[str], everything: bool = False) -> None:
+    with _lock:
+        data = _seen()
+        if everything:
+            data = {"baseline": time.time(), "files": {}}
+        else:
+            for rel in files:
+                safe_rel(paths.OUTPUT, rel)
+                data["files"][rel] = time.time()
+        util.write_json(SEEN_FILE, data)
+
+
 def outputs() -> dict[str, Any]:
     lib = library_meta()
+    seen = _seen()
     items = []
     for it in index()["items"]:
         v = lib["videos"].get(it["file"]) or {}
         items.append({**it, "favorite": bool(v.get("favorite")), "group": v.get("group") or "",
-                      "tags": list(v.get("tags") or [])})
-    return {"items": items, "groups": lib["groups"]}
+                      "tags": list(v.get("tags") or []),
+                      "new": it["mtime"] > seen["baseline"] and it["file"] not in seen["files"]})
+    return {"items": items, "groups": lib["groups"], "new": sum(1 for i in items if i["new"])}
 
 
 def update_output(rel: str, **changes: Any) -> dict[str, Any]:
@@ -179,6 +206,9 @@ def delete_output(rel: str) -> None:
         lib = library_meta()
         if lib["videos"].pop(rel, None) is not None:
             util.write_json(LIBRARY_FILE, lib)
+        seen = _seen()
+        if seen["files"].pop(rel, None) is not None:
+            util.write_json(SEEN_FILE, seen)
     refresh_index()
 
 

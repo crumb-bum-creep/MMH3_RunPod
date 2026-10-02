@@ -12,6 +12,10 @@ family: fl2v (T2V/I2V), ref2v (R2V) or any. role: main or helper (helpers,
 like a motion LoRA, are loaded alongside the main file at the same strength
 times `scale`). At generation time `files_for(entry, family)` picks what to load.
 
+Entry-level `auto_install` (default true): false keeps a LoRA out of the boot
+sync. It is listed under Quick install in the LoRA screen and downloads with
+one tap (`install`). `uninstall` deletes its files but keeps the entry there.
+
 User checkpoints: /workspace/mmh3/data/checkpoints.json, merged into the
 base-checkpoint picker next to the stock model and Eros.
 """
@@ -40,11 +44,26 @@ _queue: list[tuple[str, dict[str, Any]]] = []
 
 
 def ensure_seeded() -> None:
+    seed = paths.IMAGE_CONFIG / "loras.seed.yaml"
     if not CATALOG.exists():
-        seed = paths.IMAGE_CONFIG / "loras.seed.yaml"
         if seed.exists():
             CATALOG.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(seed, CATALOG)
+        return
+    # A catalog copied before `auto_install` existed: take the seed's choice once per
+    # entry, so the quick-install LoRAs stop downloading on every boot.
+    seeded = {str(e.get("version_id")): e["auto_install"]
+              for e in (util.read_yaml(seed, {}) or {}).get("loras") or [] if "auto_install" in e}
+    with _lock:
+        items = catalog()
+        changed = False
+        for e in items:
+            vid = str(e.get("version_id"))
+            if "auto_install" not in e and vid in seeded:
+                e["auto_install"] = bool(seeded[vid])
+                changed = True
+        if changed:
+            _save(items)
 
 
 # --------------------------------------------------------------------------- catalog
@@ -70,6 +89,10 @@ def _save(items: list[dict[str, Any]]) -> None:
 
 def _key(e: dict[str, Any]) -> str:
     return str(e.get("version_id") or e.get("filename") or "")
+
+
+def auto_installs(e: dict[str, Any]) -> bool:
+    return e.get("auto_install", True) is not False
 
 
 def _disk(folder: Path) -> set[str]:
@@ -133,14 +156,16 @@ def listing() -> dict[str, Any]:
             known.add(f["name"])
             st = status.get(f"{e.get('version_id')}:{f.get('id')}") or status.get(str(e.get("version_id"))) or {}
             installed = f["name"] in disk
+            idle = ("queued" if auto_installs(e) else "available") if f.get("install", True) else "skipped"
             files.append({**f, "installed": installed,
-                          "state": "ready" if installed else st.get("state") or ("queued" if f.get("install", True) else "skipped"),
+                          "state": "ready" if installed else st.get("state") or idle,
                           "error": None if installed else st.get("error"),
                           "done": st.get("done"), "total": st.get("total")})
         families = sorted({f.get("family", "any") for f in files if f["installed"]})
         active = {fam: [{"name": f["name"], "role": f.get("role", "main"), "scale": float(f.get("scale", 1.0))}
                         for f in files_for(e, fam)] for fam in ("fl2v", "ref2v")}
         items.append({**{k: v for k, v in e.items() if k != "files"}, "key": _key(e), "files": files, "active": active,
+                      "auto_install": auto_installs(e),
                       "installed": any(f["installed"] for f in files),
                       "families": ["fl2v", "ref2v"] if "any" in families else families})
     for fn in sorted(disk - known):
@@ -167,7 +192,7 @@ def upsert(entry: dict[str, Any]) -> dict[str, Any]:
                 match["version_id"] = int(entry["version_id"])
             items.insert(0, match)
         for k in ("enabled", "recommended_strength", "nickname", "tags", "trigger_words", "notes",
-                  "filename", "model_id", "base_model", "version_name", "image", "files"):
+                  "filename", "model_id", "base_model", "version_name", "image", "files", "auto_install"):
             if k in entry and entry[k] is not None:
                 match[k] = entry[k]
         files = match.get("files")
@@ -191,6 +216,33 @@ def remove(key: str, delete_files: bool = False) -> None:
                 p.unlink(missing_ok=True)
 
 
+def install(key: str) -> dict[str, Any]:
+    """Download a catalog entry now, whatever its auto_install says (Quick install)."""
+    entry = next((e for e in catalog() if _key(e) == key), None)
+    if entry is None:
+        raise civitai.CivitaiError("that LoRA isn't in the catalog")
+    if not entry.get("version_id"):
+        raise civitai.CivitaiError("a local file has nothing to download")
+    if not entry.get("files") or any(f.get("id") is None for f in entry.get("files") or []):
+        _enqueue(("refresh", {**entry, "_download": True}))
+    else:
+        enqueue_entry(entry, force=True)
+    return entry
+
+
+def uninstall(key: str) -> dict[str, Any]:
+    """Delete an entry's files but keep it in the catalog, under Quick install."""
+    entry = next((e for e in catalog() if _key(e) == key), None)
+    if entry is None:
+        raise civitai.CivitaiError("that LoRA isn't in the catalog")
+    for f in _entry_files(entry):
+        p = (LORA_DIR / f["name"]).resolve()
+        if LORA_DIR.resolve() in p.parents:
+            p.unlink(missing_ok=True)
+        _set_status(f"{entry.get('version_id')}:{f.get('id')}", state=None, error=None, done=None)
+    return upsert({"key": key, "version_id": entry.get("version_id"), "auto_install": False})
+
+
 def add_version(version_id: int, file_ids: list[int] | None = None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     """Add a CivitAI LoRA version (all its model files, or just `file_ids`) and download them."""
     v = civitai.version(version_id)
@@ -209,7 +261,7 @@ def add_version(version_id: int, file_ids: list[int] | None = None, overrides: d
         "files": _merge_files(existing.get("files"), files),
         **(overrides or {}),
     })
-    enqueue_entry(entry)
+    enqueue_entry(entry, force=True)  # an explicit install from CivitAI always downloads
     return entry
 
 
@@ -358,15 +410,24 @@ def _work() -> None:
             util.setup_logging("loras").warning("download job failed: %s", exc)
 
 
-def enqueue_entry(entry: dict[str, Any]) -> None:
+def enqueue_entry(entry: dict[str, Any], force: bool = False) -> None:
+    """Queue an entry's missing files. A quick-install entry (auto_install false) is
+    only fetched when forced, or when some of its files are already on disk (you
+    ticked another file of a LoRA you installed)."""
     disk = _disk(LORA_DIR)
-    for f in _entry_files(entry):
+    files = _entry_files(entry)
+    if not (force or auto_installs(entry) or any(f["name"] in disk for f in files)):
+        return
+    for f in files:
         if f.get("install", True) and f["name"] not in disk and entry.get("version_id"):
             _enqueue(("lora", {"version_id": int(entry["version_id"]), "file": f}))
 
 
 def _refresh_entry(entry: dict[str, Any]) -> None:
-    """Old single-file entries: look up the version to learn file ids and extra files."""
+    """Old single-file entries: look up the version to learn file ids and extra files.
+
+    Quick-install entries get their details (files, preview image) without a download,
+    unless the refresh was queued by install()."""
     try:
         v = civitai.version(int(entry["version_id"]))
     except Exception as exc:
@@ -383,7 +444,7 @@ def _refresh_entry(entry: dict[str, Any]) -> None:
                       "base_model": v.get("base_model"), "version_name": v.get("name"),
                       "model_id": v.get("model_id"), "image": entry.get("image") or v.get("image"),
                       "trigger_words": entry.get("trigger_words") or v.get("trained_words") or []})
-    enqueue_entry(updated)
+    enqueue_entry(updated, force=bool(entry.get("_download")))
 
 
 def sync() -> bool:
