@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.2.0
+
+- **Legacy · Euler (R2V)**: Ref2V turbo v0.1 at 0.85, 4 steps, Euler + Beta 0.6/0.6, extra low-noise
+  passes 2 steps 0.8 → 0 linear, model-default shift. The v0.1 LoRA downloads with the core models
+  again. Create switches to this recipe when a video or audio reference is added and back when the
+  last one is removed. Picking another recipe by hand sticks.
+- **More → Recipes**: make your own recipes (any turbo LoRA for the mode, or none; steps, sampler,
+  scheduler, shift, extra passes, reference size), duplicate the built-ins, choose what Create
+  shows, what Compare renders (any two or more), the default, and the R2V video/audio recipe.
+  *Save as recipe* in the Tune drawer turns your tuning into one.
+- **Full settings**: every value a clip is sampled with (base model and file, turbo LoRA and file,
+  strength, steps, sampler, scheduler and its parameters, shift, extra passes, reference size,
+  output size), from Create before you queue, on queued jobs, and on every clip in the Library.
+- A family only waits for the turbo LoRA its recipe uses, so a LoRA still downloading never holds
+  up the other recipes.
+
 ## 2.1.0
 
 **Prompts, rewritten from MiniMax's official guides** (`VIDEO_PROMPT_WRITING_GUIDE_base_en.md` and

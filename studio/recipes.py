@@ -1,24 +1,74 @@
-"""Recipes (config/recipes.yaml) resolved into concrete sampling settings."""
+"""Recipes (config/recipes.yaml) resolved into concrete sampling settings.
+
+The image's recipes are layered with yours from /workspace/mmh3/config/recipes.yaml:
+
+  families:
+    ref2v:
+      recipes: {my_steady: {label: ..., lora: ..., steps: ..., ...}}   # your own
+      hidden: [upstream]          # not offered in Create (still resolvable)
+      compare: [balanced, legacy_euler]
+      default: balanced
+      av_recipe: legacy_euler     # R2V: switch to this when a reference has video/audio; null = never
+"""
 from __future__ import annotations
 
 import copy
+import re
+import threading
 from typing import Any
 
-from . import util
+from . import paths, util
 
 FAMILY_OF_MODE = {"t2v": "fl2v", "i2v": "fl2v", "r2v": "ref2v"}
+MODE_OF_FAMILY = {"fl2v": "t2v", "ref2v": "r2v"}
 
 # Fields a user may override per generation from the Advanced drawer.
 TUNABLE = {"strength", "steps", "sampler", "scheduler", "shift", "extend", "ref_image_size"}
 REF_IMAGE_SIZES = ("max", "match", "original")
+RECIPE_FIELDS = ("label", "note", "lora", "strength", "steps", "sampler", "scheduler", "shift", "extend", "ref_image_size")
+USER_FILE = paths.CONFIG / "recipes.yaml"
+_lock = threading.RLock()
 
 
 class RecipeError(ValueError):
     pass
 
 
+def _user() -> dict[str, Any]:
+    data = util.read_yaml(USER_FILE, {}) or {}
+    return data if isinstance(data.get("families"), dict) else {"families": {}}
+
+
+def turbo_models(family: str) -> dict[str, dict[str, Any]]:
+    """Turbo LoRAs a family's recipes can use: {model id: {label, file}}."""
+    models = util.image_yaml("models.yaml").get("models") or {}
+    return {mid: {"label": m.get("label") or mid, "file": m["file"]} for mid, m in models.items()
+            if m.get("role") == "turbo" and family in (m.get("used_by") or [])}
+
+
 def catalog() -> dict[str, Any]:
-    return util.image_yaml("recipes.yaml").get("families") or {}
+    """Every family's recipes (image + yours) and your choices, with built-ins marked."""
+    base = util.image_yaml("recipes.yaml").get("families") or {}
+    mine = _user()["families"]
+    out = {}
+    for fam, spec in base.items():
+        own = mine.get(fam) or {}
+        recipes = {rid: {**copy.deepcopy(r), "builtin": True} for rid, r in (spec.get("recipes") or {}).items()}
+        for rid, r in (own.get("recipes") or {}).items():
+            if rid not in recipes and isinstance(r, dict):
+                recipes[rid] = {**copy.deepcopy(r), "builtin": False}
+        hidden = [h for h in own.get("hidden") or [] if h in recipes]
+        default = own.get("default") if own.get("default") in recipes else spec.get("default")
+        compare = own["compare"] if isinstance(own.get("compare"), list) else spec.get("compare") or []
+        av = own["av_recipe"] if "av_recipe" in own else spec.get("av_recipe")
+        out[fam] = {
+            "default": default,
+            "compare": [c for c in compare if c in recipes],
+            "hidden": hidden,
+            "av_recipe": av if av in recipes else None,
+            "recipes": recipes,
+        }
+    return out
 
 
 def family_for(mode: str) -> str:
@@ -29,15 +79,109 @@ def family_for(mode: str) -> str:
 
 
 def public_catalog() -> dict[str, Any]:
-    """What the UI needs: per family, the ordered recipes with labels and notes."""
+    """What the UI needs: per family, the ordered recipes with labels and notes, your choices,
+    and the turbo LoRAs a recipe can use."""
     out = {}
     for fam, spec in catalog().items():
         out[fam] = {
-            "default": spec.get("default"),
-            "compare": spec.get("compare") or [],
-            "recipes": [{"id": rid, **copy.deepcopy(r)} for rid, r in (spec.get("recipes") or {}).items()],
+            "default": spec["default"],
+            "compare": spec["compare"],
+            "hidden": spec["hidden"],
+            "av_recipe": spec["av_recipe"],
+            "turbo": turbo_models(fam),
+            "recipes": [{"id": rid, **copy.deepcopy(r)} for rid, r in spec["recipes"].items()],
         }
     return out
+
+
+# --------------------------------------------------------------------------- your recipes and choices
+
+def _slug(label: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")[:32]
+    return f"my_{s or 'recipe'}"
+
+
+def save_recipe(family: str, fields: dict[str, Any], recipe_id: str | None = None) -> dict[str, Any]:
+    """Create or edit one of your recipes. Built-ins can't be edited (duplicate them instead)."""
+    if family not in MODE_OF_FAMILY:
+        raise RecipeError(f"unknown family: {family}")
+    r = {k: copy.deepcopy(fields[k]) for k in RECIPE_FIELDS if fields.get(k) not in (None, "")}
+    r["label"] = str(r.get("label") or "").strip()[:40]
+    if not r["label"]:
+        raise RecipeError("give the recipe a name")
+    r["note"] = str(r.get("note") or "").strip()[:200]
+    if r.get("lora") in ("none", "", None):
+        r["lora"] = None
+    elif r["lora"] not in turbo_models(family):
+        raise RecipeError("pick a turbo LoRA made for this mode, or none")
+    if r.get("shift") in ("default", "off"):
+        r.pop("shift")
+    if r.get("extend") in ("off", False, {}):
+        r.pop("extend")
+    check = {**r, "family": family}
+    validate(check)
+    for k in ("strength", "steps", "sampler", "scheduler", "shift", "extend", "ref_image_size"):
+        if k in check:
+            r[k] = check[k]
+    if family != "ref2v":
+        r.pop("ref_image_size", None)
+    with _lock:
+        data = _user()
+        fam = data["families"].setdefault(family, {})
+        mine = fam.setdefault("recipes", {})
+        builtins = (util.image_yaml("recipes.yaml").get("families") or {}).get(family, {}).get("recipes") or {}
+        if recipe_id and recipe_id in builtins:
+            raise RecipeError("built-in recipes can't be edited; duplicate it instead")
+        rid = recipe_id if recipe_id in mine else None
+        if rid is None:
+            rid, n = _slug(r["label"]), 2
+            while rid in mine or rid in builtins:
+                rid, n = f"{_slug(r['label'])}_{n}", n + 1
+        mine[rid] = r
+        util.write_yaml(USER_FILE, data)
+    return {"id": rid, **r, "builtin": False}
+
+
+def delete_recipe(family: str, recipe_id: str) -> None:
+    with _lock:
+        data = _user()
+        fam = data["families"].get(family) or {}
+        if recipe_id not in (fam.get("recipes") or {}):
+            raise RecipeError("only your own recipes can be deleted")
+        del fam["recipes"][recipe_id]
+        for key in ("hidden", "compare"):
+            if isinstance(fam.get(key), list):
+                fam[key] = [x for x in fam[key] if x != recipe_id]
+        for key in ("default", "av_recipe"):
+            if fam.get(key) == recipe_id:
+                fam.pop(key)
+        util.write_yaml(USER_FILE, data)
+
+
+def save_choices(family: str, choices: dict[str, Any]) -> dict[str, Any]:
+    """Which recipes Create shows, which Compare runs, the default, and the R2V audio/video switch."""
+    spec = catalog().get(family)
+    if spec is None:
+        raise RecipeError(f"unknown family: {family}")
+    ids = set(spec["recipes"])
+    hidden = [h for h in choices.get("hidden", spec["hidden"]) or [] if h in ids]
+    compare = [c for c in choices.get("compare", spec["compare"]) or [] if c in ids]
+    default = choices.get("default", spec["default"])
+    av = choices.get("av_recipe", spec["av_recipe"]) if family == "ref2v" else None
+    if default not in ids:
+        raise RecipeError("unknown default recipe")
+    if default in hidden:
+        raise RecipeError("the default recipe has to stay visible in Create")
+    if av is not None and av not in ids:
+        raise RecipeError("unknown recipe for video/audio references")
+    with _lock:
+        data = _user()
+        fam = data["families"].setdefault(family, {})
+        fam.update({"hidden": hidden, "compare": list(dict.fromkeys(compare)), "default": default})
+        if family == "ref2v":
+            fam["av_recipe"] = av
+        util.write_yaml(USER_FILE, data)
+    return public_catalog()[family]
 
 
 def resolve(mode: str, recipe_id: str | None = None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -48,6 +192,7 @@ def resolve(mode: str, recipe_id: str | None = None, overrides: dict[str, Any] |
     if rid not in recipes:
         raise RecipeError(f"unknown recipe '{rid}' for {mode}")
     r = copy.deepcopy(recipes[rid])
+    r.pop("builtin", None)
     r["id"] = rid
     r["family"] = fam
     changed = []
@@ -67,6 +212,8 @@ def resolve(mode: str, recipe_id: str | None = None, overrides: dict[str, Any] |
 
 
 def validate(r: dict[str, Any]) -> None:
+    if r.get("lora") is not None and r["lora"] not in turbo_models(r["family"]):
+        raise RecipeError(f"unknown turbo LoRA '{r['lora']}' for this mode")
     try:
         r["strength"] = float(r.get("strength", 1.0))
         r["steps"] = int(r.get("steps", 8))

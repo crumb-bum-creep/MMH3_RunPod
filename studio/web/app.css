@@ -425,3 +425,18 @@ details.more[open] > summary svg { transform: rotate(90deg); }
 .lora-part > .faint { width: 48px; font-size: 12px; }
 .lora-part input[type=range] { flex: 1; }
 .lora-part .val { width: 36px; text-align: right; font-size: 13px; }
+
+/* recipes */
+.list.recipes > .rrow { display: block; padding: 12px 14px; }
+.rrow .rinfo { display: block; width: 100%; background: none; border: 0; padding: 0; text-align: left; color: inherit; cursor: pointer; }
+.rrow .rinfo h3 { font-size: 15px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rrow .rinfo .sub { margin-top: 2px; }
+.rtoggles { display: flex; gap: 18px; margin-top: 10px; }
+.rt { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--ink-2); cursor: pointer; }
+.rt .switch { width: 42px; height: 26px; }
+.rt .switch span::after { width: 18px; height: 18px; }
+.rt .switch input:checked + span::after { transform: translateX(16px); }
+.rt .switch input:disabled + span { opacity: .45; }
+.kv.cfg dd .faint { font-size: 12px; }
+.cfg-box { margin: 4px 0 8px; }
+.cfg-box .kv { margin-top: 0; }

@@ -70,11 +70,16 @@ shift and extra low-noise passes. The graph never gets rewired.
 | R2V | **Balanced** (default) | Ref2V turbo 8-step v1.0 768p, strength 1.0, shift 12/3. Your previous known-good setting. |
 | | Balanced · shift 6 | Same at 6/3, like every other 768p turbo LoRA. Unpublished for Ref2V, so run a Compare. |
 | | Upstream v9 | Strength 0.85, default shift, extra passes. |
+| | Legacy · Euler | Ref2V turbo v0.1 at 0.85, 4 steps, Euler + Beta (0.6/0.6), extra passes 0.8 → 0, default shift. The low-drift baseline from the old build. Create switches to it automatically when you add a video or audio reference, and back when you remove it. |
 
-There is intentionally no 4-step R2V recipe. The only 4-step Ref2V LoRA is the v0.1 preview,
-which paired with `seeds_2` was what drifted the camera off-subject. Upstream dropped it too.
-Every setting can be tuned per job under *Tune this recipe*, and every output records the
-resolved recipe.
+Every setting can be tuned per job under *Tune this recipe*, and *Full settings* shows exactly
+what will be sent to ComfyUI. Every output records the resolved recipe (Library → open a clip →
+Settings used).
+
+**More → Recipes** is where you make your own (from scratch, by duplicating one, or with *Save as
+recipe* from the Tune drawer), choose which recipes Create offers, which ones Compare renders,
+the default, and which recipe R2V switches to for video/audio references. Your recipes and
+choices live in `/workspace/mmh3/config/recipes.yaml`, on top of the image's.
 
 ## Memory: why RAM stays flat now
 

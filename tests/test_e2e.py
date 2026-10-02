@@ -203,3 +203,14 @@ def test_tweak_and_seen_endpoints(stack):
     assert "new" in lib and all("new" in i for i in lib["items"])
     stack.call("/api/outputs/seen", {"all": True})
     assert stack.call("/api/outputs")["new"] == 0
+
+
+def test_compare_runs_the_recipes_you_ticked(stack):
+    refs = [{"kind": "image", "file": "mmh3/2026-09/portrait_1.png"}]
+    stack.call("/api/recipes/ref2v/choices", {"compare": ["balanced"]}, method="PUT")
+    assert stack.call("/api/generate", {"mode": "r2v", "prompt": PROMPT, "refs": refs, "compare": True})["http"] == 400
+    stack.call("/api/recipes/ref2v/choices", {"compare": ["balanced", "legacy_euler"]}, method="PUT")
+    jobs = stack.wait_done(stack.call("/api/generate", {"mode": "r2v", "prompt": PROMPT, "refs": refs, "compare": True})["jobs"])
+    assert sorted(j["recipe_id"] for j in jobs) == ["balanced", "legacy_euler"] and all(j["status"] == "done" for j in jobs)
+    legacy = next(j for j in jobs if j["recipe_id"] == "legacy_euler")
+    assert (legacy["recipe"]["scheduler"], legacy["recipe"]["steps"], legacy["recipe"]["lora"]) == ("beta", 4, "ref2v_turbo_4step_v01")

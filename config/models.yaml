@@ -7,6 +7,8 @@
 #   eros  - optional base checkpoint; downloaded when enabled in System or with
 #           MMH3_DOWNLOAD_EROS=true
 # used_by: which generation families need the file (fl2v = T2V/I2V, ref2v = R2V)
+# role: turbo marks a turbo LoRA. A family only waits for the turbo LoRA its
+#       recipe uses, so a new one downloading never blocks the others.
 
 models:
   video_vae:
@@ -63,6 +65,8 @@ models:
     path: minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
     group: core
     used_by: [fl2v]
+    role: turbo
+    label: FL2V turbo 8-step v1.0 768p
     min_mb: 500
 
   fl2v_turbo_4step:
@@ -71,6 +75,8 @@ models:
     path: minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors
     group: core
     used_by: [fl2v]
+    role: turbo
+    label: FL2V turbo 4-step v1.2 768p
     min_mb: 500
 
   ref2v_turbo_8step:
@@ -79,7 +85,19 @@ models:
     path: minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
     group: core
     used_by: [ref2v]
+    role: turbo
+    label: Ref2V turbo 8-step v1.0 768p
     min_mb: 500
+
+  ref2v_turbo_4step_v01:
+    file: loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
+    hf: lightx2v/Minimax-h3-Turbo
+    path: minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
+    group: core
+    used_by: [ref2v]
+    role: turbo
+    label: Ref2V turbo 4-step v0.1
+    min_mb: 1000
 
   eros_beta5_int8:
     file: diffusion_models/10Eros_Max_h3_hybrid_beta5_int8.safetensors

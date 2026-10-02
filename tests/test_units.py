@@ -18,7 +18,9 @@ def test_every_recipe_resolves_and_names_real_models():
             resolved = recipes.resolve(mode, rid)
             assert r["lora"] in models, rid
             assert fam in models[r["lora"]]["used_by"], f"{rid} uses a LoRA for the other family"
+            assert models[r["lora"]].get("role") == "turbo", rid
             assert resolved["steps"] >= 1
+        assert spec["av_recipe"] is None or spec["av_recipe"] in spec["recipes"]
 
 
 def test_known_good_defaults_are_preserved():
@@ -30,9 +32,56 @@ def test_known_good_defaults_are_preserved():
     assert r2["sampler"] == "euler"  # never seeds_2: that recipe drifted the camera
 
 
-def test_no_4step_r2v_recipe():
-    for rid, r in recipes.catalog()["ref2v"]["recipes"].items():
-        assert r["steps"] >= 8, f"{rid}: the only 4-step Ref2V LoRA is the v0.1 preview that drifted"
+def test_legacy_euler_is_the_low_drift_baseline():
+    """v0.1 @ 0.85, 4 steps, Euler + Beta, extend 2 steps 0.8 -> 0 linear, model-default shift.
+    Opt-in (and the audio/video recipe), never the R2V default."""
+    r = recipes.resolve("r2v", "legacy_euler")
+    assert (r["lora"], r["strength"], r["steps"], r["sampler"], r["scheduler"]) == (
+        "ref2v_turbo_4step_v01", 0.85, 4, "euler", "beta")
+    assert r["extend"] == {"steps": 2, "start": 0.8, "end": 0.0, "spacing": "linear"} and "shift" not in r
+    cat = recipes.catalog()["ref2v"]
+    assert cat["default"] == "balanced" and cat["av_recipe"] == "legacy_euler"
+
+
+def test_your_recipes_and_choices(workspace):
+    recipes.USER_FILE.unlink(missing_ok=True)
+    try:
+        mine = recipes.save_recipe("ref2v", {"label": "Base 20", "lora": "none", "steps": 20, "sampler": "euler",
+                                             "scheduler": "simple", "shift": "default", "extend": "off",
+                                             "ref_image_size": "match"})
+        assert mine["id"] == "my_base_20" and mine["lora"] is None
+        r = recipes.resolve("r2v", "my_base_20")
+        assert r["steps"] == 20 and r["lora"] is None and "shift" not in r and "extend" not in r
+        again = recipes.save_recipe("ref2v", {"label": "Base 20", "steps": 20, "lora": "ref2v_turbo_8step"})
+        assert again["id"] == "my_base_20_2"  # a new recipe never overwrites another
+        with pytest.raises(recipes.RecipeError):
+            recipes.save_recipe("ref2v", {"label": "x", "lora": "fl2v_turbo_8step"})  # other family's LoRA
+        with pytest.raises(recipes.RecipeError):
+            recipes.save_recipe("ref2v", {"label": "x", "lora": "none"}, "balanced")  # built-ins are read-only
+        out = recipes.save_choices("ref2v", {"compare": ["balanced", "legacy_euler"], "hidden": ["upstream", "nope"],
+                                             "default": "my_base_20", "av_recipe": None})
+        assert out["compare"] == ["balanced", "legacy_euler"] and out["hidden"] == ["upstream"]
+        assert out["default"] == "my_base_20" and out["av_recipe"] is None
+        with pytest.raises(recipes.RecipeError):
+            recipes.save_choices("ref2v", {"hidden": ["my_base_20"]})  # the default stays visible
+        assert recipes.resolve("r2v", "upstream")["id"] == "upstream"  # hidden still resolves (old outputs, queue)
+        recipes.delete_recipe("ref2v", "my_base_20")
+        cat = recipes.catalog()["ref2v"]
+        assert "my_base_20" not in cat["recipes"] and cat["default"] == "balanced"
+        with pytest.raises(recipes.RecipeError):
+            recipes.delete_recipe("ref2v", "balanced")
+    finally:
+        recipes.USER_FILE.unlink(missing_ok=True)
+
+
+def test_a_family_waits_only_for_its_recipes_turbo(workspace, monkeypatch):
+    from studio import provision
+
+    monkeypatch.setattr(provision, "is_present", lambda e: "turbo_4step_v0.1" not in e["file"])
+    _, missing = provision.family_ready("ref2v", turbo="ref2v_turbo_8step")
+    assert "ref2v_turbo_4step_v01" not in missing  # still downloading, but this recipe doesn't use it
+    ready, missing = provision.family_ready("ref2v", turbo="ref2v_turbo_4step_v01")
+    assert not ready and "ref2v_turbo_4step_v01" in missing
 
 
 @pytest.mark.parametrize("bad", [{"steps": 0}, {"strength": 5}, {"shift": [1]}, {"ref_image_size": "huge"}])

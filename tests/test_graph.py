@@ -183,3 +183,11 @@ def test_reference_tags_match_refpack():
     theirs = {t.file: (t.tag if t.audio_tag is None else f"{t.tag} {t.audio_tag}") for t in tagged}
     ours = dict(zip([r["file"] for r in refs], graph.reference_tags(refs)))
     assert ours == theirs
+
+
+def test_recipe_without_turbo_skips_the_lora():
+    r = recipes.resolve("t2v", "balanced")
+    r["lora"] = None
+    g = graph.build(job(recipe=r), {**FILES, "turbo": ""})
+    assert not [n for n in by_class(g, "LoraLoaderModelOnly") if n[1]["_meta"]["title"].startswith("Turbo")]
+    one(g, "SamplerCustomAdvanced")
