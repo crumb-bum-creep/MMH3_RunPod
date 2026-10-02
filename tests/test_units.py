@@ -32,6 +32,11 @@ def test_known_good_defaults_are_preserved():
     assert r2["sampler"] == "euler"  # never seeds_2: that recipe drifted the camera
 
 
+def test_retired_original_ref_size_falls_back_to_max():
+    assert recipes.resolve("r2v", "balanced", {"ref_image_size": "original"})["ref_image_size"] == "max"
+    assert set(recipes.REF_IMAGE_SIZES) == {"max", "match"}
+
+
 def test_legacy_euler_is_the_low_drift_baseline():
     """v0.1 @ 0.85, 4 steps, Euler + Beta, extend 2 steps 0.8 -> 0 linear, model-default shift.
     Opt-in (and the audio/video recipe), never the R2V default."""

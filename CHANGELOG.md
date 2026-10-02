@@ -15,6 +15,8 @@
   output size), from Create before you queue, on queued jobs, and on every clip in the Library.
 - A family only waits for the turbo LoRA its recipe uses, so a LoRA still downloading never holds
   up the other recipes.
+- Removed the "original" reference size from Tune. ComfyUI's R2V node only accepts max or match,
+  so jobs with it failed; a saved "original" now runs as max.
 
 ## 2.1.0
 

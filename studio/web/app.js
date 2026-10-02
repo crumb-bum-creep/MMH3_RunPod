@@ -439,7 +439,7 @@ function effectiveRecipe() {
 }
 
 const SCHED_DETAIL = { beta: "beta (alpha 0.6, beta 0.6)" };
-const REF_SIZE_DETAIL = { max: "max: full detail, short edge up to 2048 px", match: "match: scaled to the clip's pixel area", original: "original" };
+const REF_SIZE_DETAIL = { max: "max: full detail, short edge up to 2048 px", match: "match: scaled to the clip's pixel area" };
 
 function recipeSummary(r) {
   return [`${r.steps} steps`, `${r.sampler}/${r.scheduler}`, r.lora ? `turbo ${Number(r.strength).toFixed(2)}` : "no turbo",
@@ -597,7 +597,7 @@ function advancedBlock(r) {
       <div><label class="field">Sigma shift</label><select id="advShiftMode"><option value="recipe" ${shiftMode === "recipe" ? "selected" : ""}>Recipe (${r.shift ? r.shift.join(" / ") : "default 12 / 3"})</option><option value="custom" ${shiftMode === "custom" ? "selected" : ""}>Custom</option><option value="off" ${shiftMode === "off" ? "selected" : ""}>ComfyUI default</option></select></div>
       <div><label class="field">Extra low-noise passes</label><select data-adv="extend"><option value="" ${a.extend === undefined ? "selected" : ""}>Recipe (${r.extend ? "on" : "off"})</option><option value="on" ${a.extend === "on" ? "selected" : ""}>On</option><option value="off" ${a.extend === "off" ? "selected" : ""}>Off</option></select></div>
       ${shiftMode === "custom" ? `<div><label class="field">Shift video</label><input type="number" step="0.5" id="shiftV" value="${esc(sv[0])}"></div><div><label class="field">Shift audio</label><input type="number" step="0.5" id="shiftA" value="${esc(sv[1])}"></div>` : ""}
-      ${FAMILY[F.mode] === "ref2v" ? `<div><label class="field">Reference size</label><select data-adv="ref_image_size">${["max", "match", "original"].map((o) => `<option ${o === (a.ref_image_size ?? r.ref_image_size) ? "selected" : ""}>${o}</option>`).join("")}</select></div>` : ""}
+      ${FAMILY[F.mode] === "ref2v" ? `<div><label class="field">Reference size</label><select data-adv="ref_image_size">${["max", "match"].map((o) => `<option ${o === (a.ref_image_size ?? r.ref_image_size) ? "selected" : ""}>${o}</option>`).join("")}</select></div>` : ""}
     </div>
     <div class="row" style="margin-top:10px"><span class="grow note">Saved with every output, so you can compare later.</span><button class="btn small ghost" id="advSaveRecipe" title="Save these values as your own recipe">Save as recipe</button><button class="btn small ghost" id="advReset" ${any ? "" : "disabled"}>Reset</button></div>
   </details>`;
@@ -760,6 +760,7 @@ async function addReference(a) {
 
 function overridesPayload() {
   const o = {}; const a = F.adv;
+  if (a.ref_image_size === "original") delete a.ref_image_size;  // retired option; ComfyUI never accepted it
   for (const k of ["strength", "steps", "sampler", "scheduler", "ref_image_size"]) if (a[k] !== undefined) o[k] = a[k];
   if (a.shift !== undefined) o.shift = a.shift;
   if (a.extend === "on") o.extend = { steps: 2, start: 0.8, end: 0, spacing: "linear" };

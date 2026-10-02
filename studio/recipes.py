@@ -24,7 +24,7 @@ MODE_OF_FAMILY = {"fl2v": "t2v", "ref2v": "r2v"}
 
 # Fields a user may override per generation from the Advanced drawer.
 TUNABLE = {"strength", "steps", "sampler", "scheduler", "shift", "extend", "ref_image_size"}
-REF_IMAGE_SIZES = ("max", "match", "original")
+REF_IMAGE_SIZES = ("max", "match")  # what ComfyUI's MiniMaxH3ReferenceToVideo accepts
 RECIPE_FIELDS = ("label", "note", "lora", "strength", "steps", "sampler", "scheduler", "shift", "extend", "ref_image_size")
 USER_FILE = paths.CONFIG / "recipes.yaml"
 _lock = threading.RLock()
@@ -244,6 +244,8 @@ def validate(r: dict[str, Any]) -> None:
         }
     if r["family"] == "ref2v":
         r["ref_image_size"] = str(r.get("ref_image_size") or "max")
+        if r["ref_image_size"] == "original":  # an old Studio option ComfyUI never accepted
+            r["ref_image_size"] = "max"
         if r["ref_image_size"] not in REF_IMAGE_SIZES:
             raise RecipeError(f"ref_image_size must be one of {REF_IMAGE_SIZES}")
 
