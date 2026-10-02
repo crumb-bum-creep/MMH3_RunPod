@@ -1,0 +1,30 @@
+/* v4: Gemini prompt edit, LoRA quick install, prompt defaults */
+.prompt-edit-v4{margin-top:6px}
+.prompt-edit-row-v4{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px}
+.prompt-edit-row-v4 input{min-height:40px;padding:8px 11px;font-size:14px;border-style:dashed}
+.prompt-edit-row-v4 input:focus{border-style:solid;border-color:var(--accent);outline:none}
+.prompt-edit-row-v4 button{min-height:40px;min-width:64px}
+.prompt-edit-status-v4{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:0}
+.prompt-edit-status-v4 .muted,.prompt-edit-status-v4 .message{margin-top:4px;font-size:12px}
+.prompt-edit-status-v4 .small{min-height:30px;padding:3px 9px;margin-top:4px}
+.prompt-edit-status-v4:not(:has(:not(:empty):not([hidden]))){display:none}
+@keyframes prompt-flash-v4{from{border-color:var(--accent);box-shadow:0 0 0 3px rgba(124,156,255,.25)}to{border-color:var(--line);box-shadow:none}}
+.prompt-flash-v4{animation:prompt-flash-v4 1.2s ease-out}
+
+.lora-quick-v4{margin-top:12px;padding:0;border:1px solid var(--line);border-radius:11px;background:var(--card2)}
+.lora-quick-v4>summary{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:10px;list-style:none}
+.lora-quick-v4>summary::-webkit-details-marker{display:none}
+.lora-quick-v4>summary::before{content:"▸";color:var(--muted);transition:transform .15s}
+.lora-quick-v4[open]>summary::before{transform:rotate(90deg)}
+.lora-quick-hint-v4{flex-basis:100%;font-size:11px;margin-left:16px}
+#loraQuickList{padding:0 10px 10px}
+#loraQuickList>*+*{margin-top:5px}
+.lora-quick-row-v4{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:7px 8px;border:1px solid var(--line);border-radius:9px;background:var(--card)}
+.lora-quick-main-v4{min-width:0}
+.lora-quick-main-v4 strong{font-size:14px;line-height:1.25;word-break:break-word;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.lora-quick-meta-v4{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-top:3px;font-size:11px}
+.lora-quick-meta-v4 .muted{font-size:11px}
+.lora-quick-row-v4 .message{margin-top:4px;font-size:11px}
+.lora-install-v4{min-width:94px}
+
+.prompt-actions-v4{display:flex;gap:6px}

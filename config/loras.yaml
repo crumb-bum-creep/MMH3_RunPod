@@ -2,6 +2,10 @@
 # Bootstrap copies this file to /workspace/mmh3/config/loras.yaml only when
 # that persistent file does not already exist. Edits made in the 7860 UI
 # therefore survive later image upgrades and are never overwritten by this seed.
+#
+# Entries are install-on-demand: startup only indexes them, and any that are not
+# on disk yet show up under LoRAs → Quick install in the phone UI. Add
+# `auto_download: true` to an entry to have it downloaded at every startup.
 loras:
 - version_id: 3224980
   enabled: true

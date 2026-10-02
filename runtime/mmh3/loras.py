@@ -5,7 +5,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 import requests
@@ -29,17 +29,38 @@ def _with_token(url: str, token: str | None) -> str:
     return urlunsplit((p.scheme, p.netloc, p.path, urlencode(q), p.fragment))
 
 
-def _version_ids(cfg: dict[str, Any]) -> list[int]:
+def _env_version_ids() -> list[int]:
     ids: list[int] = []
-    for item in cfg.get("loras", []) or []:
-        if item and item.get("enabled", True) and item.get("version_id"):
-            ids.append(int(item["version_id"]))
     for env_name in ("MMH3_LORA_VERSION_IDS", "LORAS_IDS_TO_DOWNLOAD", "CIVITAI_LORAS"):
         raw = os.environ.get(env_name, "")
         for part in re.split(r"[,;\s]+", raw.strip()):
             if part.isdigit():
                 ids.append(int(part))
+    return ids
+
+
+def _version_ids(cfg: dict[str, Any]) -> list[int]:
+    ids: list[int] = []
+    for item in cfg.get("loras", []) or []:
+        if item and item.get("enabled", True) and item.get("version_id"):
+            ids.append(int(item["version_id"]))
+    ids.extend(_env_version_ids())
     return list(dict.fromkeys(ids))
+
+
+def _auto_download_ids(cfg: dict[str, Any]) -> set[int]:
+    """Version IDs that may download without an explicit install request.
+
+    Catalog entries are install-on-demand by default: startup only indexes
+    them, and the phone UI offers missing ones under Quick install. Entries
+    marked ``auto_download: true`` and IDs passed through the legacy env vars
+    keep the old download-at-startup behaviour.
+    """
+    ids = set(_env_version_ids())
+    for item in cfg.get("loras", []) or []:
+        if item and item.get("version_id") and item.get("auto_download") is True:
+            ids.add(int(item["version_id"]))
+    return ids
 
 
 def _overrides(cfg: dict[str, Any]) -> dict[int, dict[str, Any]]:
@@ -57,10 +78,17 @@ def _workers() -> int:
         return 3
 
 
-def sync_loras(config_path: Path) -> dict[str, Any]:
+def sync_loras(config_path: Path, install_ids: Iterable[int] | None = None) -> dict[str, Any]:
+    """Index managed LoRAs and download the ones that are allowed to download.
+
+    ``install_ids`` are explicit install requests from the UI. Anything else
+    that is missing on disk is reported with ``status: "available"`` instead of
+    being fetched from CivitAI.
+    """
     cfg = load_yaml(config_path, {}) or {}
     version_ids = _version_ids(cfg)
     overrides = _overrides(cfg)
+    downloadable = _auto_download_ids(cfg) | {int(x) for x in (install_ids or [])}
     token = os.environ.get("CIVITAI_TOKEN") or os.environ.get("civitai_token") or None
     root = COMFY_PERSIST / "models" / "loras"
     root.mkdir(parents=True, exist_ok=True)
@@ -81,7 +109,8 @@ def sync_loras(config_path: Path) -> dict[str, Any]:
         # not make a CivitAI API request just to rediscover metadata we already
         # persisted. Merge the editable YAML fields over the prior catalog so
         # UI edits take effect immediately and startup remains network-free.
-        configured_name = str(override.get("filename") or "").strip()
+        prior_entry = existing_by_id.get(vid, {})
+        configured_name = str(override.get("filename") or prior_entry.get("filename") or "").strip()
         if configured_name:
             filename = _safe_filename(configured_name)
             dest = root / filename
@@ -105,6 +134,33 @@ def sync_loras(config_path: Path) -> dict[str, Any]:
                     "status": "ready",
                     "metadata_source": "persistent",
                 }
+
+        def not_installed(status: str, error: str | None = None) -> dict[str, Any]:
+            # Catalog-only view of an entry whose weights are not on disk.
+            prior = existing_by_id.get(vid, {})
+            def known(key: str, fallback: Any) -> Any:
+                return override[key] if key in override else prior.get(key, fallback)
+            name = configured_name and _safe_filename(configured_name)
+            row = {
+                "version_id": vid,
+                "model_id": prior.get("model_id"),
+                "model_name": prior.get("model_name"),
+                "version_name": prior.get("version_name"),
+                "nickname": known("nickname", prior.get("model_name") or name or f"CivitAI {vid}"),
+                "filename": name or None,
+                "trigger_words": known("trigger_words", []),
+                "recommended_strength": known("recommended_strength", 1.0),
+                "notes": known("notes", []),
+                "tags": known("tags", []),
+                "managed": True,
+                "status": status,
+            }
+            if error:
+                row["error"] = error
+            return row
+
+        if vid not in downloadable:
+            return not_installed("available")
 
         session = requests.Session()
         if token:
@@ -149,8 +205,14 @@ def sync_loras(config_path: Path) -> dict[str, Any]:
                 "managed": True,
                 "status": "ready",
             }
+        except requests.HTTPError as exc:
+            code = exc.response.status_code if exc.response is not None else "?"
+            hint = " (check CIVITAI_TOKEN)" if code in (401, 403) else ""
+            return not_installed("error", f"CivitAI returned HTTP {code}{hint}")
+        except requests.RequestException as exc:
+            return not_installed("error", f"Could not reach CivitAI: {type(exc).__name__}")
         except Exception as exc:
-            return {"version_id": vid, "managed": True, "status": "error", "error": repr(exc)}
+            return not_installed("error", f"{type(exc).__name__}: {exc}"[:300])
         finally:
             session.close()
 

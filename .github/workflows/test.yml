@@ -28,6 +28,7 @@ jobs:
       - run: node --check services/phone-ui/static/app.js
       - run: node --check services/phone-ui/static/library-v2.js
       - run: node --check services/phone-ui/static/features-v3.js
+      - run: node --check services/phone-ui/static/features-v4.js
       - run: |
           python - <<'PY'
           import json, pathlib

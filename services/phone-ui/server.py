@@ -1027,7 +1027,7 @@ async def api_lora_config_upsert(request: web.Request) -> web.Response:
 
     allowed = {
         "enabled", "nickname", "filename", "recommended_strength",
-        "trigger_words", "notes", "tags",
+        "trigger_words", "notes", "tags", "auto_download",
     }
     for key in allowed:
         if key in body:

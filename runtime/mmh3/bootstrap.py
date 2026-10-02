@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
+import time
+
+import yaml
 
 from .common import (
     CONFIG_ROOT,
@@ -20,6 +24,51 @@ from .comfy import configure_persistent_paths
 from .models import local_model_progress, phase_ready
 
 
+# sha256 of every auto-prompt default this image has previously shipped
+# (stripped text). A persistent prompt matching one of these was never edited
+# by the user, so it is safe to replace with the current default.
+SHIPPED_PROMPT_SHA256 = {
+    "t2v_auto": {"4ff6ce0e92e98a340fee53f400900e8fd6e732900e51b0816cc99c9bde0e9cee"},
+    "i2v_auto": {"2056c438d624c8685e91f3dd6b2d210f55aefc7fd8b01069b470c76d5f9a540c"},
+    "r2v_auto": {"25808412e4d07d476e1f8b057ec1daac94ce1c568fbea6071a4ae05001d10708"},
+}
+
+
+def _prompt_sha(text: str) -> str:
+    return hashlib.sha256(str(text or "").strip().encode("utf-8")).hexdigest()
+
+
+def upgrade_default_prompts() -> list[str]:
+    """Move unedited persistent auto prompts to the image's current defaults.
+
+    Prompts the user customised in the UI are left untouched (the System tab
+    offers a "Load defaults" button for those). The previous file is kept as a
+    timestamped backup whenever something changes.
+    """
+    src = IMAGE_ROOT / "config" / "system_prompts.yaml"
+    dst = CONFIG_ROOT / "system_prompts.yaml"
+    if not src.exists() or not dst.exists():
+        return []
+    defaults = (load_yaml(src, {}) or {}).get("prompts") or {}
+    current_cfg = load_yaml(dst, {}) or {}
+    current = dict(current_cfg.get("prompts") or {})
+    upgraded = []
+    for key, text in defaults.items():
+        old = current.get(key)
+        if old is None or (
+            _prompt_sha(old) != _prompt_sha(text) and _prompt_sha(old) in SHIPPED_PROMPT_SHA256.get(key, set())
+        ):
+            current[key] = text
+            upgraded.append(key)
+    if upgraded:
+        shutil.copy2(dst, dst.with_name(f"system_prompts.yaml.bak-{int(time.time())}"))
+        dst.write_text(
+            yaml.safe_dump({**current_cfg, "prompts": current}, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+    return upgraded
+
+
 def copy_default_configs() -> None:
     # User-editable configuration is initialized once and then survives image upgrades.
     src = IMAGE_ROOT / "config"
@@ -29,6 +78,11 @@ def copy_default_configs() -> None:
         dst = CONFIG_ROOT / name
         if p.exists() and not dst.exists():
             shutil.copy2(p, dst)
+    try:
+        upgrade_default_prompts()
+    except Exception:
+        # A malformed user prompt file must never block boot.
+        pass
 
 
 def install_workflows() -> list[str]:

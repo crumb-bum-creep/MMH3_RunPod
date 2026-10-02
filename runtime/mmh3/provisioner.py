@@ -127,7 +127,7 @@ def run() -> int:
                 stage="loras",
                 core_ready=core_ready,
                 accelerator_ready=accelerator_ready,
-                message="Checking/downloading user-managed LoRAs",
+                message="Indexing user-managed LoRAs (only auto_download entries download at startup)",
             )
             lora_results = sync_loras(CONFIG_ROOT / "loras.yaml")
             _state(

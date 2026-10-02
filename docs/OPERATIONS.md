@@ -92,7 +92,27 @@ Reads:
 /workspace/mmh3/config/loras.yaml
 ```
 
-plus optional `MMH3_LORA_VERSION_IDS`, then synchronizes CivitAI LoRAs and refreshes the UI catalog.
+plus optional `MMH3_LORA_VERSION_IDS`, then refreshes the UI catalog.
+
+Catalog entries are **install-on-demand**: startup and `sync-loras` only index
+them. Anything not on disk yet appears in the phone UI under
+**LoRAs → Quick install**, where one tap downloads it in the background.
+Downloads at startup still happen for IDs in `MMH3_LORA_VERSION_IDS` (and its
+legacy aliases) and for entries marked `auto_download: true` in `loras.yaml`.
+
+## Phone UI prompt tools
+
+- **Auto system prompts** follow MiniMax's official H3 prompt-writing guides
+  (base guide for T2V/I2V, full-reference guide for R2V). On boot, a persistent
+  prompt that still matches a previously shipped default is upgraded and the
+  old file is kept as `system_prompts.yaml.bak-<timestamp>`; prompts you edited
+  are left alone. **System → Load defaults** pulls the current defaults into
+  the editor (tap Save to apply).
+- **Edit with Gemini**: the box under the prompt sends the current text and
+  your change request to OpenRouter (`OPENROUTER_API_KEY`). The model defaults
+  to `google/gemini-3-flash-preview`; override with `MMH3_PROMPT_EDIT_MODEL`.
+  **Outputs → Remix prompt** loads the exact prompt a video was made from as a
+  Custom prompt so you can describe a change and re-queue it.
 
 ## Memory policy
 

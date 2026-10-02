@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from aiohttp import web
+from aiohttp import ClientError, ClientTimeout, web
 
 try:
     import server_legacy as base
@@ -17,7 +17,7 @@ except ImportError:  # development/test checkout before runtime overlay
 
 import output_indexer
 
-APP_VERSION = "0.9.0-mmH3-profiles-resilient-provisioning"
+APP_VERSION = "0.10.0-mmH3-gallery-nav-prompt-edit"
 LIBRARY_FILE = base.DATA_ROOT / "output_library.json"
 INDEX_FILE = output_indexer.INDEX_FILE
 _real_free_memory = base.comfy.free_memory
@@ -37,6 +37,10 @@ FL2V_BALANCED = "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
 REF2V_FAST = "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
 REF2V_BALANCED = "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
 
+PROMPT_EDIT_MODEL = os.environ.get("MMH3_PROMPT_EDIT_MODEL", "google/gemini-3-flash-preview").strip()
+OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+SEEN_LIMIT = 5000
+
 
 def _load_library() -> dict[str, Any]:
     value = base._load_json(LIBRARY_FILE, {})
@@ -44,12 +48,33 @@ def _load_library() -> dict[str, Any]:
         value = {}
     groups = value.get("groups") if isinstance(value.get("groups"), list) else []
     videos = value.get("videos") if isinstance(value.get("videos"), dict) else {}
+    seen = value.get("seen") if isinstance(value.get("seen"), dict) else {}
+    try:
+        baseline = float(value.get("seen_baseline") or 0)
+    except (TypeError, ValueError):
+        baseline = 0.0
     return {
         "version": 1,
         "groups": groups,
         "videos": videos,
+        "seen": seen,
+        "seen_baseline": baseline,
         "updated_at": float(value.get("updated_at") or 0),
     }
+
+
+def _library_with_baseline() -> dict[str, Any]:
+    """Load the library, establishing the "new video" baseline on first use.
+
+    Videos that already existed when unwatched tracking was introduced count
+    as seen, so the gallery does not light up every old output as NEW.
+    """
+    library = _load_library()
+    if not library["seen_baseline"]:
+        library["seen_baseline"] = time.time()
+        library["updated_at"] = time.time()
+        base._save_json(LIBRARY_FILE, library)
+    return library
 
 
 def _clean_library(body: Any) -> dict[str, Any]:
@@ -306,6 +331,17 @@ def _next_node_id(graph: dict[str, Any], prefix: str) -> str:
     return candidate
 
 
+def _effective_seconds(duration: Any) -> float:
+    """Clip length after the workflows' frame rounding (24 fps, 17n+5 frames)."""
+    try:
+        seconds = float(duration or 5)
+    except (TypeError, ValueError):
+        seconds = 5.0
+    frames = max(5, round(seconds * 24))
+    frames += (5 - frames % 17) % 17
+    return frames / 24
+
+
 def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """Apply MMH3 v3 queue-time features on top of the d2103 workflow patcher."""
     graph, record = _base_patch_workflow(payload)
@@ -341,9 +377,17 @@ def patch_workflow_v3(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str
 
         # Auto I2V should let the prompt writer see both endpoints, not only the
         # starting frame. OpenRouterNode accepts multiple optional image inputs.
+        # The note switches the writer to MiniMax's FL2VA format, whose
+        # alignment line needs the effective (frame-rounded) clip length.
         if prompt_mode == "auto":
+            note = (
+                "\n\n## This job\nTwo images are attached: <Picture 1> is the first frame and Picture 2 is the "
+                f"last frame. Use the FL2VA format. Effective video duration: {_effective_seconds(record.get('duration')):.2f} seconds."
+            )
             for _, node in base.find_nodes(graph, "OpenRouterNode"):
-                node.setdefault("inputs", {})["image_2"] = [end_id, 0]
+                inp = node.setdefault("inputs", {})
+                inp["image_2"] = [end_id, 0]
+                inp["system_prompt"] = str(inp.get("system_prompt") or "") + note
 
     record["base_checkpoint"] = choice
     record["base_checkpoint_file"] = checkpoint
@@ -380,13 +424,48 @@ async def api_outputs(request: web.Request) -> web.Response:
 
 
 async def api_output_library_get(request: web.Request) -> web.Response:
-    return web.json_response(_load_library())
+    return web.json_response(_library_with_baseline())
 
 
 async def api_output_library_put(request: web.Request) -> web.Response:
     clean = _clean_library(await request.json())
+    # Watched state is server-owned (see /api/output-library/seen); a stale
+    # client PUT must not roll it back.
+    current = _library_with_baseline()
+    clean["seen"] = current["seen"]
+    clean["seen_baseline"] = current["seen_baseline"]
     base._save_json(LIBRARY_FILE, clean)
     return web.json_response({"ok": True, **clean})
+
+
+async def api_output_library_seen(request: web.Request) -> web.Response:
+    """Mark generated videos as watched, or everything with {"all": true}."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    body = body if isinstance(body, dict) else {}
+    library = _library_with_baseline()
+    now = time.time()
+    if body.get("all"):
+        # Moving the baseline marks everything older as seen and lets the
+        # per-file map be dropped entirely.
+        library["seen_baseline"] = now
+        library["seen"] = {}
+    else:
+        raw_files = body.get("files") if isinstance(body.get("files"), list) else [body.get("file")]
+        seen = dict(library["seen"])
+        for raw in raw_files[:500]:
+            rel = str(raw or "").strip().replace("\\", "/")[:500]
+            if not rel or rel.startswith("/") or ".." in Path(rel).parts:
+                continue
+            seen[rel] = now
+        if len(seen) > SEEN_LIMIT:
+            seen = dict(sorted(seen.items(), key=lambda kv: kv[1])[-SEEN_LIMIT:])
+        library["seen"] = seen
+    library["updated_at"] = now
+    base._save_json(LIBRARY_FILE, library)
+    return web.json_response({"ok": True, "seen": library["seen"], "seen_baseline": library["seen_baseline"], "updated_at": now})
 
 
 async def api_delete_output(request: web.Request) -> web.Response:
@@ -394,9 +473,12 @@ async def api_delete_output(request: web.Request) -> web.Response:
     response = await _base_delete_output(request)
     library = _load_library()
     videos = dict(library.get("videos") or {})
-    if rel in videos:
+    seen = dict(library.get("seen") or {})
+    if rel in videos or rel in seen:
         videos.pop(rel, None)
+        seen.pop(rel, None)
         library["videos"] = videos
+        library["seen"] = seen
         library["updated_at"] = time.time()
         base._save_json(LIBRARY_FILE, library)
     return response
@@ -530,19 +612,219 @@ async def api_generate(request: web.Request) -> web.Response:
     return web.json_response({"prompt_id": pid, "seed": record["seed"]})
 
 
+def _lora_catalog() -> dict[str, Any]:
+    catalog = base._load_json(base.DATA_ROOT / "lora_catalog.json", {"managed": [], "unmanaged": []})
+    return catalog if isinstance(catalog, dict) else {"managed": [], "unmanaged": []}
+
+
+async def api_loras(request: web.Request) -> web.Response:
+    """Ready LoRAs for generation plus catalog entries that are not installed yet."""
+    catalog = _lora_catalog()
+    ready: list[dict[str, Any]] = []
+    for group in ("managed", "unmanaged"):
+        for item in catalog.get(group) or []:
+            if isinstance(item, dict) and item.get("status") == "ready":
+                ready.append(item)
+    jobs: dict[int, dict[str, Any]] = request.app["lora_installs"]
+    available: list[dict[str, Any]] = []
+    for item in catalog.get("managed") or []:
+        if not isinstance(item, dict) or item.get("status") not in ("available", "error"):
+            continue
+        try:
+            vid = int(item.get("version_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        job = jobs.get(vid) or {}
+        available.append({
+            **item,
+            "install_status": job.get("status") or ("error" if item.get("status") == "error" else "available"),
+            "install_error": job.get("error") or item.get("error"),
+        })
+    return web.json_response({
+        "items": ready,
+        "available": available,
+        "installing": [vid for vid, job in jobs.items() if job.get("status") == "installing"],
+    })
+
+
+async def _run_lora_sync(app: web.Application, install_ids: list[int] | None = None) -> dict[str, Any]:
+    # Serialise catalog rebuilds so a slow install cannot be overwritten by a
+    # concurrent sync that saw its file as still missing.
+    async with app["lora_lock"]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: base.sync_loras(base.CONFIG_ROOT / "loras.yaml", install_ids=install_ids)
+        )
+
+
+async def api_sync_loras(request: web.Request) -> web.Response:
+    """Re-index the catalog. Downloads only happen for explicit install IDs."""
+    install_ids: list[int] = []
+    if request.can_read_body:
+        try:
+            body = await request.json()
+            install_ids = [int(x) for x in (body or {}).get("install") or []]
+        except Exception:
+            install_ids = []
+    return web.json_response(await _run_lora_sync(request.app, install_ids))
+
+
+async def _install_lora(app: web.Application, vid: int) -> None:
+    jobs = app["lora_installs"]
+    try:
+        catalog = await _run_lora_sync(app, [vid])
+        row = next((x for x in catalog.get("managed") or [] if int(x.get("version_id") or 0) == vid), {})
+        if row.get("status") == "ready":
+            jobs.pop(vid, None)
+        else:
+            jobs[vid] = {"status": "error", "error": str(row.get("error") or "download did not complete")}
+    except Exception as exc:
+        jobs[vid] = {"status": "error", "error": repr(exc)}
+
+
+async def api_install_lora(request: web.Request) -> web.Response:
+    """Start a background CivitAI download for one catalog entry.
+
+    Runs detached because LoRA downloads routinely outlive the RunPod proxy's
+    request timeout; the UI polls /api/loras for completion.
+    """
+    try:
+        vid = int(request.match_info["vid"])
+    except (TypeError, ValueError):
+        raise web.HTTPBadRequest(text="invalid version id")
+    jobs = request.app["lora_installs"]
+    if (jobs.get(vid) or {}).get("status") != "installing":
+        jobs[vid] = {"status": "installing", "started_at": time.time()}
+        task = asyncio.create_task(_install_lora(request.app, vid))
+        request.app["lora_install_tasks"].add(task)
+        task.add_done_callback(request.app["lora_install_tasks"].discard)
+    return web.json_response({"ok": True, "version_id": vid, "status": "installing"})
+
+
+def _default_prompts() -> dict[str, str]:
+    cfg = base.load_yaml(base.IMAGE_ROOT / "config" / "system_prompts.yaml", {}) or {}
+    prompts = cfg.get("prompts") if isinstance(cfg, dict) else None
+    return prompts if isinstance(prompts, dict) else {}
+
+
+async def api_prompts_get(request: web.Request) -> web.Response:
+    return web.json_response({"prompts": base._system_prompts(), "defaults": _default_prompts()})
+
+
+PROMPT_EDIT_SYSTEM = """You are a precise editor for MiniMax H3 video-generation prompts.
+
+You receive the CURRENT TEXT and a CHANGE REQUEST. Return the full revised text with the change applied, and nothing else: no preamble, no explanation, no Markdown fences, no quotation marks around the result.
+
+Rules:
+- Apply exactly what the change request asks for. Leave everything it does not touch as written; do not polish, shorten or restyle untouched passages.
+- Propagate consequences. If a change affects other parts (wardrobe, action, camera, shot timing, dialogue, soundscape, music, subject definitions, retention lines), update those parts so the whole text stays consistent.
+- Preserve the existing structure and syntax exactly: field names and their order (for example integrated_multimodal_description / overall_soundscape / non_diegetic_music, or subject_definitions / summary / retention_analysis / detailed_description / overall_soundscape / non_diegetic_music), [Shot N] markers, MM:SS.mmm timestamps, <Subject N> / <Picture N> / <Video N> / <Audio N> tags, (S1) speaker labels and <d>[Language] ...</d> dialogue markup.
+- Keep every timestamp inside the clip duration and strictly increasing; only Shot 1 has no timestamp.
+- Never renumber or invent reference tags. Never sanitise the user's wording, slang or explicit language.
+- If the current text is a short idea rather than a structured prompt, return a revised idea of similar length and style; do not expand it into a full structured prompt.
+- If the current text is empty, write the text the change request describes, in the format the guide below implies for this mode."""
+
+
+def _openrouter_content(data: dict[str, Any]) -> str:
+    choices = data.get("choices") if isinstance(data, dict) else None
+    message = (choices or [{}])[0].get("message") or {}
+    content = message.get("content")
+    if isinstance(content, list):
+        content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+    text = str(content or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
+
+
+async def api_prompt_edit(request: web.Request) -> web.Response:
+    """Revise the current prompt or idea with Gemini Flash through OpenRouter."""
+    body = await request.json()
+    body = body if isinstance(body, dict) else {}
+    text = str(body.get("text") or "")[:40000]
+    instruction = str(body.get("instruction") or "").strip()[:4000]
+    if not instruction:
+        raise web.HTTPBadRequest(text="Describe the change you want.")
+    api_key = base._openrouter_key({})
+    if not api_key:
+        raise web.HTTPBadRequest(text="OPENROUTER_API_KEY is not configured")
+
+    mode = str(body.get("mode") or "t2v").lower()
+    if mode not in ("t2v", "i2v", "r2v"):
+        mode = "t2v"
+    prompt_mode = "auto" if str(body.get("prompt_mode") or "").lower() == "auto" else "custom"
+    guide = str(base._system_prompts().get(f"{mode}_auto") or "").strip()
+
+    context = [
+        f"MODE: {mode.upper()} · {'prompt idea (Auto Prompt expands it later)' if prompt_mode == 'auto' else 'final prompt sent to MiniMax H3'}",
+    ]
+    if body.get("duration"):
+        context.append(f"CLIP DURATION: {body.get('duration')} seconds")
+    if body.get("aspect_ratio"):
+        context.append(f"ASPECT RATIO: {body.get('aspect_ratio')}")
+    refs = body.get("refs") if isinstance(body.get("refs"), list) else []
+    if refs:
+        context.append("REFERENCE TAGS IN USE: " + ", ".join(str(x) for x in refs[:20]))
+    user_message = "\n".join(context) + f"\n\nCHANGE REQUEST:\n{instruction}\n\nCURRENT TEXT:\n{text}"
+
+    system = PROMPT_EDIT_SYSTEM
+    if guide:
+        system += "\n\n=== PROMPT-WRITING GUIDE FOR THIS MODE (format reference only; do not echo it) ===\n" + guide
+
+    started = time.time()
+    try:
+        async with request.app["session"].post(
+            OPENROUTER_CHAT_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "X-Title": "MMH3 Phone UI",
+            },
+            json={
+                "model": PROMPT_EDIT_MODEL,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_message},
+                ],
+                "temperature": 0.4,
+            },
+            timeout=ClientTimeout(total=90),
+        ) as r:
+            raw = await r.text()
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                data = {}
+            if not r.ok:
+                detail = (data.get("error") or {}).get("message") if isinstance(data.get("error"), dict) else None
+                raise web.HTTPBadGateway(text=f"OpenRouter error {r.status}: {detail or raw[:300]}")
+    except asyncio.TimeoutError:
+        raise web.HTTPGatewayTimeout(text="Gemini did not answer in time; try again.")
+    except ClientError as exc:
+        raise web.HTTPBadGateway(text=f"Could not reach OpenRouter: {exc}")
+    revised = _openrouter_content(data)
+    if not revised:
+        raise web.HTTPBadGateway(text="Gemini returned an empty revision.")
+    return web.json_response({
+        "text": revised,
+        "model": data.get("model") or PROMPT_EDIT_MODEL,
+        "seconds": round(time.time() - started, 1),
+    })
+
+
 async def index(request: web.Request) -> web.Response:
     html = (base.STATIC / "index.html").read_text(encoding="utf-8")
-    if "library-v2.css" not in html:
-        html = html.replace("</head>", '  <link rel="stylesheet" href="/static/library-v2.css?v=1">\n</head>')
-    if "features-v3.css" not in html:
-        html = html.replace("</head>", '  <link rel="stylesheet" href="/static/features-v3.css?v=1">\n</head>')
+    styles = [("library-v2.css", 2), ("features-v3.css", 1), ("features-v4.css", 1)]
+    scripts = [("library-v2.js", 2), ("features-v3.js", 1), ("features-v4.js", 1)]
+    links = "".join(
+        f'  <link rel="stylesheet" href="/static/{name}?v={ver}">\n' for name, ver in styles if name not in html
+    )
+    html = html.replace("</head>", links + "</head>", 1)
     legacy = '<script src="/static/app.js?v=2"></script>'
-    upgraded = legacy + '\n<script src="/static/library-v2.js?v=1"></script>\n<script src="/static/features-v3.js?v=1"></script>'
-    if "features-v3.js" not in html:
-        if "library-v2.js" in html:
-            html = html.replace('<script src="/static/library-v2.js?v=1"></script>', '<script src="/static/library-v2.js?v=1"></script>\n<script src="/static/features-v3.js?v=1"></script>')
-        else:
-            html = html.replace(legacy, upgraded)
+    tags = "".join(f'\n<script src="/static/{name}?v={ver}"></script>' for name, ver in scripts if name not in html)
+    html = html.replace(legacy, legacy + tags, 1)
     return web.Response(text=html, content_type="text/html", headers={"Cache-Control": "no-store"})
 
 
@@ -569,10 +851,19 @@ def make_app(comfy_url: str) -> web.Application:
     base.api_delete_output = api_delete_output
     base.api_free = api_free
     base.index = index
+    base.api_loras = api_loras
+    base.api_sync_loras = api_sync_loras
+    base.api_prompts_get = api_prompts_get
 
     app = base.make_app(comfy_url)
+    app["lora_installs"] = {}
+    app["lora_install_tasks"] = set()
+    app["lora_lock"] = asyncio.Lock()
     app.router.add_get("/api/output-library", api_output_library_get)
     app.router.add_put("/api/output-library", api_output_library_put)
+    app.router.add_post("/api/output-library/seen", api_output_library_seen)
+    app.router.add_post("/api/loras/install/{vid}", api_install_lora)
+    app.router.add_post("/api/prompt/edit", api_prompt_edit)
     app.on_startup.append(_start_indexer)
     app.on_cleanup.append(_stop_indexer)
     return app

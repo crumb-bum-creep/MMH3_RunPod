@@ -8,6 +8,10 @@
     group: "",
     tag: "",
     favoritesOnly: false,
+    newOnly: false,
+    seen: {},
+    seenBaseline: 0,
+    navList: [],
     pageSize: 48,
     visibleCount: 48,
     detailFile: null,
@@ -23,6 +27,10 @@
   const pctText = n => Math.round(Number(n||0))+"%";
   const uniqueSorted = values => [...new Set(values.filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b),undefined,{sensitivity:"base"}));
   const videoMeta = file => library.meta.videos?.[file] || {group:"", tags:[], favorite:false};
+  const baseName = file => String(file||"").split("/").pop();
+  // A video is "new" until it has been opened once. Outputs that predate the
+  // server's seen baseline (i.e. existed before tracking began) count as seen.
+  const isNew = item => !!library.seenBaseline && Number(item.mtime||0) > library.seenBaseline && !library.seen[item.file];
   const fmtBytes = n => {
     n=Number(n||0); if(!n) return "0 B";
     const units=["B","KB","MB","GB","TB"]; let i=0;
@@ -43,7 +51,11 @@
       <select id="outputTagFilterV2" aria-label="Filter by tag"><option value="">All tags</option></select>
       <button id="outputFavoritesV2" class="ghost small favorite-filter-v2" type="button" aria-pressed="false">☆ Favorites</button>
       <button id="outputAddGroupV2" class="ghost small" type="button">+ Group</button>
-      <span id="outputCountV2" class="muted output-count-v2"></span>`;
+      <div class="output-count-row-v2">
+        <button id="outputNewOnlyV2" class="ghost small output-new-filter-v2" type="button" aria-pressed="false" hidden></button>
+        <button id="outputMarkSeenV2" class="ghost small" type="button" hidden>Mark all watched</button>
+        <span id="outputCountV2" class="muted output-count-v2"></span>
+      </div>`;
 
     const grid=document.createElement("div");
     grid.id="outputLibraryV2";
@@ -73,6 +85,8 @@
     q("#outputTagFilterV2").addEventListener("change",e=>{library.tag=e.target.value;library.visibleCount=library.pageSize;render();});
     q("#outputFavoritesV2").addEventListener("click",()=>{library.favoritesOnly=!library.favoritesOnly;library.visibleCount=library.pageSize;render();});
     q("#outputAddGroupV2").addEventListener("click",createGroup);
+    q("#outputNewOnlyV2").addEventListener("click",()=>{library.newOnly=!library.newOnly;library.visibleCount=library.pageSize;render();});
+    q("#outputMarkSeenV2").addEventListener("click",markAllSeen);
     q("#outputMoreV2").addEventListener("click",()=>{library.visibleCount+=library.pageSize;render();});
 
     const dialog=document.createElement("dialog");
@@ -82,6 +96,33 @@
     document.body.appendChild(dialog);
     dialog.addEventListener("close",stopDetailVideo);
     dialog.addEventListener("click",e=>{if(e.target===dialog)dialog.close();});
+    // On document, not the dialog: re-rendering the body drops focus to <body>.
+    document.addEventListener("keydown",e=>{
+      if(!dialog.open||e.target.closest?.("input,select,textarea"))return;
+      if(e.key==="ArrowLeft"){e.preventDefault();stepDetail(-1);}
+      else if(e.key==="ArrowRight"){e.preventDefault();stepDetail(1);}
+    });
+    wireSwipe(dialog);
+  }
+
+  // Horizontal swipe anywhere in the viewer moves between videos. Touches that
+  // start on form controls or in the video's bottom control strip are ignored
+  // so scrubbing and typing keep working.
+  function wireSwipe(dialog){
+    let start=null;
+    dialog.addEventListener("touchstart",e=>{
+      start=null;
+      if(e.touches.length!==1||e.target.closest("input,select,textarea,button"))return;
+      const t=e.touches[0],video=e.target.closest("video");
+      if(video){const r=video.getBoundingClientRect();if(t.clientY>r.bottom-64)return;}
+      start={x:t.clientX,y:t.clientY,at:Date.now()};
+    },{passive:true});
+    dialog.addEventListener("touchend",e=>{
+      if(!start)return;
+      const t=e.changedTouches[0],dx=t.clientX-start.x,dy=t.clientY-start.y,fast=Date.now()-start.at<700;
+      start=null;
+      if(fast&&Math.abs(dx)>70&&Math.abs(dx)>Math.abs(dy)*1.6)stepDetail(dx<0?1:-1);
+    },{passive:true});
   }
 
   function ensureProgressHud(){
@@ -138,8 +179,9 @@
         q("#globalProcessBar").style.width=process+"%";
         q("#globalTotalBar").style.width=total+"%";
       }else if(wasActive){
-        // Give final metadata/preview sidecars a moment to land, then refresh once.
-        setTimeout(()=>{if(typeof state!=="undefined"&&state.tab==="outputs")load(true);},2500);
+        // Give final metadata/preview sidecars a moment to land, then refresh
+        // once on any tab so the Outputs NEW badge appears immediately.
+        setTimeout(()=>load(true),2500);
       }
     }catch{}
   }
@@ -159,6 +201,28 @@
     fav.classList.toggle("active",library.favoritesOnly);
     fav.setAttribute("aria-pressed",String(library.favoritesOnly));
     fav.textContent=library.favoritesOnly?"★ Favorites":"☆ Favorites";
+    refreshNewControls();
+  }
+
+  function refreshNewControls(){
+    const count=library.items.filter(isNew).length;
+    if(!count&&library.newOnly)library.newOnly=false;
+    const toggle=q("#outputNewOnlyV2"),mark=q("#outputMarkSeenV2");
+    if(toggle){
+      toggle.hidden=!count;
+      toggle.classList.toggle("active",library.newOnly);
+      toggle.setAttribute("aria-pressed",String(library.newOnly));
+      toggle.textContent=library.newOnly?`● ${count} new · showing`:`● ${count} new`;
+    }
+    if(mark)mark.hidden=!count;
+    const tab=q('#tabs button[data-tab="outputs"]');
+    if(tab){
+      let badge=q(".tab-new-badge-v2",tab);
+      if(!badge){badge=document.createElement("span");badge.className="tab-new-badge-v2";tab.appendChild(badge);}
+      badge.hidden=!count;
+      badge.textContent=count>99?"99+":String(count);
+      badge.setAttribute("aria-label",`${count} unwatched`);
+    }
   }
 
   function filteredItems(){
@@ -167,6 +231,7 @@
       if(library.group&&org.group!==library.group)return false;
       if(library.tag&&!(org.tags||[]).includes(library.tag))return false;
       if(library.favoritesOnly&&!org.favorite)return false;
+      if(library.newOnly&&!isNew(item))return false;
       if(library.query){
         const hay=[item.file,m.mode,m.prompt_mode,m.prompt,m.prompt_idea,m.actual_prompt,org.group,...(org.tags||[])].join(" ").toLowerCase();
         if(!hay.includes(library.query))return false;
@@ -176,14 +241,15 @@
   }
 
   function cardHtml(item){
-    const m=item.metadata||{},org=videoMeta(item.file),name=item.file.split("/").pop();
+    const m=item.metadata||{},org=videoMeta(item.file),name=baseName(item.file),fresh=isNew(item);
     const mode=[m.mode,m.prompt_mode].filter(Boolean).map(x=>String(x).toUpperCase()).join(" · ");
     const badges=[org.group?`<span class="output-chip-v2 group">${html(org.group)}</span>`:"",...(org.tags||[]).slice(0,3).map(t=>`<span class="output-chip-v2">${html(t)}</span>`)].join("");
     const preview=item.preview_file?`<img src="${html(media(item.preview_file))}" loading="lazy" alt="" class="output-preview-v2">`:`<div class="output-preview-v2 output-placeholder-v2">VIDEO</div>`;
-    return `<article class="output-card-v2" data-file="${html(item.file)}">
-      <button class="output-open-v2" type="button" aria-label="Open ${html(name)}">${preview}<span class="output-play-v2">▶</span></button>
+    return `<article class="output-card-v2${fresh?" is-new":""}" data-file="${html(item.file)}">
+      <button class="output-open-v2" type="button" aria-label="Open ${html(name)}${fresh?" (new)":""}">${preview}<span class="output-play-v2">▶</span><span class="output-name-v2" title="${html(name)}">${html(name)}</span></button>
+      ${fresh?'<span class="output-new-v2" aria-hidden="true">NEW</span>':""}
       <button class="output-star-v2 ${org.favorite?"active":""}" type="button" aria-label="Favorite">${org.favorite?"★":"☆"}</button>
-      <div class="output-card-body-v2"><div class="output-title-v2" title="${html(name)}">${html(name)}</div><div class="muted output-sub-v2">${html(mode||"VIDEO")} · ${fmtBytes(item.size)}</div>${badges?`<div class="output-chips-v2">${badges}</div>`:""}</div>
+      <div class="output-card-body-v2"><div class="muted output-sub-v2">${html(mode||"VIDEO")} · ${fmtBytes(item.size)}</div>${badges?`<div class="output-chips-v2">${badges}</div>`:""}</div>
     </article>`;
   }
 
@@ -195,7 +261,7 @@
     host.innerHTML=visible.length?visible.map(cardHtml).join(""):'<div class="output-empty-v2 muted">No videos match these filters.</div>';
     qa(".output-card-v2",host).forEach(card=>{
       const file=card.dataset.file;
-      q(".output-open-v2",card).onclick=()=>openDetail(file);
+      q(".output-open-v2",card).onclick=()=>{library.navList=items.map(x=>x.file);openDetail(file);};
       q(".output-star-v2",card).onclick=async e=>{e.stopPropagation();await toggleFavorite(file);};
     });
     const more=q("#outputMoreV2");
@@ -208,6 +274,7 @@
     try{
       const d=await api("/api/output-library",{method:"PUT",body:library.meta});
       library.meta={version:1,groups:d.groups||[],videos:d.videos||{},updated_at:d.updated_at||library.meta.updated_at};
+      applySeen(d);
       library.lastMetaUpdatedAt=Number(library.meta.updated_at||0);
       render();
     }catch(e){toast(e.message);}
@@ -221,6 +288,24 @@
     if(library.detailFile===file&&q("#outputDetailV2")?.open)openDetail(file,true);
   }
 
+  function applySeen(d){
+    if(d&&typeof d.seen==="object"&&d.seen)library.seen=d.seen;
+    if(d&&d.seen_baseline!=null)library.seenBaseline=Number(d.seen_baseline||0);
+  }
+
+  async function markSeen(file){
+    if(library.seen[file])return;
+    library.seen={...library.seen,[file]:Date.now()/1000};
+    try{applySeen(await api("/api/output-library/seen",{method:"POST",body:{files:[file]}}));}catch{}
+  }
+
+  async function markAllSeen(){
+    try{
+      applySeen(await api("/api/output-library/seen",{method:"POST",body:{all:true}}));
+      library.newOnly=false;render();toast("All videos marked as watched");
+    }catch(e){toast(e.message);}
+  }
+
   async function createGroup(){
     const raw=prompt("New video group / folder name");if(raw===null)return;
     const name=raw.trim().slice(0,80);if(!name)return;
@@ -230,29 +315,58 @@
 
   function detailGroupOptions(selected){return '<option value="">No group</option>'+groups().map(x=>`<option value="${html(x)}" ${x===selected?"selected":""}>${html(x)}</option>`).join("")+'<option value="__new__">+ New group…</option>';}
 
-  function stopDetailVideo(){
+  function releaseVideo(){
     const video=q("#outputDetailV2 video");if(video){video.pause();video.removeAttribute("src");video.load();}
+  }
+
+  function stopDetailVideo(){
+    releaseVideo();
     library.detailFile=null;
+    // Opening a video can clear its NEW badge; refresh the grid behind the modal.
+    render();
+  }
+
+  function navFiles(){
+    const known=new Set(library.items.map(x=>x.file));
+    const list=library.navList.filter(f=>known.has(f));
+    return list.length?list:filteredItems().map(x=>x.file);
+  }
+
+  function stepDetail(delta){
+    const list=navFiles(),i=list.indexOf(library.detailFile);
+    if(i<0)return;
+    const next=list[i+delta];
+    if(next)openDetail(next);
   }
 
   function openDetail(file,rerender=false){
     const item=library.items.find(x=>x.file===file);if(!item)return;
     const dialog=q("#outputDetailV2"),body=q("#outputDetailBodyV2"),m=item.metadata||{},org=videoMeta(file);
+    const list=navFiles(),pos=list.indexOf(file),prev=pos>0?list[pos-1]:null,next=pos>=0&&pos<list.length-1?list[pos+1]:null;
+    if(!rerender&&library.detailFile!==file)releaseVideo();
     library.detailFile=file;
+    if(!rerender)markSeen(file);
     body.innerHTML=`
-      <div class="output-detail-head-v2"><div><strong>${html(file.split("/").pop())}</strong><div class="muted">${html(String(m.mode||"").toUpperCase())} ${html(String(m.prompt_mode||"").toUpperCase())} · ${fmtBytes(item.size)}</div></div><button id="outputDetailCloseV2" class="ghost small" type="button">Close</button></div>
-      <video controls autoplay preload="metadata" src="${html(media(file))}"></video>
+      <div class="output-detail-head-v2"><div><strong>${html(baseName(file))}</strong><div class="muted">${html(String(m.mode||"").toUpperCase())} ${html(String(m.prompt_mode||"").toUpperCase())} · ${fmtBytes(item.size)}</div></div><button id="outputDetailCloseV2" class="ghost small" type="button">Close</button></div>
+      <video controls autoplay playsinline preload="metadata" src="${html(media(file))}"></video>
+      <div class="output-nav-v2">
+        <button id="outputPrevV2" class="secondary small" type="button" ${prev?"":"disabled"} aria-label="Previous video">‹ Prev</button>
+        <span class="muted">${pos>=0?`${pos+1} / ${list.length}`:""}</span>
+        <button id="outputNextV2" class="secondary small" type="button" ${next?"":"disabled"} aria-label="Next video">Next ›</button>
+      </div>
       <div class="output-organize-v2">
         <label>Group<select id="outputDetailGroupV2">${detailGroupOptions(org.group||"")}</select></label>
         <label>Tags<input id="outputDetailTagsV2" value="${html((org.tags||[]).join(", "))}" placeholder="character, keeper, test…"></label>
         <button id="outputDetailFavoriteV2" class="secondary ${org.favorite?"active":""}" type="button">${org.favorite?"★ Favorited":"☆ Favorite"}</button>
       </div>
       <div class="actions output-actions-v2">
-        <button class="secondary" id="outputCopyPromptV2">Copy prompt</button><button class="secondary" id="outputCopySeedV2">Copy seed</button><button class="secondary" id="outputCopyMetaV2">Copy metadata</button><button class="secondary" id="outputUseR2VV2">Use as R2V ref</button><button class="secondary" id="outputReuseV2">Reuse setup</button><button class="danger" id="outputDeleteV2">Delete</button>
+        <button class="secondary" id="outputCopyPromptV2">Copy prompt</button><button class="secondary" id="outputCopySeedV2">Copy seed</button><button class="secondary" id="outputCopyMetaV2">Copy metadata</button><button class="secondary" id="outputUseR2VV2">Use as R2V ref</button><button class="secondary" id="outputReuseV2">Reuse setup</button><button class="secondary" id="outputRemixV2">Remix prompt</button><button class="danger" id="outputDeleteV2">Delete</button>
       </div>
       <div class="meta output-prompt-v2">${html((m.actual_prompt||m.prompt_idea||m.prompt||"").slice(0,1600))}</div>`;
 
     q("#outputDetailCloseV2").onclick=()=>dialog.close();
+    q("#outputPrevV2").onclick=()=>stepDetail(-1);
+    q("#outputNextV2").onclick=()=>stepDetail(1);
     q("#outputDetailFavoriteV2").onclick=()=>toggleFavorite(file);
     q("#outputDetailGroupV2").onchange=async e=>{
       let next=e.target.value;
@@ -274,10 +388,30 @@
     q("#outputCopySeedV2").onclick=()=>copyText(String(m.seed??""));
     q("#outputCopyMetaV2").onclick=()=>copyText(JSON.stringify(m,null,2));
     q("#outputReuseV2").onclick=()=>{dialog.close();applySnapshot(m);switchTab("generate");toast("Setup loaded");};
+    // Remix: load the exact prompt this video was generated from as a Custom
+    // prompt (same media mode, refs and settings) and hand focus to the
+    // Gemini edit box so the next step is "describe the change".
+    q("#outputRemixV2").onclick=()=>{
+      const text=m.actual_prompt||m.prompt||m.prompt_idea||"";
+      dialog.close();
+      applySnapshot({...m,prompt_mode:"custom",prompt:text,prompt_idea:""});
+      switchTab("generate");
+      const input=q("#promptEditInput");
+      if(input)setTimeout(()=>{input.focus();input.scrollIntoView({block:"center",behavior:"smooth"});},60);
+      toast(m.actual_prompt?"Generated prompt loaded as Custom · describe a change":"Only the idea was saved for this video · loaded as Custom");
+    };
     q("#outputUseR2VV2").onclick=async()=>{try{const d=await api("/api/output-to-input",{method:"POST",body:{file}});dialog.close();setMode("r2v");addRef("video",d.file,true);switchTab("generate");refreshInputOptions();toast("Added as R2V video reference");}catch(e){toast(e.message);}};
     q("#outputDeleteV2").onclick=async()=>{
       if(!confirm("Delete this video?"))return;
-      try{await api("/api/outputs/"+file.split("/").map(encodeURIComponent).join("/"),{method:"DELETE"});dialog.close();library.items=library.items.filter(x=>x.file!==file);delete library.meta.videos[file];await persistMeta();setTimeout(()=>load(true),500);}catch(e){toast(e.message);}
+      // After deleting, continue to the neighbour instead of dropping back to the grid.
+      const after=next||prev;
+      try{
+        await api("/api/outputs/"+file.split("/").map(encodeURIComponent).join("/"),{method:"DELETE"});
+        releaseVideo();
+        library.items=library.items.filter(x=>x.file!==file);library.navList=library.navList.filter(f=>f!==file);delete library.meta.videos[file];
+        if(after)openDetail(after);else dialog.close();
+        await persistMeta();setTimeout(()=>load(true),500);
+      }catch(e){toast(e.message);}
     };
     if(!dialog.open){dialog.showModal?dialog.showModal():dialog.setAttribute("open","");}
     else if(rerender)q("#outputDetailV2 video")?.play().catch(()=>{});
@@ -299,7 +433,10 @@
       changed=changed||nextMeta!==library.lastMetaUpdatedAt;
       library.meta={version:1,groups:meta.groups||[],videos:meta.videos||{},updated_at:nextMeta};
       library.lastMetaUpdatedAt=nextMeta;
-      if(changed)render();
+      applySeen(meta);
+      // Don't rebuild the grid underneath an open viewer; closing it re-renders.
+      if(changed&&!q("#outputDetailV2")?.open)render();
+      else refreshNewControls();
     }catch(e){const host=q("#outputLibraryV2");if(host)host.innerHTML='<div class="message error">'+html(e.message)+'</div>';}
   }
 
@@ -310,7 +447,9 @@
     try{refreshOutputs=async(force=false)=>load(force);}catch{}
     load(true);refreshGlobalProgress();
     qa("#tabs button").forEach(button=>button.addEventListener("click",()=>{if(button.dataset.tab==="outputs")load(true);}));
-    setInterval(()=>{if(typeof state!=="undefined"&&state.tab==="outputs")load(false);},60000);
+    // Cheap when unchanged (the index answers {unchanged:true}); runs on every
+    // tab so the Outputs badge notices videos that finished elsewhere.
+    setInterval(()=>load(false),60000);
     setInterval(refreshGlobalProgress,900);
   }
 
