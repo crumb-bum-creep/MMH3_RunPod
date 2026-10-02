@@ -184,3 +184,22 @@ def test_reuse_roundtrip(stack):
     assert legacy["loras"][0]["file"] == "minimax-h3-digicam.safetensors"
     cont = stack.call("/api/outputs/continue", {"file": new["file"]})
     assert (stack.ws / "ComfyUI/input" / cont["start_image"]).stat().st_size > 0
+
+
+def test_end_frame_only_i2v_gets_its_alignment_line(stack):
+    r = stack.call("/api/generate", {"mode": "i2v", "prompt": PROMPT, "end_image": "mmh3/2026-09/portrait_3.png", "duration": 6})
+    (job,) = stack.wait_done(r["jobs"])
+    assert job["status"] == "done", job
+    rec = json.loads((stack.ws / "ComfyUI/output" / job["output"]["file"]).with_suffix(".mp4.h3.json").read_text())
+    assert rec["prompt"].startswith("How the reference pictures align with the target video — <Picture 1> (from [Shot 1]) "
+                                    "aligns with the 6.58-second mark")
+    assert rec["prompt"].endswith(PROMPT)
+
+
+def test_tweak_and_seen_endpoints(stack):
+    r = stack.call("/api/refine", {"mode": "t2v", "prompt": PROMPT, "request": "make it night"})
+    assert r["http"] == 400 and "OpenRouter key" in r["error"]
+    lib = stack.call("/api/outputs")
+    assert "new" in lib and all("new" in i for i in lib["items"])
+    stack.call("/api/outputs/seen", {"all": True})
+    assert stack.call("/api/outputs")["new"] == 0

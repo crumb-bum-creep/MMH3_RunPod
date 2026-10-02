@@ -52,6 +52,9 @@ def jobs():
                                {"kind": "video", "file": "mmh3/validate_clip.mp4"},
                                {"kind": "audio", "file": "mmh3/validate_voice.wav"}]
             yield f"{mode}/{rid}", job, files_for(fam, job["recipe"])
+            if mode == "i2v":  # end frame only (L2V): last_frame without first_frame
+                end_only = {k: v for k, v in job.items() if k != "start_image"}
+                yield f"{mode}-end-only/{rid}", end_only, files_for(fam, job["recipe"])
 
 
 def setup_dummies(comfy_root: Path) -> None:

@@ -245,9 +245,149 @@ def test_prompt_writer_payload_and_parsing(workspace, monkeypatch):
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
     text = asyncio.run(run())
-    assert text == "integrated_multimodal_description: ok"
+    # the I2VA alignment line is Studio's, even when the model leaves it out
+    assert text == ("For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully "
+                    "referenced.\n\nintegrated_multimodal_description: ok")
     assert seen["auth"] == "Bearer sk-or-test"
     assert seen["messages"][0]["role"] == "system" and "Image-to-Video" in seen["messages"][0]["content"]
     user = seen["messages"][1]["content"]
-    assert user[0]["text"].startswith("she smiles") and "Width: 640\nHeight: 1152" in user[0]["text"]
-    assert user[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert user[0]["text"].startswith("USER DIRECTION:\nshe smiles")
+    assert "frame: 640 x 1152" in user[0]["text"] and "duration: 5.17 seconds" in user[0]["text"]
+    assert user[1]["text"].startswith("<Picture 1>, the first frame")
+    assert user[2]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def _i2v(**kw):
+    return {"mode": "i2v", "aspect": "9:16", "megapixels": 0.7, "duration": 5, **kw}
+
+
+def test_keyframe_task_picks_the_guides_prompt():
+    from studio import prompting
+
+    prompts = prompting.system_prompts()
+    for job, key in ((_i2v(start_image="a.png"), "i2v_auto"), (_i2v(start_image="a.png", end_image="b.png"), "fl2v_auto"),
+                     (_i2v(end_image="b.png"), "l2v_auto"), ({"mode": "t2v"}, "t2v_auto"), ({"mode": "r2v"}, "r2v_auto")):
+        assert prompting._system_prompt_for(job, prompts) == prompts[key]
+    assert {"t2v_auto", "i2v_auto", "fl2v_auto", "l2v_auto", "r2v_auto", "refine"} <= set(prompts)
+
+
+def test_alignment_line_tracks_frames_shots_and_length():
+    from studio import prompting
+
+    body = "integrated_multimodal_description: [Shot 1] a. [Shot 2] At 00:03.000, b.\n\noverall_soundscape: x\n\nnon_diegetic_music: N/A"
+    fl = prompting.align_keyframes(_i2v(start_image="a.png", end_image="b.png", duration=8), body)
+    assert fl.startswith("How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the "
+                         "0.00-second mark of the target video; Picture 2 (from Shot 2) aligns with the 8.00-second mark")
+    l2 = prompting.align_keyframes(_i2v(end_image="b.png", duration=6), body)
+    assert l2.startswith("How the reference pictures align with the target video — <Picture 1> (from [Shot 2]) aligns with the 6.58-second mark")
+    # an existing (stale) line is replaced, not stacked; idempotent
+    again = prompting.align_keyframes(_i2v(end_image="b.png", duration=10), l2)
+    assert again.count("How the reference pictures") == 1 and "10.12-second mark" in again
+    assert prompting.align_keyframes(_i2v(end_image="b.png", duration=10), again) == again
+    # free-form prompts and other modes are left alone
+    assert prompting.align_keyframes(_i2v(start_image="a.png"), "she waves") == "she waves"
+    assert prompting.align_keyframes({"mode": "t2v", "duration": 5}, body) == body
+
+
+def test_edited_prompts_go_stale_when_defaults_move_on(workspace):
+    from studio import prompting
+
+    user = paths.CONFIG / "system_prompts.yaml"
+    util.write_yaml(user, {"prompts": {"t2v_auto": "my old t2v prompt"}})  # saved before versions existed
+    try:
+        assert prompting.system_prompts()["t2v_auto"] != "my old t2v prompt"
+        assert prompting.stale_prompts() == {"t2v_auto": "my old t2v prompt"}
+        prompting.save_system_prompt("t2v_auto", "my new t2v prompt")
+        assert prompting.system_prompts()["t2v_auto"] == "my new t2v prompt"
+        assert prompting.stale_prompts() == {}
+    finally:
+        user.unlink(missing_ok=True)
+
+
+def test_refine_sends_prompt_request_rules_and_frames(workspace, monkeypatch):
+    import asyncio
+
+    from studio import prompting
+
+    sent = {}
+
+    async def fake(messages, cfg, key):
+        sent["messages"] = messages
+        return "integrated_multimodal_description: [Shot 1] at night.\n\noverall_soundscape: x\n\nnon_diegetic_music: N/A"
+
+    from PIL import Image
+
+    img = paths.INPUT / "mmh3/end.png"
+    img.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (32, 32)).save(img)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setattr(prompting, "_openrouter", fake)
+    out = asyncio.run(prompting.refine(_i2v(end_image="mmh3/end.png"), "integrated_multimodal_description: [Shot 1] by day.",
+                                       "make it night"))
+    assert out.startswith("How the reference pictures align with the target video — <Picture 1> (from [Shot 1])")
+    system, user = sent["messages"][0]["content"], sent["messages"][1]["content"]
+    prompts = prompting.system_prompts()
+    assert system.startswith(prompts["refine"]) and prompts["l2v_auto"] in system
+    assert "CHANGE REQUEST:\nmake it night" in user[0]["text"] and "CURRENT PROMPT:\nintegrated_multimodal_description: [Shot 1] by day." in user[0]["text"]
+    assert user[1]["text"].startswith("<Picture 1>, the last frame") and user[2]["type"] == "image_url"
+    with pytest.raises(prompting.PromptError):
+        asyncio.run(prompting.refine({"mode": "t2v"}, "", "make it night"))
+
+
+def test_new_outputs_until_seen(workspace):
+    import time
+
+    out = paths.OUTPUT / "MMH3"
+    out.mkdir(parents=True, exist_ok=True)
+    library.SEEN_FILE.unlink(missing_ok=True)
+    old = out / "T2V_09001-audio.mp4"
+    old.write_bytes(b"x")
+    library._seen()  # first look sets the baseline: what's already there isn't "new"
+    time.sleep(0.02)
+    fresh = out / "T2V_09002-audio.mp4"
+    fresh.write_bytes(b"x")
+    library.refresh_index()
+    items = {i["file"]: i for i in library.outputs()["items"]}
+    assert items["MMH3/T2V_09001-audio.mp4"]["new"] is False and items["MMH3/T2V_09002-audio.mp4"]["new"] is True
+    library.mark_seen(["MMH3/T2V_09002-audio.mp4"])
+    assert not any(i["new"] for i in library.outputs()["items"])
+    (out / "T2V_09003-audio.mp4").write_bytes(b"x")
+    library.refresh_index()
+    assert library.outputs()["new"] == 1
+    library.mark_seen([], everything=True)
+    assert library.outputs()["new"] == 0
+    with pytest.raises(library.LibraryError):
+        library.mark_seen(["../../etc/passwd"])
+
+
+def test_quick_install_loras_skip_boot_sync(workspace, monkeypatch):
+    queued = []
+    monkeypatch.setattr(loras, "_enqueue", lambda item: queued.append(item))
+    files = [{"id": 1, "name": "q.safetensors", "family": "any", "role": "main", "install": True}]
+    _catalog(workspace, [{"version_id": 11, "nickname": "Quick", "auto_install": False, "files": files},
+                         {"version_id": 12, "nickname": "Auto", "files": [{**files[0], "id": 2, "name": "a.safetensors"}]}])
+    loras.sync()
+    assert [j["file"]["name"] for kind, j in queued if kind == "lora"] == ["a.safetensors"]
+    item = next(i for i in loras.listing()["items"] if i["key"] == "11")
+    assert item["auto_install"] is False and item["files"][0]["state"] == "available"
+    queued.clear()
+    loras.install("11")
+    assert [j["file"]["name"] for kind, j in queued] == ["q.safetensors"]
+    # uninstall deletes the files and keeps it under quick install
+    _touch_lora("a.safetensors")
+    loras.uninstall("12")
+    assert not (loras.LORA_DIR / "a.safetensors").exists()
+    assert next(e for e in loras.catalog() if e["version_id"] == 12)["auto_install"] is False
+
+
+def test_existing_catalog_takes_seed_auto_install_once(workspace):
+    _catalog(workspace, [{"version_id": 3260276, "nickname": "Mystic XXX v3", "filename": "MysticXXX_MMH3-V3.safetensors"},
+                         {"version_id": 3224980, "nickname": "Digicam", "filename": "minimax-h3-digicam.safetensors"},
+                         {"version_id": 777, "nickname": "Mine"}])
+    loras.ensure_seeded()
+    by = {e["version_id"]: e for e in loras.catalog()}
+    assert by[3260276]["auto_install"] is False and by[3224980]["auto_install"] is True
+    assert "auto_install" not in by[777]  # not in the seed: untouched, downloads as before
+    loras.upsert({"version_id": 3260276, "auto_install": True})  # your choice sticks
+    loras.ensure_seeded()
+    assert next(e for e in loras.catalog() if e["version_id"] == 3260276)["auto_install"] is True

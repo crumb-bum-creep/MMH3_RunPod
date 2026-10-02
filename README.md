@@ -34,20 +34,28 @@ stays available on 8188.
 - **Create.** Pick Text, Image or Reference, and either write the full prompt or switch to
   **Auto** and write an idea. *Preview the prompt* drafts it so you can read and edit it before
   queueing. You can also skip the preview: Auto jobs get their prompt written in the background
-  while earlier jobs render.
+  while earlier jobs render. Image mode takes a start frame, an end frame, or both.
+- **Tweak.** Under any prompt, ask for a change in plain words ("make it night") and the prompting
+  model edits just that. Undo puts the previous version back. Also on queued jobs.
+- **Prompts.** Auto and Tweak follow MiniMax's own prompt-writing guides (T2VA, I2VA, FL2VA, L2VA
+  and full-reference). They're editable in More → Auto prompt instructions.
 - **Speed.** Picks a recipe (below). **Compare** queues the same prompt and seed once per recipe;
   Library → Comparisons plays them side by side, in sync.
 - **Queue.** Shows the live sampler preview, the current step and a real ETA. You can pause,
   reorder, cancel, edit a waiting job's prompt, or run a finished job again. The red tally in the
   top bar follows the render from any screen.
-- **Library.** A contact sheet of every output, including those from the old build. Open a clip
-  to favorite it, group it, **Reuse** its exact settings, **Continue** (its last frame becomes the
-  next I2V start), use it **as a reference**, download it or delete it.
+- **Library.** A contact sheet of every output, including those from the old build, with file
+  names on the thumbnails and a NEW pill on clips you haven't opened yet. Open a clip to step
+  through the rest (‹ ›, swipe or arrow keys), favorite it, group it, **Reuse** its exact settings,
+  **Continue** (its last frame becomes the next I2V start), use it **as a reference**, download it
+  or delete it.
 - **References.** Upload images, clips and audio from your phone and save named **kits** of
   references to reuse in R2V. Tags like `<Picture 1>` are shown on each tile, and a clip's
   soundtrack can be toggled.
 - **More → LoRAs and models.** Your catalog, plus **Browse CivitAI** (search, bookmarks and your
-  collections), with LoRAs and base checkpoints filtered to MiniMax H3.
+  collections), with LoRAs and base checkpoints filtered to MiniMax H3. LoRAs set not to download
+  on startup sit under **Quick install**, one tap away (set per LoRA; `auto_install` in
+  `loras.yaml`).
 
 ## Recipes (`config/recipes.yaml`)
 

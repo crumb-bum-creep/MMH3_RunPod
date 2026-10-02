@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.1.0
+
+**Prompts, rewritten from MiniMax's official guides** (`VIDEO_PROMPT_WRITING_GUIDE_base_en.md` and
+`_ref_en.md` on huggingface.co/MiniMaxAI/MiniMax-H3)
+- Text, Image and Reference system prompts follow the guides: `<d>[English] …</d>` dialogue with
+  stable `(S1)` speaker IDs, voiceover / `<scenetrans>` / `<cutoff>`, the camera vocabulary with
+  amplitude and speed, MM:SS.mmm cuts, and the six-section full-reference format for R2V.
+  Your house style (smartphone look by default, ARRI/Panavision for film scenes, lived-in locations,
+  micro-expressions, explicit language) is kept as a section the user's idea overrides.
+- Image mode picks the guide's task from the frames you give it: start only (I2VA), start + end
+  (FL2VA), or **end only (L2VA, new)**. Each has its own prompt. Studio writes the first-line
+  alignment instruction itself, so its shot number and seconds always match the final prompt and
+  the clip's real length, including after you change the length or edit the prompt.
+- Prompt edits you saved for the old defaults no longer override the new ones. They're kept, and
+  More → Auto prompt instructions offers "Load my old version".
+
+**New**
+- **Tweak**: under any prompt (typed, or an Auto draft) and on a queued job, ask for a change in
+  plain words ("make it night", "she whispers instead") or tap a quick one (More detail, Tighter,
+  Add dialogue, …). The prompting model edits only what you asked for and keeps the format, tags
+  and timing intact. Undo restores the previous version.
+- **Library**: a NEW pill and amber ring on clips you haven't opened, a count on the Library tab,
+  a New filter and Mark all watched. Thumbnails show the file name (`T2V_00042`). The player has
+  previous/next buttons, swipe on the video and ← → keys, and favourite/delete update in place.
+  Copy prompt button.
+- **LoRAs**: the seed catalog no longer downloads everything on boot. Five general LoRAs still do;
+  the rest are under **Quick install** (one tap to Get, live progress) in the LoRA screen and in
+  Create's LoRA picker. Per-LoRA "Download on startup" switch, and Uninstall (deletes the files,
+  keeps it under Quick install). An existing volume picks up the split once.
+
+**Fixed**
+- Typing in the LoRA search no longer re-renders the screen and drops the keyboard.
+- The Library refreshes on its own when a clip finishes.
+- Prompt-writer replies get a larger token budget, so long R2V prompts and reasoning don't truncate.
+
 ## 2.0.0: MMH3 Studio (rewrite)
 
 A clean rewrite on the `studio` branch. `main` is untouched, so the old image stays available.

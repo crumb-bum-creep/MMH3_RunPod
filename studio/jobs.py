@@ -141,8 +141,8 @@ class Runner:
         start_image = str(form.get("start_image") or "").strip() or None
         end_image = str(form.get("end_image") or "").strip() or None
         refs = form.get("refs") or []
-        if mode == "i2v" and not start_image:
-            raise JobError("image-to-video needs a start image")
+        if mode == "i2v" and not (start_image or end_image):
+            raise JobError("image-to-video needs a start frame, an end frame, or both")
         if mode == "r2v":
             if not refs:
                 raise JobError("add at least one reference")
@@ -327,6 +327,9 @@ class Runner:
                 job["status"] = "queued"
             return
 
+        aligned = prompting.align_keyframes(job, job["prompt"])  # length or frames may have changed since drafting
+        if aligned != job["prompt"]:
+            self._touch(job, prompt=aligned)
         try:
             files = self._files(job)
             for l in job["loras"]:
