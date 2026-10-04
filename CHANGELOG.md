@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.1
+
+- **Deleted clips no longer come back.** VideoHelperSuite numbers each new clip after the highest
+  one in the folder, so deleting the newest clips handed their exact names to the next renders, and
+  phones then showed the cached deleted clip at that address. Deleting the newest clip now leaves
+  one small `<MODE>_<n>-number-reserved.txt` per prefix so numbers keep going up, and thumbnail
+  and video URLs carry the file's timestamp so a cached copy can never stand in for a new file.
+
 ## 2.2.0
 
 - **Legacy · Euler (R2V)**: Ref2V turbo v0.1 at 0.85, 4 steps, Euler + Beta 0.6/0.6, extra low-noise

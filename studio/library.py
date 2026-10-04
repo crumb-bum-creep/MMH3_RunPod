@@ -209,7 +209,45 @@ def delete_output(rel: str) -> None:
         seen = _seen()
         if seen["files"].pop(rel, None) is not None:
             util.write_json(SEEN_FILE, seen)
+    _reserve_number(p.parent, stem)
     refresh_index()
+
+
+_NUMBERED = re.compile(r"(?P<prefix>.+)_(?P<n>\d+)")
+RESERVED_SUFFIX = "-number-reserved.txt"
+
+
+def _reserve_number(folder: Path, stem: str) -> None:
+    """Keep a deleted clip's number from being handed out again.
+
+    VideoHelperSuite names the next clip <prefix>_<highest number in the folder + 1>,
+    counting any file named <prefix>_<number>... So deleting the newest clips frees
+    their numbers and the next render reuses a deleted clip's exact name. One small
+    marker per prefix, at the highest number ever used, keeps numbers going up."""
+    m = _NUMBERED.fullmatch(stem)
+    if not m:
+        return
+    prefix, n = m["prefix"], int(m["n"])
+    counter = re.compile(rf"{re.escape(prefix)}_(\d+)\D*\..+", re.IGNORECASE)  # VHS's own matcher
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return
+    markers = [x for x in names if x.endswith(RESERVED_SUFFIX) and counter.fullmatch(x)]
+    highest = max((int(mm.group(1)) for x in names if not x.endswith(RESERVED_SUFFIX)
+                   for mm in [counter.fullmatch(x)] if mm), default=0)
+    keep = max([n] + [int(counter.fullmatch(x).group(1)) for x in markers])
+    if keep <= highest:  # a remaining clip already holds the highest number
+        for x in markers:
+            (folder / x).unlink(missing_ok=True)
+        return
+    width = len(m["n"])
+    marker = folder / f"{prefix}_{keep:0{width}d}{RESERVED_SUFFIX}"
+    if not marker.exists():
+        marker.write_text("MMH3 Studio: keeps this clip number from being reused after a delete. Safe to leave.\n")
+    for x in markers:
+        if folder / x != marker:
+            (folder / x).unlink(missing_ok=True)
 
 
 def write_sidecar(rel: str, record: dict[str, Any]) -> None:

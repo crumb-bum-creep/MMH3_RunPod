@@ -72,8 +72,11 @@ function resolution(aspect, mp) {
 function frames(sec) { const n = Math.max(5, Math.round(sec * 24)); return n + ((5 - (n % 17)) % 17 + 17) % 17; }
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 const thumbIn = (f) => `/media/input-thumb/${enc(f)}`;
-const thumbOut = (f) => `/media/output-thumb/${enc(f)}`;
-const mediaOut = (f) => `/media/output/${enc(f)}`;
+// `v` (the file's mtime, or when its job finished) makes each version of a file its own URL,
+// so a phone that cached an old clip can never show it in place of a new one with the same name.
+const ver = (v) => (v ? `?v=${Math.round(Number(v))}` : "");
+const thumbOut = (f, v) => `/media/output-thumb/${enc(f)}${ver(v)}`;
+const mediaOut = (f, v) => `/media/output/${enc(f)}${ver(v)}`;
 const mediaIn = (f) => `/media/input/${enc(f)}`;
 const nameOf = (f) => String(f || "").split("/").pop();
 
@@ -931,7 +934,7 @@ function nowCard(j) {
 }
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : "");
 function jobRow(j, i, n) {
-  const thumb = j.output ? `<img src="${thumbOut(j.output.file)}" alt="" loading="lazy">` : j.mode.toUpperCase();
+  const thumb = j.output ? `<img src="${thumbOut(j.output.file, j.finished)}" alt="" loading="lazy">` : j.mode.toUpperCase();
   const sub = j.status === "failed" ? `<div class="job-sub err">${esc(j.error)}</div>`
     : `<div class="job-sub">${jobLabel(j)}${j.timings && j.timings.total_s ? ` · took ${clock(j.timings.total_s)}` : ""}${j.finished ? ` · ${ago(j.finished)}` : ""}</div>`;
   const mv = j.status === "queued" && n > 1 ? `<button class="icon-btn" data-mv="-1" aria-label="Move up" ${i === 0 ? "disabled" : ""}>${ICON.arrowUp}</button>` : "";
@@ -942,7 +945,7 @@ function jobRow(j, i, n) {
 function jobSheet(j) {
   const pending = ["queued", "waiting", "drafting", "unloading", "running"].includes(j.status);
   openSheet(jobTitle(j).slice(0, 60), `
-    ${j.output ? `<div class="player"><video src="${mediaOut(j.output.file)}" controls playsinline loop autoplay></video></div>` : ""}
+    ${j.output ? `<div class="player"><video src="${mediaOut(j.output.file, j.finished)}" controls playsinline loop autoplay></video></div>` : ""}
     <dl class="kv">
       <dt>Status</dt><dd>${esc(j.status)}${j.error ? ` · ${esc(j.error)}` : ""}</dd>
       <dt>Mode</dt><dd>${jobLabel(j)}</dd><dt>Seed</dt><dd class="num">${j.seed}</dd>
@@ -1035,7 +1038,7 @@ const clipName = (f) => nameOf(f).replace(/\.mp4$/i, "").replace(/-audio$/i, "")
 function shot(i) {
   const d = i.meta && (i.meta.duration || i.meta.frames / 24);
   const label = i.meta && i.meta.label && i.meta.compare ? ` · ${esc(i.meta.label)}` : "";
-  return `<button class="shot${i.new ? " is-new" : ""}" data-out="${esc(i.file)}" title="${esc(i.file)}"><img loading="lazy" src="${thumbOut(i.file)}" alt="">
+  return `<button class="shot${i.new ? " is-new" : ""}" data-out="${esc(i.file)}" title="${esc(i.file)}"><img loading="lazy" src="${thumbOut(i.file, i.mtime)}" alt="">
     <span class="tl">${i.new ? `<span class="new-pill">New</span>` : ""}${i.group ? `<span class="grp">${esc(i.group)}</span>` : ""}</span>
     ${i.favorite ? `<span class="fav">${ICON.star}</span>` : ""}
     <span class="meta"><span class="fn">${esc(clipName(i.file))}${label}</span><span class="d">${d ? `${Number(d).toFixed(1)}s` : ""}</span></span></button>`;
@@ -1066,14 +1069,14 @@ function compareGroups(list) {
   const keys = Object.keys(groups);
   if (!keys.length) return `<div class="empty"><h2>No comparisons yet</h2><p>Use Compare in Create to render one clip per recipe on the same seed.</p></div>`;
   return keys.map((k) => `<button class="kit" data-cmp="${esc(k)}" style="width:100%;margin-bottom:10px;color:inherit;text-align:left;cursor:pointer">
-    <div class="kit-strip">${groups[k].slice(0, 4).map((i) => `<img src="${thumbOut(i.file)}" alt="">`).join("")}</div>
+    <div class="kit-strip">${groups[k].slice(0, 4).map((i) => `<img src="${thumbOut(i.file, i.mtime)}" alt="">`).join("")}</div>
     <div class="grow"><h3>${esc(jobTitle(groups[k][0].meta).slice(0, 50))}</h3><div class="faint" style="font-size:12px">${groups[k].some((i) => i.new) ? `<span class="new-dot" aria-label="new"></span>` : ""}${groups[k].map((i) => esc(i.meta.label || i.meta.recipe_id)).join(" vs ")}</div></div>${ICON.chev}</button>`).join("");
 }
 function openCompare(items) {
   items.sort((a, b) => (a.meta.label || "").localeCompare(b.meta.label || ""));
   items.forEach((i) => markSeen(i.file));
   openSheet("Compare", `
-    <div class="compare-grid">${items.map((i) => `<figure><video src="${mediaOut(i.file)}" playsinline loop muted preload="auto"></video><figcaption>${esc(i.meta.label || i.meta.recipe_id)} <span class="faint num">${i.meta.timings && i.meta.timings.total_s ? clock(i.meta.timings.total_s) : ""}</span></figcaption></figure>`).join("")}</div>
+    <div class="compare-grid">${items.map((i) => `<figure><video src="${mediaOut(i.file, i.mtime)}" playsinline loop muted preload="auto"></video><figcaption>${esc(i.meta.label || i.meta.recipe_id)} <span class="faint num">${i.meta.timings && i.meta.timings.total_s ? clock(i.meta.timings.total_s) : ""}</span></figcaption></figure>`).join("")}</div>
     <div class="row" style="margin-top:12px"><button class="btn primary grow" id="cmpPlay">${ICON.play} Play together</button><button class="btn" id="cmpSound">Sound: off</button></div>
     <p class="note">Same prompt and seed; only the recipe differs. Tap a label to open that clip.</p>`, (body) => {
     const vids = $$("video", body);
@@ -1102,7 +1105,7 @@ function openOutput(start, list) {
     if (i.new) { markSeen(i.file); changed = true; }
     const prompt = m.prompt || m.actual_prompt || "";
     body.innerHTML = `
-    <div class="player"><video src="${mediaOut(i.file)}" controls playsinline loop autoplay></video></div>
+    <div class="player"><video src="${mediaOut(i.file, i.mtime)}" controls playsinline loop autoplay></video></div>
     <div class="clip-line">
       ${list.length > 1 ? `<button class="nav prev" data-nav="-1" aria-label="Previous clip" ${idx === 0 ? "disabled" : ""}>${ICON.chev}</button>` : ""}
       <div class="grow"><div class="fn">${esc(clipName(i.file))}</div>${list.length > 1 ? `<div class="faint num">${idx + 1} of ${list.length} · swipe the video to step</div>` : ""}</div>
@@ -1114,7 +1117,7 @@ function openOutput(start, list) {
       <button class="btn" data-a="continue">${ICON.next} Continue</button>
       <button class="btn" data-a="ref">${ICON.ref} As reference</button>
       <button class="btn" data-a="group">${ICON.folder} ${i.group ? esc(i.group) : "Group"}</button>
-      <a class="btn" href="${mediaOut(i.file)}" download>${ICON.down} Download</a>
+      <a class="btn" href="${mediaOut(i.file, i.mtime)}" download>${ICON.down} Download</a>
     </div>
     <dl class="kv">
       <dt>Made</dt><dd>${new Date(i.mtime * 1000).toLocaleString()} · ${bytes(i.size)}</dd>
