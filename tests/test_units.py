@@ -445,3 +445,30 @@ def test_existing_catalog_takes_seed_auto_install_once(workspace):
     loras.upsert({"version_id": 3260276, "auto_install": True})  # your choice sticks
     loras.ensure_seeded()
     assert next(e for e in loras.catalog() if e["version_id"] == 3260276)["auto_install"] is True
+
+
+def _vhs_next(folder, prefix):
+    """VideoHelperSuite's VideoCombine counter, copied: highest <prefix>_<n>... file + 1."""
+    import os
+    import re
+
+    m = re.compile(f"{re.escape(prefix)}_(\\d+)\\D*\\..+", re.IGNORECASE)
+    return max([int(x.group(1)) for f in os.listdir(folder) for x in [m.fullmatch(f)] if x], default=0) + 1
+
+
+def test_deleting_the_newest_clip_never_frees_its_name(workspace):
+    folder = paths.OUTPUT / "NUMS"
+    folder.mkdir(parents=True, exist_ok=True)
+    for n in (1, 2, 3):
+        for name in (f"T2V_{n:05d}-audio.mp4", f"T2V_{n:05d}.png", f"T2V_{n:05d}-audio.mp4.h3.json"):
+            (folder / name).write_bytes(b"x")
+    library.delete_output("NUMS/T2V_00003-audio.mp4")
+    library.delete_output("NUMS/T2V_00002-audio.mp4")
+    assert _vhs_next(folder, "T2V") == 4, "a new render must not reuse a deleted clip's name"
+    markers = [f for f in __import__("os").listdir(folder) if f.endswith(library.RESERVED_SUFFIX)]
+    assert markers == ["T2V_00003-number-reserved.txt"]  # one marker per prefix, at the highest number
+    assert all(i["file"].endswith(".mp4") for i in library.outputs()["items"])  # markers never show in the Library
+    (folder / "T2V_00004-audio.mp4").write_bytes(b"x")  # the next render lands; deleting an older clip
+    library.delete_output("NUMS/T2V_00001-audio.mp4")
+    assert not [f for f in __import__("os").listdir(folder) if f.endswith(library.RESERVED_SUFFIX)]  # 4 holds the count
+    assert _vhs_next(folder, "T2V") == 5
