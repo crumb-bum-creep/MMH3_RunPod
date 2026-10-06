@@ -472,3 +472,59 @@ def test_deleting_the_newest_clip_never_frees_its_name(workspace):
     library.delete_output("NUMS/T2V_00001-audio.mp4")
     assert not [f for f in __import__("os").listdir(folder) if f.endswith(library.RESERVED_SUFFIX)]  # 4 holds the count
     assert _vhs_next(folder, "T2V") == 5
+
+
+def test_job_finishing_during_the_history_poll_is_not_left_running(workspace, monkeypatch):
+    """The websocket can report success while the 10 s history fallback is mid-request. That must
+    not raise (InvalidStateError) and strand the job as "running" while the queue moves on."""
+    import asyncio
+
+    from studio import jobs
+
+    class FakeComfy:
+        def on_event(self, cb):
+            pass
+
+        async def history(self, pid):
+            await runner._on_event("execution_success", {"prompt_id": pid})  # lands mid-request
+            return {"status": {"completed": True, "status_str": "success"}}
+
+    monkeypatch.setattr(jobs, "POLL_SECONDS", 0.01)
+    runner = jobs.Runner(FakeComfy())
+    finalized = []
+
+    async def fake_finalize(job):
+        finalized.append(job["id"])
+        runner._touch(job, status="done")
+
+    async def nothing():
+        return None
+
+    monkeypatch.setattr(runner, "_finalize", fake_finalize)
+    monkeypatch.setattr(runner, "_after_job", nothing)
+    job = {"id": "j1", "status": "running", "prompt_id": "p1", "created": 1.0}
+    runner.jobs[job["id"]] = job
+    asyncio.run(runner._await_completion(job))
+    assert job["status"] == "done" and finalized == ["j1"]
+
+
+def test_a_crash_while_running_a_job_never_leaves_it_running(workspace, monkeypatch):
+    import asyncio
+
+    from studio import jobs
+
+    class FakeComfy:
+        def on_event(self, cb):
+            pass
+
+    runner = jobs.Runner(FakeComfy())
+    job = {"id": "j2", "status": "queued", "created": 1.0, "prompt": "x"}
+    runner.jobs[job["id"]] = job
+
+    async def boom(j):
+        runner._touch(j, status="running", prompt_id="p2")
+        raise RuntimeError("something unexpected")
+
+    monkeypatch.setattr(runner, "_run", boom)
+    asyncio.run(runner._run_one(job))
+    assert job["status"] == "failed" and "something unexpected" in job["error"]

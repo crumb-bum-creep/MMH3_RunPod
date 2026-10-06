@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.2.2
+
+- **The Queue's "now rendering" card no longer freezes.** If a job finished in the moment the runner
+  was double-checking ComfyUI's history, both paths tried to record the result. The second one
+  raised, the job was stranded as "running", and the queue carried on without it: the card kept
+  showing that job's prompt, timer and last preview, and new previews were filed under it. The
+  fallback now only records a result once. Anything unexpected while running a job now fails that
+  job with the reason instead of stranding it, and live previews go to the newest running job.
+  A job stranded before this update is collected from ComfyUI's history when Studio restarts.
+
 ## 2.2.1
 
 - **Deleted clips no longer come back.** VideoHelperSuite numbers each new clip after the highest
