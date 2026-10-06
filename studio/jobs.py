@@ -42,6 +42,9 @@ STAGE_BY_CLASS = {
 }
 
 
+POLL_SECONDS = 10  # history fallback interval while a job runs (the websocket is the fast path)
+
+
 class JobError(ValueError):
     pass
 
@@ -294,12 +297,28 @@ class Runner:
                     except asyncio.TimeoutError:
                         pass
                     continue
-                await self._run(job)
+                await self._run_one(job)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("runner loop error")
                 await asyncio.sleep(3)
+
+    async def _run_one(self, job: dict[str, Any]) -> None:
+        """Run a job; if anything unexpected escapes, fail it rather than leave it "running".
+
+        A stranded "running" job is skipped by the loop, so the queue carries on while the
+        Queue screen keeps showing the stranded job as the one rendering."""
+        try:
+            await self._run(job)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.exception("job %s crashed", job.get("id"))
+            if job.get("status") in ACTIVE:
+                self._touch(job, status="failed", stage="", finished=_now(),
+                            error=f"Studio hit an internal error on this job: {type(exc).__name__}: {exc}"[:300])
+            self._titles.pop(job.get("id"), None)
 
     async def _run(self, job: dict[str, Any]) -> None:
         # 1. prompt
@@ -481,7 +500,7 @@ class Runner:
         try:
             while not fut.done():
                 try:
-                    await asyncio.wait_for(asyncio.shield(fut), timeout=10)
+                    await asyncio.wait_for(asyncio.shield(fut), timeout=POLL_SECONDS)
                     break
                 except asyncio.TimeoutError:
                     pass
@@ -493,10 +512,12 @@ class Runner:
                     hist = None
                     dead_since = dead_since or _now()
                     if _now() - dead_since > 90:
-                        fut.set_result(("error", "ComfyUI stopped responding (it is being restarted)"))
+                        if not fut.done():
+                            fut.set_result(("error", "ComfyUI stopped responding (it is being restarted)"))
                         self.resident = None
                         break
-                if hist and (hist.get("status") or {}).get("completed") is not None:
+                # The websocket may have resolved the job while history() was awaited.
+                if hist and not fut.done() and (hist.get("status") or {}).get("completed") is not None:
                     st = hist["status"]
                     if st.get("status_str") == "success":
                         fut.set_result(("success", None))
@@ -606,8 +627,9 @@ class Runner:
     # ------------------------------------------------------------------ events
 
     def _job_for_pid(self, pid: str | None) -> dict[str, Any] | None:
-        if not pid:
-            return next((j for j in self.jobs.values() if j["status"] == "running"), None)
+        if not pid:  # live previews carry no prompt id: they belong to the newest running job
+            running = [j for j in self.jobs.values() if j["status"] == "running"]
+            return max(running, key=lambda j: j.get("started") or 0, default=None)
         return next((j for j in self.jobs.values() if j.get("prompt_id") == pid), None)
 
     async def _on_event(self, kind: str, data: dict[str, Any]) -> None:
