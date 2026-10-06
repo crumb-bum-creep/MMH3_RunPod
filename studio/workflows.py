@@ -68,6 +68,7 @@ def fetch(force: bool = False, only: str | None = None) -> dict[str, Any]:
             if not isinstance(data, dict) or not ("nodes" in data or any(isinstance(v, dict) and "class_type" in v
                                                                           for v in data.values())):
                 raise RuntimeError("the download isn't a ComfyUI workflow")
+            data = adapt(data, wf)
             target.mkdir(parents=True, exist_ok=True)
             tmp = dest.with_suffix(".part")
             tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -78,6 +79,87 @@ def fetch(force: bool = False, only: str | None = None) -> dict[str, Any]:
             _set(wf["id"], state="failed", error=str(exc)[:300])
             log.warning("workflow %s failed: %s", wf["id"], exc)
     return _status()
+
+
+MUTED = 2  # LiteGraph node mode "Never": skipped when the workflow is queued
+
+
+def adapt(data: dict[str, Any], wf: dict[str, Any]) -> dict[str, Any]:
+    """Fit a downloaded workflow to this pod: official H3 file names -> the files here,
+    passthrough node types this image doesn't have spliced out, and listed optional
+    node types (plus anything fed only by them) muted."""
+    aliases = {str(k): str(v) for k, v in (manifest().get("model_aliases") or {}).items()}
+    nodes = _nodes(data)
+    for n in nodes:
+        w = n.get("widgets_values")
+        if isinstance(w, list):
+            n["widgets_values"] = [aliases.get(v, v) if isinstance(v, str) else v for v in w]
+    for t in wf.get("splice") or []:
+        _splice(data, t)
+        nodes = _nodes(data)
+    mute = set(wf.get("mute") or [])
+    if mute:
+        muted = {n["id"] for n in nodes if n.get("type") in mute and "id" in n}
+        sources = {}  # link id -> origin node id
+        for link in data.get("links") or []:
+            if isinstance(link, list) and len(link) >= 2:
+                sources[link[0]] = link[1]
+            elif isinstance(link, dict):
+                sources[link.get("id")] = link.get("origin_id")
+        grew = True
+        while grew:  # a node whose every connected input comes from a muted node has nothing to work on
+            grew = False
+            for n in nodes:
+                ins = [i.get("link") for i in n.get("inputs") or [] if i.get("link") is not None]
+                if n.get("id") not in muted and ins and all(sources.get(x) in muted for x in ins):
+                    muted.add(n["id"])
+                    grew = True
+        for n in nodes:
+            if n.get("id") in muted:
+                n["mode"] = MUTED
+    return data
+
+
+def _splice(data: dict[str, Any], node_type: str) -> None:
+    """Remove top-level nodes of a passthrough type (e.g. a LoRA loader with no LoRAs in it),
+    connecting whatever fed each input straight to the consumers of the matching output.
+    A node that names a model file (a LoRA actually loaded) is left alone, so it shows as
+    missing instead of being silently dropped."""
+    links = data.get("links") or []
+    by_link = {lk[0]: lk for lk in links if isinstance(lk, list) and len(lk) >= 6}
+    by_id = {n.get("id"): n for n in data.get("nodes") or [] if isinstance(n, dict)}
+    for node in [n for n in by_id.values() if n.get("type") == node_type
+                 and not any(v.lower().endswith(MODEL_EXT) for v in _strings(n.get("widgets_values")))]:
+        feeds = {}  # type -> link feeding the node's input of that type
+        for i in node.get("inputs") or []:
+            if i.get("link") in by_link:
+                feeds.setdefault(i.get("type"), by_link[i["link"]])
+        drop = {i.get("link") for i in node.get("inputs") or []}
+        for out in node.get("outputs") or []:
+            src = feeds.get(out.get("type"))
+            for lid in out.get("links") or []:
+                link = by_link.get(lid)
+                if link is None:
+                    continue
+                if src is None:  # nothing to pass through: the consumer's input goes empty
+                    drop.add(lid)
+                    for i in (by_id.get(link[3]) or {}).get("inputs") or []:
+                        if i.get("link") == lid:
+                            i["link"] = None
+                    continue
+                link[1], link[2] = src[1], src[2]
+                origin = by_id.get(src[1]) or {}
+                outs = origin.get("outputs") or []
+                if src[2] < len(outs):
+                    outs[src[2]]["links"] = [x for x in (outs[src[2]].get("links") or []) if x != src[0]] + [lid]
+        data["links"] = [lk for lk in links if not (isinstance(lk, list) and lk and lk[0] in drop)]
+        links = data["links"]
+        data["nodes"] = [n for n in data.get("nodes") or [] if n is not node]
+        for n in data["nodes"]:
+            for out in n.get("outputs") or []:
+                if out.get("links"):
+                    out["links"] = [x for x in out["links"] if x not in drop]
+        by_link = {lk[0]: lk for lk in links if isinstance(lk, list) and len(lk) >= 6}
 
 
 def _nodes(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -103,8 +185,9 @@ def check(data: dict[str, Any], node_types: set[str] | None) -> dict[str, list[s
     """Node types this ComfyUI doesn't have, and model files the workflow names that aren't on disk."""
     subgraph_ids = {sg.get("id") for sg in ((data.get("definitions") or {}).get("subgraphs") or [])}
     if "nodes" in data:
-        types = {n.get("type") for n in _nodes(data)}
-        widgets = [n.get("widgets_values") for n in _nodes(data)]
+        live = [n for n in _nodes(data) if n.get("mode") not in (MUTED, 4)]  # muted / bypassed nodes don't run
+        types = {n.get("type") for n in live}
+        widgets = [n.get("widgets_values") for n in live]
     else:  # API format
         types = {v.get("class_type") for v in data.values() if isinstance(v, dict)}
         widgets = [v.get("inputs") for v in data.values() if isinstance(v, dict)]

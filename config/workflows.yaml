@@ -6,8 +6,30 @@
 # replaces it with the original).
 #
 # needs: model ids from models.yaml the workflow expects on disk.
+# splice: passthrough node types this image doesn't have (e.g. an empty LoRA
+#        loader). They're removed and their input wired straight to their outputs.
+# mute:  node types this image doesn't have that the workflow can run without.
+#        They're muted on install, along with any node fed only by them.
+#
+# model_aliases (all workflows): official H3 file names a workflow may ask for,
+# mapped to the ones on this pod, so loaders don't come up red.
 
 folder: Studio extras
+
+model_aliases:
+  qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors: qwen3vl_32b_minimax_h3_int8_convrot.safetensors
+  qwen3vl_32b_minimax_h3_bf16.safetensors: qwen3vl_32b_minimax_h3_int8_convrot.safetensors
+  minimax_h3_fl2va_bf16.safetensors: minimax_h3_fl2va_pruned_int8_convrot.safetensors
+  minimax_h3_fl2va_int8_convrot.safetensors: minimax_h3_fl2va_pruned_int8_convrot.safetensors
+  minimax_h3_fl2va_pruned_bf16.safetensors: minimax_h3_fl2va_pruned_int8_convrot.safetensors
+  minimax_h3_fl2va_pruned_fp8_scaled.safetensors: minimax_h3_fl2va_pruned_int8_convrot.safetensors
+  minimax_h3_fl2va_pruned_w6a8.safetensors: minimax_h3_fl2va_pruned_int8_convrot.safetensors
+  minimax_h3_ref2va_bf16.safetensors: minimax_h3_ref2va_pruned_int8_convrot.safetensors
+  minimax_h3_ref2va_int8_convrot.safetensors: minimax_h3_ref2va_pruned_int8_convrot.safetensors
+  minimax_h3_ref2va_pruned_bf16.safetensors: minimax_h3_ref2va_pruned_int8_convrot.safetensors
+  minimax_h3_ref2va_pruned_fp8_scaled.safetensors: minimax_h3_ref2va_pruned_int8_convrot.safetensors
+  minimax_h3_ref2va_pruned_w6a8.safetensors: minimax_h3_ref2va_pruned_int8_convrot.safetensors
+  minimax_h3_video_vae_int8_convrot.safetensors: minimax_h3_video_vae_fp16.safetensors
 
 workflows:
   - id: image_edit_v2
@@ -17,6 +39,8 @@ workflows:
     source: https://civitai.com/models/2833301?modelVersionId=3349226
     note: Up to nine reference images. Uses the experimental image VAE.
     needs: [h3_image_vae]
+    # An rgthree LoRA loader with no LoRAs in it, between the model loader and the sampler.
+    splice: [Power Lora Loader (rgthree)]
   - id: image_edit_v1
     title: Image editing v1 (simple)
     filename: MiniMax H3 Image Editing v1 (simple).json
@@ -24,3 +48,5 @@ workflows:
     source: https://civitai.com/models/2833301?modelVersionId=3197357
     note: One image in, one edited image out. Regular MiniMax H3 models only.
     needs: []
+    # Only builds the before/after side-by-side (ComfyUI-RMBG); the edit itself is saved without it.
+    mute: [AILab_ImageCompare]

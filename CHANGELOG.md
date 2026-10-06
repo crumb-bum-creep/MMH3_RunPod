@@ -6,6 +6,10 @@
   (v1 simple, v2 with up to nine references) are installed into ComfyUI's Workflows sidebar under
   *Studio extras*. They're downloaded on the pod with `CIVITAI_TOKEN` (CivitAI requires a login for
   them), never bundled, and never overwritten once present, so your edits survive restarts.
+- On install they're fitted to this pod: the official H3 file names they ask for (nvfp4 text
+  encoder, other UNET/VAE variants) point at the files here; v2's empty rgthree LoRA loader is
+  removed and the model wired straight to the sampler; v1's optional before/after compare
+  (ComfyUI-RMBG) is muted. The edit itself is saved as usual. Both open with no red nodes.
 - The experimental single-image H3 VAE v2 needs (`Mamad8/MiniMax-H3-Image-VAE`, 5.2 GB, images only)
   downloads with the core models into `models/vae/`. Video generation never uses it.
 - System → ComfyUI workflows shows each workflow's state, and any node or model file it names that
