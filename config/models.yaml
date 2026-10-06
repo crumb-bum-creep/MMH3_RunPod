@@ -99,6 +99,16 @@ models:
     label: Ref2V turbo 4-step v0.1
     min_mb: 1000
 
+  h3_image_vae:
+    # Experimental single-image H3 VAE (Mamad8), for the Image editing v2 workflow.
+    # Images only: never a replacement for the video VAE.
+    file: vae/minimax_h3_t1_image_vae_step1597.safetensors
+    hf: Mamad8/MiniMax-H3-Image-VAE
+    path: minimax_h3_t1_image_vae_step1597.safetensors
+    group: core
+    used_by: []
+    min_mb: 4900
+
   eros_beta5_int8:
     file: diffusion_models/10Eros_Max_h3_hybrid_beta5_int8.safetensors
     hf: TenStrip/10Eros-Max

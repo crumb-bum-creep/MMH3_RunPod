@@ -528,3 +528,111 @@ def test_a_crash_while_running_a_job_never_leaves_it_running(workspace, monkeypa
     monkeypatch.setattr(runner, "_run", boom)
     asyncio.run(runner._run_one(job))
     assert job["status"] == "failed" and "something unexpected" in job["error"]
+
+
+def test_workflow_check_finds_missing_nodes_and_models(workspace):
+    from studio import workflows
+
+    vae = paths.MODELS / "vae" / "minimax_h3_video_vae_fp16.safetensors"
+    vae.parent.mkdir(parents=True, exist_ok=True)
+    vae.write_bytes(b"x")
+    wf = {"nodes": [
+        {"type": "VAELoader", "widgets_values": ["minimax_h3_t1_image_vae_step1597.safetensors"]},
+        {"type": "VAELoader", "widgets_values": ["minimax_h3_video_vae_fp16.safetensors"]},
+        {"type": "SomeCustomNode", "widgets_values": [1, "text"]},
+        {"type": "Note", "widgets_values": ["just a note.safetensors? no"]},
+        {"type": "1f2e-subgraph-id"}],
+        "definitions": {"subgraphs": [{"id": "1f2e-subgraph-id", "nodes": [
+            {"type": "UNETLoader", "widgets_values": ["models/diffusion_models/other_h3.safetensors", "default"]}]}]}}
+    out = workflows.check(wf, {"VAELoader", "UNETLoader"})
+    assert out["missing_nodes"] == ["SomeCustomNode"]
+    assert out["missing_models"] == ["minimax_h3_t1_image_vae_step1597.safetensors", "other_h3.safetensors"]
+    assert workflows.check(wf, None)["missing_nodes"] == []  # ComfyUI not up yet: nodes unchecked
+
+
+def test_workflows_install_from_civitai_and_keep_your_edits(workspace, monkeypatch):
+    import json
+
+    from studio import civitai, workflows
+
+    monkeypatch.delenv("CIVITAI_TOKEN", raising=False)
+    workflows.fetch()
+    assert all(v["state"] == "needs_token" for v in util.read_json(workflows.STATUS, {}).values())
+
+    class Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"nodes": [{"type": "VAELoader", "widgets_values": ["x.safetensors"]}]}
+
+    calls = []
+    monkeypatch.setenv("CIVITAI_TOKEN", "tok")
+    monkeypatch.setattr(workflows.requests, "get", lambda url, **kw: calls.append(url) or Resp())
+    workflows.fetch()
+    names = {w["filename"] for w in workflows.manifest()["workflows"]}
+    assert {p.name for p in workflows.folder().iterdir()} == names
+    assert all("token=tok" in u and "fileId=" in u for u in calls)
+    edited = workflows.folder() / sorted(names)[0]
+    edited.write_text(json.dumps({"nodes": [], "mine": True}))
+    calls.clear()
+    workflows.fetch()  # present: left alone
+    assert not calls and json.loads(edited.read_text())["mine"]
+    rows = {r["id"]: r for r in workflows.listing({"VAELoader"})}
+    assert all(r["installed"] and r["path"].startswith("Studio extras/") for r in rows.values())
+    assert civitai.token() == "tok"
+
+
+def test_workflow_adapt_maps_h3_names_and_mutes_optional_nodes():
+    """Shaped like the v1 image-edit workflow: an nvfp4 text encoder and an RMBG compare node
+    feeding its own SaveImage, next to the SaveImage that holds the actual edit."""
+    from studio import workflows
+
+    wf = {"nodes": [
+        {"id": 130, "type": "CLIPLoader", "widgets_values": ["qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "minimax", "default"]},
+        {"id": 149, "type": "ResizeImageMaskNode", "inputs": [], "widgets_values": []},
+        {"id": 154, "type": "AILab_ImageCompare", "inputs": [{"name": "image1", "link": 278}, {"name": "image2", "link": 279}]},
+        {"id": 165, "type": "SaveImage", "inputs": [{"name": "images", "link": 290}], "widgets_values": ["Edit"]},
+        {"id": 166, "type": "SaveImage", "inputs": [{"name": "images", "link": 291}], "widgets_values": ["Compare"]},
+        {"id": 114, "type": "LoadImage", "inputs": [], "widgets_values": ["x.png", "image"]}],
+        "links": [[278, 114, 0, 154, 0, "IMAGE"], [279, 149, 0, 154, 1, "IMAGE"],
+                  [290, 149, 0, 165, 0, "IMAGE"], [291, 154, 0, 166, 0, "IMAGE"]]}
+    out = workflows.adapt(wf, {"mute": ["AILab_ImageCompare"]})
+    by = {n["id"]: n for n in out["nodes"]}
+    assert by[130]["widgets_values"][0] == "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"
+    assert by[154]["mode"] == workflows.MUTED and by[166]["mode"] == workflows.MUTED  # compare + its save
+    assert "mode" not in by[165] and "mode" not in by[114]  # the edit is still saved
+    known = {"CLIPLoader", "ResizeImageMaskNode", "SaveImage", "LoadImage"}
+    assert workflows.check(out, known)["missing_nodes"] == []  # muted nodes aren't reported
+
+
+def test_workflow_splice_rewires_an_empty_lora_loader_and_keeps_a_used_one():
+    """Shaped like the v2 image-edit workflow: an rgthree LoRA loader with no LoRAs
+    between the UNET loader and the guider/scheduler."""
+    from studio import workflows
+
+    def wf(lora_rows):
+        return {"nodes": [
+            {"id": 127, "type": "UNETLoader", "inputs": [], "outputs": [{"type": "MODEL", "links": [334]}]},
+            {"id": 196, "type": "Power Lora Loader (rgthree)", "widgets_values": [{}, {"type": "PowerLoraLoaderHeaderWidget"}, *lora_rows, ""],
+             "inputs": [{"type": "MODEL", "link": 334}, {"type": "CLIP", "link": None}],
+             "outputs": [{"type": "MODEL", "links": [332, 333]}, {"type": "CLIP", "links": [335]}]},
+            {"id": 126, "type": "BasicGuider", "inputs": [{"type": "MODEL", "link": 332}], "outputs": []},
+            {"id": 124, "type": "BasicScheduler", "inputs": [{"type": "MODEL", "link": 333}], "outputs": []},
+            {"id": 200, "type": "CLIPTextEncode", "inputs": [{"type": "CLIP", "link": 335}], "outputs": []}],
+            "links": [[332, 196, 0, 126, 0, "MODEL"], [333, 196, 0, 124, 0, "MODEL"],
+                      [334, 127, 0, 196, 0, "MODEL"], [335, 196, 1, 200, 0, "CLIP"]]}
+
+    out = workflows.adapt(wf([]), {"splice": ["Power Lora Loader (rgthree)"]})
+    by = {n["id"]: n for n in out["nodes"]}
+    assert 196 not in by
+    assert sorted(out["links"]) == [[332, 127, 0, 126, 0, "MODEL"], [333, 127, 0, 124, 0, "MODEL"]]
+    assert by[127]["outputs"][0]["links"] == [332, 333]
+    assert by[200]["inputs"][0]["link"] is None  # nothing fed the loader's CLIP
+    assert workflows.check(out, {"UNETLoader", "BasicGuider", "BasicScheduler", "CLIPTextEncode"})["missing_nodes"] == []
+
+    used = workflows.adapt(wf([{"on": True, "lora": "style.safetensors", "strength": 1}]),
+                           {"splice": ["Power Lora Loader (rgthree)"]})
+    assert any(n["id"] == 196 for n in used["nodes"])  # a loaded LoRA is never dropped silently

@@ -52,6 +52,9 @@ stays available on 8188.
 - **References.** Upload images, clips and audio from your phone and save named **kits** of
   references to reuse in R2V. Tags like `<Picture 1>` are shown on each tile, and a clip's
   soundtrack can be toggled.
+- **Image editing (ComfyUI).** Open ComfyUI on 8188 → Workflows → *Studio extras* for the MiniMax
+  H3 Image Editing workflows (v1 simple, v2 with references and the experimental image VAE). They
+  download on boot with `CIVITAI_TOKEN`; System → ComfyUI workflows shows anything they're missing.
 - **More → LoRAs and models.** Your catalog, plus **Browse CivitAI** (search, bookmarks and your
   collections), with LoRAs and base checkpoints filtered to MiniMax H3. LoRAs set not to download
   on startup sit under **Quick install**, one tap away (set per LoRA; `auto_install` in
