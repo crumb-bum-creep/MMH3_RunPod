@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.3.0
+
+- **Image editing in ComfyUI.** The *MiniMax H3 Image Editing* workflows by their CivitAI author
+  (v1 simple, v2 with up to nine references) are installed into ComfyUI's Workflows sidebar under
+  *Studio extras*. They're downloaded on the pod with `CIVITAI_TOKEN` (CivitAI requires a login for
+  them), never bundled, and never overwritten once present, so your edits survive restarts.
+- The experimental single-image H3 VAE v2 needs (`Mamad8/MiniMax-H3-Image-VAE`, 5.2 GB, images only)
+  downloads with the core models into `models/vae/`. Video generation never uses it.
+- System → ComfyUI workflows shows each workflow's state, and any node or model file it names that
+  this ComfyUI doesn't have. *Get* downloads it now, *Reset* restores the original.
+
 ## 2.2.2
 
 - **The Queue's "now rendering" card no longer freezes.** If a job finished in the moment the runner

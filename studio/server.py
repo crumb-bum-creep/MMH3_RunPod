@@ -15,7 +15,7 @@ from typing import Any
 
 from aiohttp import web
 
-from . import __version__, civitai, graph, library, loras, memory, paths, prompting, provision, recipes, util
+from . import __version__, civitai, graph, library, loras, memory, paths, prompting, provision, recipes, util, workflows
 from .comfy import Comfy, ComfyError
 from .jobs import JobError, Runner
 
@@ -488,8 +488,19 @@ async def system(request: web.Request) -> web.Response:
         "prompting": {"key": bool(prompting.api_key()), "key_source": prompting.key_source(),
                       "model": (s.get("prompting") or {}).get("model")},
         "civitai_token": bool(civitai.token()), "civitai_domain": civitai.base_url(),
+        "workflows": await asyncio.to_thread(workflows.listing, await _node_types(comfy)),
         "password": bool(_password()),
     })
+
+
+async def _node_types(comfy: Comfy) -> set[str] | None:
+    """Node types ComfyUI knows, or None while it's starting (then nodes aren't checked)."""
+    if not comfy.connected:
+        return None
+    try:
+        return set(await comfy.object_info())
+    except ComfyError:
+        return None
 
 
 def _get_dotted(d: dict[str, Any], key: str) -> Any:
@@ -538,6 +549,9 @@ async def system_action(request: web.Request) -> web.Response:
         _spawn_provision([g for g in (body.get("groups") or ["core"]) if g in ("core", "eros")])
     elif action == "key":
         prompting.save_key(str(body.get("key") or ""))
+    elif action == "workflows":
+        status = await asyncio.to_thread(workflows.fetch, bool(body.get("force")), body.get("id") or None)
+        return ok({"status": status})
     else:
         return bad("unknown action", 404)
     return ok()

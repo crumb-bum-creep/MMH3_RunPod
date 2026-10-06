@@ -528,3 +528,58 @@ def test_a_crash_while_running_a_job_never_leaves_it_running(workspace, monkeypa
     monkeypatch.setattr(runner, "_run", boom)
     asyncio.run(runner._run_one(job))
     assert job["status"] == "failed" and "something unexpected" in job["error"]
+
+
+def test_workflow_check_finds_missing_nodes_and_models(workspace):
+    from studio import workflows
+
+    vae = paths.MODELS / "vae" / "minimax_h3_video_vae_fp16.safetensors"
+    vae.parent.mkdir(parents=True, exist_ok=True)
+    vae.write_bytes(b"x")
+    wf = {"nodes": [
+        {"type": "VAELoader", "widgets_values": ["minimax_h3_t1_image_vae_step1597.safetensors"]},
+        {"type": "VAELoader", "widgets_values": ["minimax_h3_video_vae_fp16.safetensors"]},
+        {"type": "SomeCustomNode", "widgets_values": [1, "text"]},
+        {"type": "Note", "widgets_values": ["just a note.safetensors? no"]},
+        {"type": "1f2e-subgraph-id"}],
+        "definitions": {"subgraphs": [{"id": "1f2e-subgraph-id", "nodes": [
+            {"type": "UNETLoader", "widgets_values": ["models/diffusion_models/other_h3.safetensors", "default"]}]}]}}
+    out = workflows.check(wf, {"VAELoader", "UNETLoader"})
+    assert out["missing_nodes"] == ["SomeCustomNode"]
+    assert out["missing_models"] == ["minimax_h3_t1_image_vae_step1597.safetensors", "other_h3.safetensors"]
+    assert workflows.check(wf, None)["missing_nodes"] == []  # ComfyUI not up yet: nodes unchecked
+
+
+def test_workflows_install_from_civitai_and_keep_your_edits(workspace, monkeypatch):
+    import json
+
+    from studio import civitai, workflows
+
+    monkeypatch.delenv("CIVITAI_TOKEN", raising=False)
+    workflows.fetch()
+    assert all(v["state"] == "needs_token" for v in util.read_json(workflows.STATUS, {}).values())
+
+    class Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"nodes": [{"type": "VAELoader", "widgets_values": ["x.safetensors"]}]}
+
+    calls = []
+    monkeypatch.setenv("CIVITAI_TOKEN", "tok")
+    monkeypatch.setattr(workflows.requests, "get", lambda url, **kw: calls.append(url) or Resp())
+    workflows.fetch()
+    names = {w["filename"] for w in workflows.manifest()["workflows"]}
+    assert {p.name for p in workflows.folder().iterdir()} == names
+    assert all("token=tok" in u and "fileId=" in u for u in calls)
+    edited = workflows.folder() / sorted(names)[0]
+    edited.write_text(json.dumps({"nodes": [], "mine": True}))
+    calls.clear()
+    workflows.fetch()  # present: left alone
+    assert not calls and json.loads(edited.read_text())["mine"]
+    rows = {r["id"]: r for r in workflows.listing({"VAELoader"})}
+    assert all(r["installed"] and r["path"].startswith("Studio extras/") for r in rows.values())
+    assert civitai.token() == "tok"

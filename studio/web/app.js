@@ -1622,6 +1622,16 @@ async function viewSystem() {
       <div><span class="dot ${d.services.sage ? "ok" : ""}"></span><div class="grow">SageAttention</div><span class="sub">${d.services.sage ? "on" : "off"}</span></div></div>
     <p class="note faint" style="overflow-wrap:anywhere">ComfyUI flags: ${esc(d.comfy_args.join(" "))}</p>
 
+    ${(d.workflows || []).length ? `<div class="section-title"><h2>ComfyUI workflows</h2><span class="faint" style="font-size:12px">open them in ComfyUI → Workflows</span></div>
+    <div class="list">${d.workflows.map((w) => {
+      const issues = [...(w.missing_nodes || []).map((n) => `node ${n}`), ...(w.missing_models || []).map((m) => `model ${m}`)];
+      const dot = !w.installed ? (w.state === "failed" || w.state === "needs_token" ? "bad" : "warn") : issues.length ? "warn" : "ok";
+      const sub = !w.installed ? esc(w.error || (w.state === "missing" ? "not downloaded yet (downloads on boot)" : w.state))
+        : issues.length ? `Missing in this ComfyUI: ${esc(issues.join(", "))}` : `Ready · ${esc(w.path)}`;
+      return `<div><span class="dot ${dot}"></span><div class="grow">${esc(w.title)}<div class="sub">${esc(w.note)}</div><div class="sub">${sub}</div></div>
+        <button class="btn small" data-wf="${esc(w.id)}" title="${w.installed ? "Replace it with the original from CivitAI (your edits in ComfyUI are lost)" : "Download it now"}">${w.installed ? "Reset" : "Get"}</button></div>`;
+    }).join("")}</div>` : ""}
+
     <div class="section-title"><h2>Keys</h2></div>
     <div class="list">
       <div><span class="dot ${d.prompting.key ? "ok" : "bad"}"></span><div class="grow">OpenRouter (Auto prompts)<div class="sub">${d.prompting.key ? esc(d.prompting.key_source) : "not set"}</div></div><button class="btn small" id="keyBtn">${d.prompting.key ? "Change" : "Add"}</button></div>
@@ -1647,6 +1657,13 @@ async function viewSystem() {
       if (a === "provision") await api("/api/system/provision", { body: { groups: ["core"] } });
       toast("Done"); setTimeout(viewSystem, 1500);
     } catch (e) { fail(e); }
+  });
+  $$("[data-wf]").forEach((b) => b.onclick = async () => {
+    const reset = b.textContent.trim() === "Reset";
+    if (reset && !confirm("Replace this workflow with the original from CivitAI? Changes you saved to it in ComfyUI are lost.")) return;
+    b.disabled = true;
+    try { await api("/api/system/workflows", { body: { id: b.dataset.wf, force: reset } }); toast(reset ? "Workflow reset" : "Workflow downloaded"); viewSystem(); }
+    catch (e) { fail(e); b.disabled = false; }
   });
   $$("[data-set]").forEach((el) => el.onchange = () => {
     const val = el.type === "checkbox" ? el.checked : el.type === "number" ? Number(el.value) : el.value;

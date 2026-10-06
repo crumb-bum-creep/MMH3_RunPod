@@ -191,6 +191,12 @@ def run(groups: list[str]) -> int:
             pool.submit(_download, mid, entry, prog, int(cfg.get("retries", 4)))
     prog.running = False
     prog.flush()
+    if "core" in groups:
+        try:  # extra ComfyUI workflows (config/workflows.yaml); never blocks the models
+            from . import workflows
+            workflows.fetch()
+        except Exception as exc:
+            log.warning("workflow install failed: %s", exc)
     failed = [m for m, v in prog.models.items() if v.get("state") == "failed"]
     fcntl.flock(fd, fcntl.LOCK_UN)
     os.close(fd)

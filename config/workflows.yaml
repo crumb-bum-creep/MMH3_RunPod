@@ -1,0 +1,26 @@
+# ComfyUI workflows Studio installs into ComfyUI's Workflows sidebar
+# (/workspace/ComfyUI/user/default/workflows/<folder>/). They are downloaded on
+# the pod from their source, not bundled in this repo: CivitAI files here need
+# a logged-in account, so the pod uses CIVITAI_TOKEN. An existing file is never
+# overwritten, so your edits in ComfyUI are kept (System → Download again
+# replaces it with the original).
+#
+# needs: model ids from models.yaml the workflow expects on disk.
+
+folder: Studio extras
+
+workflows:
+  - id: image_edit_v2
+    title: Image editing v2 (with references)
+    filename: MiniMax H3 Image Editing v2 (references).json
+    civitai: {version_id: 3349226, file_id: 3236340}
+    source: https://civitai.com/models/2833301?modelVersionId=3349226
+    note: Up to nine reference images. Uses the experimental image VAE.
+    needs: [h3_image_vae]
+  - id: image_edit_v1
+    title: Image editing v1 (simple)
+    filename: MiniMax H3 Image Editing v1 (simple).json
+    civitai: {version_id: 3197357, file_id: 3078405}
+    source: https://civitai.com/models/2833301?modelVersionId=3197357
+    note: One image in, one edited image out. Regular MiniMax H3 models only.
+    needs: []
