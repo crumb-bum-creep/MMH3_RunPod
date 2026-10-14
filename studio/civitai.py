@@ -101,7 +101,10 @@ def _words(text: str) -> str:
 
 def _family(text: str) -> str:
     n = _words(text)
-    return "ref2v" if _REF.search(n) else "fl2v" if _FL.search(n) else "any"
+    ref, fl = bool(_REF.search(n)), bool(_FL.search(n))
+    if ref and fl:  # "[T2V/Ref2V]", "flREF2VA": made for both
+        return "any"
+    return "ref2v" if ref else "fl2v" if fl else "any"
 
 
 def classify_files(files: list[dict[str, Any]], version_name: str = "") -> list[dict[str, Any]]:
@@ -298,7 +301,10 @@ def search(query: str = "", kind: str = "lora", h3_only: bool = True, cursor: st
 
 
 def version(version_id: int) -> dict[str, Any]:
-    return normalize_version(_get(f"/api/v1/model-versions/{int(version_id)}"))
+    """A version as installs see it: only files this pod can load."""
+    v = normalize_version(_get(f"/api/v1/model-versions/{int(version_id)}"))
+    v["files"] = [f for f in v["files"] if not f.get("unsupported")]
+    return v
 
 
 def my_collections() -> list[dict[str, Any]]:

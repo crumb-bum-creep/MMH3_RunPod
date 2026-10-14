@@ -646,6 +646,8 @@ def test_version_name_decides_when_no_file_says():
     files = civitai.classify_files([{"name": "heptagram_turboV10_int8.safetensors"},
                                     {"name": "heptagram_turboV10_bf16.safetensors"}], "Comfy Ref2va Pruned")
     assert [f["family"] for f in files] == ["ref2v", "ref2v"]
+    files = civitai.classify_files([{"name": "minimax-h3-digicam.safetensors"}], "[T2V/Ref2V] [Beta] V0.1")
+    assert files[0]["family"] == "any"  # a version made for both modes stays usable in both
     files = civitai.classify_files([{"name": "x.safetensors"}, {"name": "x_ref2va.safetensors"}], "Ref2va")
     assert [f["family"] for f in files] == ["fl2v", "ref2v"]  # a file's own hint wins
 
@@ -704,3 +706,10 @@ def test_h3_search_pages_through_the_cached_listing(monkeypatch):
     rest = civitai.search("style", "lora", cursor=first["next"])
     assert len(calls) == 2 and len(rest["items"]) == 10 and rest["next"] is None  # served from the cache
     assert all(v["base_model"] == "MiniMax H3" for m in first["items"] + rest["items"] for v in m["versions"])
+
+
+def test_installs_never_pick_up_gguf_files(monkeypatch):
+    monkeypatch.setattr(civitai, "_get", lambda path, **kw: {"id": 9, "name": "v6", "files": [
+        {"id": 1, "name": "x_q80.gguf", "type": "Model", "primary": True},
+        {"id": 2, "name": "x_int8.safetensors", "type": "Diffusion Model"}]})
+    assert [f["id"] for f in civitai.version(9)["files"]] == [2]
