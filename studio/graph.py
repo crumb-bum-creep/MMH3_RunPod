@@ -46,6 +46,22 @@ def frame_count(seconds: float) -> int:
     return n + (5 - n % 17) % 17
 
 
+PREVIEW_LOOP_FPS = 7  # each latent frame is ~3.4 video frames (17 per 5), so one per latent frame ≈ 7 fps
+
+
+def preview_frames(frames: int, animated: bool) -> int:
+    """Frames for the live preview loop: one per latent frame but the last.
+
+    The tiny preview VAE can only decode a clip from its start, and asking for every
+    latent frame switches it to a full decode that returns all 24 fps frames; one
+    fewer covers the clip (minus ~0.15 s) at ~7 fps, so the loop plays at real speed.
+    """
+    if not animated:
+        return 1
+    latent_t = 2 if frames <= 5 else ((frames - 5) // 17) * 5 + 2
+    return max(1, latent_t - 1)
+
+
 class _Graph:
     def __init__(self) -> None:
         self.nodes: dict[str, dict[str, Any]] = {}
@@ -103,7 +119,8 @@ def build(job: dict[str, Any], files: dict[str, str]) -> dict[str, Any]:
         model = [shift, 0]
     preview = g.add("ModelPreviewOverrideKJ", "Live preview", model=model,
                     max_resolution=640, jpeg_quality=80, suppress_default_preview=True,
-                    preview_frames=1, preview_fps=5,
+                    preview_frames=preview_frames(length, job.get("animated_preview", True)),
+                    preview_fps=PREVIEW_LOOP_FPS,
                     tiny_vae=_name(files["preview_vae"]) if files.get("preview_vae") else "none")
     model = [preview, 0]
 

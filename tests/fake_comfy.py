@@ -66,6 +66,8 @@ class Fake:
         order = sorted(prompt, key=int)
         sampler = next((n for n in order if prompt[n]["class_type"] == "SamplerCustomAdvanced"), None)
         steps = next((prompt[n]["inputs"].get("steps") for n in order if prompt[n]["class_type"] == "BasicScheduler"), 8)
+        pv = next((prompt[n]["inputs"] for n in order if prompt[n]["class_type"] == "ModelPreviewOverrideKJ"), {})
+        loop = (int(pv.get("preview_frames", 1)), int(pv.get("preview_fps", 12)))
         text = json.dumps(prompt)
         status = "success"
         outputs: dict = {}
@@ -80,8 +82,10 @@ class Fake:
                         break
                     await asyncio.sleep(self.step_s)
                     await self.send(client, "progress", {"value": s, "max": steps, "node": nid, "prompt_id": pid})
+                    # Like the real node: preview_frames > 1 sends an animated WebP loop.
+                    image, mime = _frame(s, steps, *loop)
                     await self.send(client, "kj_preview_override", {
-                        "node_id": nid, "image": _frame(s, steps), "mime": "image/jpeg", "step": s, "total": steps,
+                        "node_id": nid, "image": image, "mime": mime, "step": s, "total": steps,
                         "avg_step_ms": self.step_s * 1000})
                 if self.fail_word and self.fail_word in text:
                     err = {"prompt_id": pid, "node_id": nid, "node_type": ct,
@@ -126,18 +130,26 @@ class Fake:
                  "frame_rate": 24, "fullpath": f"{stem}-audio.mp4"}]
 
 
-def _frame(step: int, total: int) -> str:
+def _frame(step: int, total: int, frames: int = 1, fps: int = 12) -> tuple[str, str]:
     from PIL import Image, ImageDraw
 
-    im = Image.new("RGB", (216, 384), (20, 26, 34))
-    d = ImageDraw.Draw(im)
-    for y in range(0, 384, 4):
-        v = int(40 + 180 * (y / 384) * step / total)
-        d.line([(0, y), (216, y)], fill=(v, int(v * 0.7), 60 + step * 10))
-    d.ellipse([60, 120, 156, 216], fill=(240, 169, 59))
+    def one(t: float):
+        im = Image.new("RGB", (216, 384), (20, 26, 34))
+        d = ImageDraw.Draw(im)
+        for y in range(0, 384, 4):
+            v = int(40 + 180 * (y / 384) * step / total)
+            d.line([(0, y), (216, y)], fill=(v, int(v * 0.7), 60 + step * 10))
+        x = 20 + int(t * 80)  # the ball moves across the clip
+        d.ellipse([x, 120, x + 96, 216], fill=(240, 169, 59))
+        return im
+
     buf = io.BytesIO()
-    im.save(buf, "JPEG", quality=70)
-    return base64.b64encode(buf.getvalue()).decode()
+    if frames > 1:
+        ims = [one(i / (frames - 1)) for i in range(frames)]
+        ims[0].save(buf, "WEBP", save_all=True, append_images=ims[1:], duration=max(1, round(1000 / fps)), loop=0, quality=70)
+        return base64.b64encode(buf.getvalue()).decode(), "image/webp"
+    one(0).save(buf, "JPEG", quality=70)
+    return base64.b64encode(buf.getvalue()).decode(), "image/jpeg"
 
 
 def make_app(fake: Fake) -> web.Application:

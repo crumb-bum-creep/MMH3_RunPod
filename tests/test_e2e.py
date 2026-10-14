@@ -214,3 +214,21 @@ def test_compare_runs_the_recipes_you_ticked(stack):
     assert sorted(j["recipe_id"] for j in jobs) == ["balanced", "legacy_euler"] and all(j["status"] == "done" for j in jobs)
     legacy = next(j for j in jobs if j["recipe_id"] == "legacy_euler")
     assert (legacy["recipe"]["scheduler"], legacy["recipe"]["steps"], legacy["recipe"]["lora"]) == ("beta", 4, "ref2v_turbo_4step_v01")
+
+
+def test_live_preview_is_a_loop_unless_turned_off(stack):
+    seen = {}
+
+    def run():
+        jid = stack.call("/api/generate", {"mode": "t2v", "prompt": PROMPT})["jobs"][0]
+        stack.wait(lambda: stack.job(jid)["preview_seq"] > 0, 30)
+        seen["mime"] = stack.job(jid)["preview_mime"]
+        stack.wait_done([jid])
+        return seen["mime"]
+
+    assert run() == "image/webp"
+    assert stack.call("/api/system/settings", {"preview.animated": False}, method="PUT").get("ok")
+    try:
+        assert run() == "image/jpeg"
+    finally:
+        stack.call("/api/system/settings", {"preview.animated": True}, method="PUT")

@@ -43,6 +43,11 @@ output:
   crf: 12
   delete_silent_twin: true   # VHS writes a silent copy next to every audio mp4; drop it
 
+preview:
+  # Live preview while sampling: a ~7 fps loop of the whole clip (one frame per
+  # latent frame, decoded by the tiny preview VAE) instead of just the first frame.
+  animated: true
+
 provisioning:
   workers: 3
   retries: 4
