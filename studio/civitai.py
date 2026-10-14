@@ -1,7 +1,10 @@
 """CivitAI: search, bookmarks, your collections, version details.
 
 Documented REST API (civitai.red/api/v1) for search, bookmarks (favorites=true)
-and version details. Named collections are only exposed through CivitAI's site
+and version details. The API's own text search only matches the start of a
+model's name (searching "eros" finds nothing; "H3 Eros" finds anything named
+"H3 ..."), so with "MiniMax H3 only" on, Studio downloads the whole H3 listing
+(a few hundred models, a few seconds) and searches it locally instead. Named collections are only exposed through CivitAI's site
 API (tRPC), which accepts the same API key but is undocumented, so it is
 best-effort: failures come back as a readable message instead of breaking the
 browser.
@@ -11,6 +14,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import time
 from typing import Any
 
 import requests
@@ -23,6 +28,13 @@ ALL_BROWSING_LEVELS = 31
 _REF = re.compile(r"(?<![a-z])(ref2va?|r2va?|refva|reference|ref)(?![a-z])")
 _FL = re.compile(r"(?<![a-z])(fl2va?|t2va?|i2va?|flva)(?![a-z])")
 _HELPER = re.compile(r"(?<![a-z])(motion|helper|assist|aux|addon|add-on)")
+# CivitAI renames uploads to camelCase ("comfyRef2vaPruned"); split words so the hints above match.
+_CAMEL = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+# File types CivitAI uses for the weights themselves (it moved checkpoints to "Diffusion Model").
+WEIGHT_TYPES = {None, "Model", "Pruned Model", "Diffusion Model", "UNet", "Enhancement LoRA", "Other"}
+UNSUPPORTED_EXT = {".gguf": "GGUF needs the ComfyUI-GGUF loader, which this pod doesn't have. Pick a .safetensors version."}
+INDEX_TTL = 15 * 60
+PAGE = 20
 
 
 class CivitaiError(RuntimeError):
@@ -83,19 +95,30 @@ def _trpc(path: str, payload: dict[str, Any]) -> Any:
 
 # --------------------------------------------------------------------------- classification
 
-def classify_files(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _words(text: str) -> str:
+    return _CAMEL.sub("_", str(text or "")).lower()
+
+
+def _family(text: str) -> str:
+    n = _words(text)
+    return "ref2v" if _REF.search(n) else "fl2v" if _FL.search(n) else "any"
+
+
+def classify_files(files: list[dict[str, Any]], version_name: str = "") -> list[dict[str, Any]]:
     """Guess each file's family (fl2v / ref2v / any) and role (main / helper) from its name.
 
     A version that ships 'X.safetensors' and 'X-ref2va.safetensors' means the
     plain file is the T2V/I2V one, so an unhinted main file becomes fl2v when a
-    sibling is explicitly R2V.
+    sibling is explicitly R2V. When no file name has a hint, the version name
+    decides ("Comfy Ref2va Pruned").
     """
     out = []
     for f in files:
-        n = str(f.get("name") or "").lower()
-        fam = "ref2v" if _REF.search(n) else "fl2v" if _FL.search(n) else "any"
-        role = "helper" if _HELPER.search(n) else "main"
-        out.append({**f, "family": fam, "role": role})
+        role = "helper" if _HELPER.search(_words(f.get("name"))) else "main"
+        out.append({**f, "family": _family(f.get("name")), "role": role})
+    if all(f["family"] == "any" for f in out):  # no file says, so the version name decides
+        for f in out:
+            f["family"] = _family(version_name)
     if any(f["family"] == "ref2v" for f in out):
         for f in out:
             if f["family"] == "any" and f["role"] == "main":
@@ -105,25 +128,31 @@ def classify_files(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for f in out:
         f["suggested"] = f["role"] == "helper"
     for fam in ("any", "fl2v", "ref2v"):
-        mains = [f for f in out if f["family"] == fam and f["role"] == "main"]
+        mains = [f for f in out if f["family"] == fam and f["role"] == "main" and not f.get("unsupported")]
         if mains:
             best = next((f for f in mains if f.get("primary")), mains[0])
             best["suggested"] = True
     return out
 
 
-def _model_files(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _model_files(files: list[dict[str, Any]], version_name: str = "") -> list[dict[str, Any]]:
+    """The weight files of a version (not its VAE, text encoder, workflow, training data...).
+    Formats this pod can't load stay in the list, marked unsupported, so a version
+    doesn't look empty."""
     keep = []
     for f in files or []:
         name = str(f.get("name") or "")
-        if f.get("type") not in (None, "Model", "Pruned Model"):
+        ext = os.path.splitext(name.lower())[1]
+        if f.get("type") not in WEIGHT_TYPES or ext not in (".safetensors", *UNSUPPORTED_EXT):
             continue
-        if not name.lower().endswith(".safetensors"):
-            continue
-        keep.append({"id": f.get("id"), "name": name, "size_kb": f.get("sizeKB"),
-                     "primary": bool(f.get("primary")), "type": f.get("type")})
-    keep.sort(key=lambda f: (not f["primary"], f["name"]))
-    return classify_files(keep)
+        item = {"id": f.get("id"), "name": name, "size_kb": f.get("sizeKB"),
+                "primary": bool(f.get("primary")), "type": f.get("type")}
+        if ext in UNSUPPORTED_EXT:
+            item["unsupported"] = UNSUPPORTED_EXT[ext]
+        keep.append(item)
+    # Loadable first, then the primary file, then the files labelled as the model itself.
+    keep.sort(key=lambda f: (bool(f.get("unsupported")), not f["primary"], f["type"] == "Other", f["name"]))
+    return classify_files(keep, version_name)
 
 
 def _image(version: dict[str, Any]) -> str | None:
@@ -139,7 +168,7 @@ def normalize_version(v: dict[str, Any], model: dict[str, Any] | None = None) ->
     model = model or v.get("model") or {}
     return {
         "id": v.get("id"), "name": v.get("name"), "base_model": v.get("baseModel"),
-        "trained_words": v.get("trainedWords") or [], "files": _model_files(v.get("files") or []),
+        "trained_words": v.get("trainedWords") or [], "files": _model_files(v.get("files") or [], v.get("name") or ""),
         "image": _image(v), "model_id": v.get("modelId") or model.get("id"),
         "model_name": model.get("name"), "type": model.get("type"),
     }
@@ -150,6 +179,7 @@ def normalize_model(m: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": m.get("id"), "name": m.get("name"), "type": m.get("type"),
         "creator": (m.get("creator") or {}).get("username"), "nsfw": m.get("nsfw"),
+        "tags": [t if isinstance(t, str) else (t or {}).get("name") for t in m.get("tags") or []],
         "image": next((v["image"] for v in versions if v.get("image")), None),
         "versions": versions,
     }
@@ -161,27 +191,109 @@ def _types(kind: str) -> list[str]:
     return [TYPES[kind]] if kind in TYPES else list(TYPES.values())
 
 
+_index: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
+_index_lock = threading.Lock()
+
+
+def _fetch_all(params: list[tuple[str, Any]], max_pages: int = 40) -> list[dict[str, Any]]:
+    items, cursor = [], None
+    for _ in range(max_pages):
+        body = _get("/api/v1/models", params=params + ([("cursor", cursor)] if cursor else []), timeout=60)
+        items += [normalize_model(m) for m in body.get("items") or []]
+        cursor = (body.get("metadata") or {}).get("nextCursor")
+        if not cursor:
+            break
+    return items
+
+
+def _listing(kind: str, bookmarks: bool) -> list[dict[str, Any]]:
+    """Every MiniMax H3 model of this kind (or every bookmark), newest first, cached a while."""
+    key = (kind, "bookmarks" if bookmarks else "h3")
+    with _index_lock:
+        hit = _index.get(key)
+        if hit and time.time() - hit[0] < INDEX_TTL:
+            return hit[1]
+        params: list[tuple[str, Any]] = [("limit", 100), ("nsfw", "true"), ("sort", "Newest")]
+        params += [("types", t) for t in _types(kind)]
+        if bookmarks:
+            params.append(("favorites", "true"))
+        else:
+            params.append(("baseModels", H3_BASE_MODEL))
+        items = _fetch_all(params)
+        _index[key] = (time.time(), items)
+        return items
+
+
+def _haystack(m: dict[str, Any]) -> tuple[str, str]:
+    """(name, everything else) as lowercase words, camelCase split, punctuation as spaces."""
+    def norm(t: str) -> str:
+        return " " + re.sub(r"[^a-z0-9]+", " ", _words(t)).strip() + " "
+    rest = [m.get("creator") or "", *(m.get("tags") or [])]
+    for v in m.get("versions") or []:
+        rest += [v.get("name") or "", *(v.get("trained_words") or []), *(f.get("name") or "" for f in v.get("files") or [])]
+    return norm(m.get("name") or ""), norm(" ".join(str(x) for x in rest if x))
+
+
+def rank(items: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    """Models matching every word of the query (anywhere in a word, so "cherry" finds
+    PinkCherry), names before creators / tags / versions / files, then newest first."""
+    words = re.sub(r"[^a-z0-9]+", " ", _words(query)).split()
+    if not words:
+        return list(items)
+    whole = " " + " ".join(words) + " "
+    scored = []
+    for n, m in enumerate(items):
+        name, rest = _haystack(m)
+        squashed = name.replace(" ", "")
+        score = 0
+        for w in words:
+            if f" {w} " in name:
+                score += 6
+            elif f" {w}" in name:
+                score += 4
+            elif w in name or w in squashed:
+                score += 3
+            elif f" {w}" in rest:
+                score += 2
+            elif w in rest:
+                score += 1
+            else:
+                break
+        else:
+            if whole.strip() == name.strip():
+                score += 20
+            elif whole in name:
+                score += 8
+            scored.append((-score, n, m))
+    scored.sort(key=lambda x: (x[0], x[1]))
+    return [m for _, _, m in scored]
+
+
 def search(query: str = "", kind: str = "lora", h3_only: bool = True, cursor: str | None = None,
            bookmarks: bool = False) -> dict[str, Any]:
+    if bookmarks and not token():
+        raise CivitaiError("Bookmarks need CIVITAI_TOKEN set on the pod.")
+    if h3_only or bookmarks:
+        items = rank(_listing(kind, bookmarks), query)
+        if h3_only:  # a model can mix base models across versions; keep the H3 ones
+            items = [{**it, "versions": [v for v in it["versions"] if v.get("base_model") == H3_BASE_MODEL]}
+                     for it in items]
+            items = [it for it in items if it["versions"]]
+        start = int(cursor) if cursor and str(cursor).isdigit() else 0
+        page = items[start:start + PAGE]
+        return {"items": page, "next": str(start + PAGE) if start + PAGE < len(items) else None,
+                "total": len(items)}
+    # Every base model: too many to list, so this one is CivitAI's own (name-prefix) search.
     params: list[tuple[str, Any]] = [("limit", 20), ("nsfw", "true")]
     params += [("types", t) for t in _types(kind)]
-    if h3_only:
-        params.append(("baseModels", H3_BASE_MODEL))
     if query.strip():
         params.append(("query", query.strip()))
     else:
         params.append(("sort", "Newest"))
-    if bookmarks:
-        if not token():
-            raise CivitaiError("Bookmarks need CIVITAI_TOKEN set on the pod.")
-        params.append(("favorites", "true"))
     if cursor:
         params.append(("cursor", cursor))
     body = _get("/api/v1/models", params=params)
     items = [normalize_model(m) for m in body.get("items") or []]
-    if h3_only:  # a model can mix base models across versions; keep the H3 ones
-        for it in items:
-            it["versions"] = [v for v in it["versions"] if v.get("base_model") == H3_BASE_MODEL] or it["versions"]
     return {"items": items, "next": (body.get("metadata") or {}).get("nextCursor")}
 
 

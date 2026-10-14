@@ -102,6 +102,10 @@ def test_bad_overrides_rejected(bad):
     (["preference_lora.safetensors", "refined.safetensors"], [("any", "main"), ("any", "main")]),
     (["vagassist_e40.safetensors"], [("any", "main")]),
     (["H3_T2V_style.safetensors", "H3_Ref2V_style.safetensors"], [("fl2v", "main"), ("ref2v", "main")]),
+    # CivitAI's camelCase renames
+    (["baseMinimaxh3TurboMerge_comfyRef2vaPruned_int8.safetensors"], [("ref2v", "main")]),
+    (["pinkcherryMinimaxH3_v15Fl2va_int8.safetensors"], [("fl2v", "main")]),
+    (["mysticXxx_v4MotionHelper.safetensors"], [("any", "helper")]),
 ])
 def test_classify_files(names, expected):
     got = civitai.classify_files([{"name": n} for n in names])
@@ -636,3 +640,67 @@ def test_workflow_splice_rewires_an_empty_lora_loader_and_keeps_a_used_one():
     used = workflows.adapt(wf([{"on": True, "lora": "style.safetensors", "strength": 1}]),
                            {"splice": ["Power Lora Loader (rgthree)"]})
     assert any(n["id"] == 196 for n in used["nodes"])  # a loaded LoRA is never dropped silently
+
+
+def test_version_name_decides_when_no_file_says():
+    files = civitai.classify_files([{"name": "heptagram_turboV10_int8.safetensors"},
+                                    {"name": "heptagram_turboV10_bf16.safetensors"}], "Comfy Ref2va Pruned")
+    assert [f["family"] for f in files] == ["ref2v", "ref2v"]
+    files = civitai.classify_files([{"name": "x.safetensors"}, {"name": "x_ref2va.safetensors"}], "Ref2va")
+    assert [f["family"] for f in files] == ["fl2v", "ref2v"]  # a file's own hint wins
+
+
+def test_checkpoint_files_cover_civitais_file_types():
+    """CivitAI now labels checkpoint weights "Diffusion Model"; GGUF versions shouldn't look empty."""
+    v = civitai.normalize_version({"id": 1, "name": "beta6", "files": [
+        {"id": 1, "name": "h3ErosMax_beta6_int8.safetensors", "type": "Diffusion Model", "sizeKB": 1},
+        {"id": 2, "name": "h3ErosMax_beta6_bf16.safetensors", "type": "Diffusion Model", "primary": True},
+        {"id": 3, "name": "minimax_h3_video_vae_fp16.safetensors", "type": "VAE"},
+        {"id": 4, "name": "workflow.json", "type": "Workflow"},
+        {"id": 5, "name": "h3_q80.gguf", "type": "Model"},
+        {"id": 6, "name": "unet.safetensors", "type": "UNet"}]})
+    names = [f["name"] for f in v["files"]]
+    assert names == ["h3ErosMax_beta6_bf16.safetensors", "h3ErosMax_beta6_int8.safetensors", "unet.safetensors", "h3_q80.gguf"]
+    gguf = v["files"][-1]
+    assert gguf["unsupported"] and not gguf["suggested"]
+
+
+def _model(mid, name, creator="someone", tags=(), version="v1", words=(), files=("a.safetensors",)):
+    return {"id": mid, "name": name, "type": "LORA", "creator": creator, "tags": list(tags), "versions": [
+        {"id": mid * 10, "name": version, "base_model": "MiniMax H3", "trained_words": list(words),
+         "files": [{"id": 1, "name": f} for f in files]}]}
+
+
+def test_local_search_matches_inside_names_and_other_fields():
+    items = [_model(1, "H3 Eros Max"), _model(2, "PinkCherry MiniMax H3 hybrid"),
+             _model(3, "Side Riding", creator="erosfan"), _model(4, "Digicam Y2K", words=["y2kdigicam"]),
+             _model(5, "Cherry Blossom Style"), _model(6, "Unrelated", files=["camRig_v2.safetensors"])]
+    names = lambda q: [m["name"] for m in civitai.rank(items, q)]  # noqa: E731
+    assert names("eros") == ["H3 Eros Max", "Side Riding"]  # name before creator
+    assert names("cherry") == ["PinkCherry MiniMax H3 hybrid", "Cherry Blossom Style"]  # a word in either; newest first
+    assert names("pink cherry") == ["PinkCherry MiniMax H3 hybrid"]
+    assert names("y2kdigicam") == ["Digicam Y2K"]
+    assert names("rig") == ["Unrelated"]  # camelCase file names count
+    assert names("eros max")[0] == "H3 Eros Max"
+    assert names("") == [m["name"] for m in items]  # empty query: newest first, as listed
+
+
+def test_h3_search_pages_through_the_cached_listing(monkeypatch):
+    calls = []
+
+    def fake_get(path, params=None, auth=True, timeout=30):
+        calls.append(dict(params))
+        page = 0 if "cursor" not in dict(params) else 1
+        items = [{"id": page * 100 + i, "name": f"Style {page * 100 + i}", "type": "LORA",
+                  "modelVersions": [{"id": i, "name": "v", "baseModel": "MiniMax H3" if i % 2 == 0 else "Wan",
+                                     "files": [{"id": 1, "name": "s.safetensors", "type": "Model"}]}]}
+                 for i in range(30)]
+        return {"items": items, "metadata": {"nextCursor": None if page else "c1"}}
+
+    monkeypatch.setattr(civitai, "_get", fake_get)
+    monkeypatch.setattr(civitai, "_index", {})
+    first = civitai.search("style", "lora")
+    assert len(calls) == 2 and first["total"] == 30 and len(first["items"]) == 20 and first["next"] == "20"
+    rest = civitai.search("style", "lora", cursor=first["next"])
+    assert len(calls) == 2 and len(rest["items"]) == 10 and rest["next"] is None  # served from the cache
+    assert all(v["base_model"] == "MiniMax H3" for m in first["items"] + rest["items"] for v in m["versions"])

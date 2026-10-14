@@ -247,7 +247,8 @@ details.more[open] > summary svg { transform: rotate(90deg); }
   border-radius: var(--radius-l); overflow: hidden; background: var(--bg-2); border: 1px solid var(--line); margin-bottom: 18px;
 }
 .now-media { position: relative; background: #0a0e14; display: grid; place-items: center; min-height: 200px; max-height: 58vh; }
-.now-media img { max-height: 58vh; width: auto; margin: 0 auto; }
+.now-media img, .now-media video { max-height: 58vh; width: auto; max-width: 100%; margin: 0 auto; }
+.now-slot { display: contents; }
 .now-media .placeholder { color: var(--ink-3); font-size: 14px; padding: 40px; text-align: center; }
 .now-rec { position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 7px; padding: 5px 10px; border-radius: 8px; background: rgba(8,11,16,.75); font-size: 12px; font-weight: 700; font-stretch: 112%; }
 .now-rec .tally-dot { width: 8px; height: 8px; }
@@ -379,6 +380,7 @@ details.more[open] > summary svg { transform: rotate(90deg); }
 .file-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .file-row .grow { font-size: 13px; overflow-wrap: anywhere; }
 .file-row select { width: auto; min-height: 34px; padding: 4px 28px 4px 8px; font-size: 12px; border-radius: 8px; }
+.file-row.off { opacity: .55; }
 
 .civ-item { display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .civ-item img, .civ-item .ph { width: 64px; height: 86px; border-radius: 10px; object-fit: cover; background: var(--bg-3); flex: none; }

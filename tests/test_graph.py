@@ -191,3 +191,11 @@ def test_recipe_without_turbo_skips_the_lora():
     g = graph.build(job(recipe=r), {**FILES, "turbo": ""})
     assert not [n for n in by_class(g, "LoraLoaderModelOnly") if n[1]["_meta"]["title"].startswith("Turbo")]
     one(g, "SamplerCustomAdvanced")
+
+
+def test_live_preview_loops_the_whole_clip():
+    from studio import graph as g
+    assert g.preview_frames(g.frame_count(5), True) == 36  # 124 frames -> 37 latent frames
+    assert g.preview_frames(g.frame_count(10), True) == 71
+    assert g.preview_frames(g.frame_count(5), False) == 1
+    assert g.preview_frames(5, True) == 1

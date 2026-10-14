@@ -25,7 +25,7 @@ SETTABLE = {
     "memory.unload_on_family_switch": bool, "memory.trim_after_job_above": float,
     "memory.idle_unload_above": float, "output.crf": int, "output.delete_silent_twin": bool,
     "prompting.model": str, "prompting.reasoning_effort": str, "eros_enabled": bool,
-    "civitai.domain": str,
+    "civitai.domain": str, "preview.animated": bool,
 }
 LOG_FILES = {"comfyui": "comfyui.log", "studio": "studio.log", "provision": "provision.log",
              "supervisor": "supervisor.log", "jupyter": "jupyter.log"}

@@ -273,13 +273,14 @@ class Runner:
                 "finished": [self._public(j) for j in finished]}
 
     def _public(self, j: dict[str, Any]) -> dict[str, Any]:
-        seq = self.previews.get(j["id"], (0, b"", ""))[0]
+        seq, _, mime = self.previews.get(j["id"], (0, b"", ""))
         out = {k: j.get(k) for k in (
             "id", "status", "mode", "idea", "prompt", "aspect", "megapixels", "duration", "seed", "checkpoint",
             "recipe_id", "label", "group", "compare", "stage", "note", "error", "step", "total_steps",
             "avg_step_ms", "created", "started", "finished", "output", "loras", "refs", "start_image",
             "end_image", "prompt_mode", "overrides", "timings", "eta", "lora_picks", "recipe")}
         out["preview_seq"] = seq
+        out["preview_mime"] = mime.split(";")[0] if seq else ""
         return out
 
     # ------------------------------------------------------------------ runner
@@ -357,7 +358,9 @@ class Runner:
                 if not (paths.MODELS / "loras" / l["file"]).exists():
                     raise JobError(f"LoRA not installed: {l['file']}")
             prompt_graph = graph.build({**job, "output_prefix": self._prefix(job),
-                                        "crf": (util.settings().get("output") or {}).get("crf", 12)}, files)
+                                        "crf": (util.settings().get("output") or {}).get("crf", 12),
+                                        "animated_preview": bool((util.settings().get("preview") or {}).get("animated", True))},
+                                       files)
         except (JobError, graph.GraphError, recipes.RecipeError, KeyError) as exc:
             self._touch(job, status="failed", error=str(exc), stage="")
             return

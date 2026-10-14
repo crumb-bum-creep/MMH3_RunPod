@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.4.0
+
+- **CivitAI search finds what you type.** CivitAI's own search only matches the start of a model's
+  name, so "eros" found nothing and "H3 Eros" found anything named "H3 …". With *MiniMax H3 only*
+  on (the default), Studio now loads the whole H3 listing (about 800 LoRAs and 30 checkpoints, a few
+  seconds, cached for 15 minutes) and searches it itself: every word you type, anywhere in the name
+  ("cherry" finds PinkCherry), then creator, tags, version names, trigger words and file names.
+  Bookmarks are searched the same way. Every-base-model search is still CivitAI's.
+- **Checkpoint versions no longer show 0 files.** CivitAI now labels checkpoint weights "Diffusion
+  Model" (and some "UNet"), which Studio skipped. GGUF-only versions now say *GGUF only* and explain
+  that this pod can't load them, instead of looking empty.
+- Mode detection reads CivitAI's camelCase file names ("comfyRef2vaPruned" is R2V), and falls back
+  to the version name when no file name says.
+- **Animated live preview.** While a clip samples, the Queue shows a ~7 fps loop of the whole clip
+  instead of its first frame, decoded by the same tiny preview VAE. The loop keeps playing between
+  polls and each step's preview replaces the last only once it has loaded. Settings → Animated live
+  preview turns it off.
+- `scripts/export_favorites.py`: zips your starred clips with their prompts, settings and reference
+  files. Upload it to `/workspace` in Jupyter and run it there.
+
 ## 2.3.0
 
 - **Image editing in ComfyUI.** The *MiniMax H3 Image Editing* workflows by their CivitAI author

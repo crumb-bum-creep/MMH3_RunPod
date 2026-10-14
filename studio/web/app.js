@@ -904,9 +904,41 @@ VIEWS.queue = function () {
     if (e.target.closest("[data-mv]")) { const d = +e.target.closest("[data-mv]").dataset.mv; api(`/api/jobs/${j.id}/move`, { body: { direction: d } }).then(pollSoon).catch(fail); return; }
     jobSheet(j);
   });
+  if (running && running.preview_seq > 0) mountPreview(running);
   const cancelNow = $("#cancelNow"); if (cancelNow) cancelNow.onclick = () => api(`/api/jobs/${running.id}/cancel`, { body: {} }).then(() => toast("Cancelling…")).catch(fail);
   const nowPrompt = $("#nowPrompt"); if (nowPrompt) nowPrompt.onclick = () => jobSheet(running);
 };
+
+// The Queue re-renders on every poll; the live preview element outlives that, so a looping
+// preview keeps playing instead of restarting, and each step's preview only replaces the
+// previous one once it has loaded (no blank flash between steps).
+const livePreview = { job: null, shown: null, next: null };
+function mountPreview(j) {
+  const slot = $("#nowSlot");
+  if (!slot) return;
+  const lp = livePreview;
+  if (lp.job !== j.id) Object.assign(lp, { job: j.id, shown: null, next: null });
+  const src = `/api/jobs/${j.id}/preview?s=${j.preview_seq}`;
+  const cur = lp.next || lp.shown;
+  if (!cur || cur.dataset.src !== src) {
+    const video = j.preview_mime === "video/mp4";
+    const el = document.createElement(video ? "video" : "img");
+    el.dataset.src = src;
+    if (video) { el.muted = el.loop = el.autoplay = el.playsInline = true; el.setAttribute("muted", ""); el.setAttribute("playsinline", ""); }
+    else el.alt = "Live preview";
+    el.addEventListener(video ? "loadeddata" : "load", () => {
+      if (lp.next !== el) return;
+      if (lp.shown) lp.shown.remove();
+      Object.assign(lp, { shown: el, next: null }); el.hidden = false;
+    }, { once: true });
+    el.addEventListener("error", () => { if (lp.next === el) { el.remove(); lp.next = null; } }, { once: true });
+    el.hidden = !!lp.shown;
+    if (lp.next) lp.next.remove();
+    lp.next = el;
+    el.src = src;
+  }
+  for (const el of [lp.shown, lp.next]) if (el && el.parentNode !== slot) slot.appendChild(el);
+}
 
 function progressOf(j) {
   if (j.status !== "running") return 0;
@@ -921,7 +953,7 @@ function nowCard(j) {
   const eta = j.eta != null ? clock(j.eta) : j.started ? clock(Date.now() / 1000 - j.started) : "";
   return `<div class="now">
     <div class="now-media">
-      ${hasPreview ? `<img id="nowImg" src="/api/jobs/${j.id}/preview?s=${j.preview_seq}" alt="Live preview">` : `<div class="placeholder">${esc(stage)}…</div>`}
+      ${hasPreview ? `<div class="now-slot" id="nowSlot"></div>` : `<div class="placeholder">${esc(stage)}…</div>`}
       <span class="now-rec"><span class="tally-dot"></span>${j.status === "running" ? "Rendering" : cap(j.status)}</span>
     </div>
     <div class="now-body">
@@ -1486,7 +1518,7 @@ function civitaiBrowser() {
       if (st.source === "collections" && !st.collection) { st.collections = (await api("/api/civitai/collections")).items; r = { items: [], next: null }; }
       else if (st.source === "collections") r = await api(`/api/civitai/collections/${st.collection.id}?kind=${st.kind}&h3=${st.h3 ? 1 : 0}${more && st.next ? `&cursor=${encodeURIComponent(st.next)}` : ""}`);
       else r = await api(`/api/civitai/search?source=${st.source}&kind=${st.kind}&h3=${st.h3 ? 1 : 0}&q=${encodeURIComponent(st.q)}${more && st.next ? `&cursor=${encodeURIComponent(st.next)}` : ""}`);
-      st.items = more ? st.items.concat(r.items) : r.items; st.next = r.next;
+      st.items = more ? st.items.concat(r.items) : r.items; st.next = r.next; st.total = r.total;
     } catch (e) { st.error = e.message; }
     st.loading = false; draw(body);
   };
@@ -1496,7 +1528,9 @@ function civitaiBrowser() {
       <div class="row" style="margin-bottom:10px">
         <div class="chips grow">${[["lora", "LoRAs"], ["checkpoint", "Checkpoints"]].map(([k, n]) => `<button class="chip ${st.kind === k ? "on" : ""}" data-kind="${k}">${n}</button>`).join("")}
           <button class="chip ${st.h3 ? "on" : ""}" data-h3>MiniMax H3 only</button></div></div>
-      ${st.source === "search" ? `<form id="sf" class="row" style="margin-bottom:6px"><input type="search" id="sq" class="grow" placeholder="Search CivitAI" value="${esc(st.q)}"><button class="btn">Search</button></form>` : ""}
+      ${st.source === "search" ? `<form id="sf" class="row" style="margin-bottom:6px"><input type="search" id="sq" class="grow" placeholder="${st.h3 ? "Name, creator, tag or trigger word" : "Start of a model's name"}" value="${esc(st.q)}"><button class="btn">Search</button></form>
+        ${st.h3 ? "" : `<p class="note">Across every base model this is CivitAI's own search, which only matches the start of a name. Turn on MiniMax H3 only for full search.</p>`}` : ""}
+      ${st.source !== "collections" && st.total != null && !st.loading ? `<p class="faint" style="font-size:12px;margin:0 0 6px">${st.total} ${st.total === 1 ? "match" : "matches"}</p>` : ""}
       ${st.source === "collections" && st.collection ? `<div class="row" style="margin-bottom:6px"><button class="btn small ghost" data-back style="padding-left:0"><span style="transform:scaleX(-1);display:inline-flex">${ICON.chev}</span> Collections</button><h3 class="grow">${esc(st.collection.name)}</h3></div>` : ""}
       ${st.error ? `<p class="note warn">${esc(st.error)}</p>` : ""}
       ${st.source === "collections" && !st.collection ? (st.collections ? (st.collections.length ? `<div class="list">${st.collections.map((c) => `<button class="item" data-col="${c.id}"><div class="grow"><h3>${esc(c.name)}</h3><div class="sub">${c.count != null ? `${c.count} items` : ""}</div></div>${ICON.chev}</button>`).join("")}</div>` : `<p class="muted">No model collections found on your account.</p>`) : st.loading ? `<div class="empty">Loading your collections…</div>` : "")
@@ -1520,22 +1554,31 @@ function civitaiBrowser() {
 function civItem(m) {
   return `<div class="civ-item">${m.image ? `<img src="${esc(m.image)}" alt="" loading="lazy">` : `<span class="ph"></span>`}
     <div class="grow"><h3>${esc(m.name)}</h3><div class="faint" style="font-size:12px">${esc(m.type)}${m.creator ? ` · ${esc(m.creator)}` : ""}</div>
-      ${m.versions.slice(0, 4).map((v) => `<div class="civ-ver"><span class="v">${esc(v.name)} · ${esc(v.base_model || "")} · ${v.files.length} file${v.files.length === 1 ? "" : "s"}</span>
-        <button class="btn small ${v.installed ? "" : "primary"}" data-ver="${m.id}:${v.id}">${v.installed ? "Installed" : "Install"}</button></div>`).join("")}
+      ${m.versions.slice(0, 4).map((v) => `<div class="civ-ver"><span class="v">${esc(v.name)} · ${esc(v.base_model || "")} · ${civFiles(v)}</span>
+        <button class="btn small ${v.installed || !civOk(v) ? "" : "primary"}" data-ver="${m.id}:${v.id}">${v.installed ? "Installed" : civOk(v) ? "Install" : "Details"}</button></div>`).join("")}
     </div></div>`;
+}
+function civOk(v) { return v.files.some((f) => !f.unsupported); }
+function civFiles(v) {
+  const ok = v.files.filter((f) => !f.unsupported).length;
+  if (!ok && v.files.length) return "GGUF only";
+  return `${ok} file${ok === 1 ? "" : "s"}`;
 }
 function installSheet(m, v, onDone) {
   const isCk = m.type === "Checkpoint";
+  const firstOk = v.files.findIndex((f) => !f.unsupported);
   openSheet(`${isCk ? "Base model" : "LoRA"}: ${m.name}`, `
     <p class="muted">${esc(v.name)} · ${esc(v.base_model || "")}</p>
     ${v.base_model && v.base_model !== "MiniMax H3" ? `<p class="note warn">This is a ${esc(v.base_model)} model, not MiniMax H3. It will not work here.</p>` : ""}
     <h3 style="margin-top:12px">Files</h3>
-    ${v.files.map((f, i) => `<div class="file-row"><label class="switch"><input type="${isCk ? "radio" : "checkbox"}" name="pick" data-pick="${i}" ${isCk ? (i === 0 ? "checked" : "") : f.suggested ? "checked" : ""}><span></span></label>
-      <div class="grow">${esc(f.name)}<div class="faint">${f.size_kb ? bytes(f.size_kb * 1024) : ""}${f.primary ? " · primary" : ""}</div></div>
+    ${!v.files.length ? `<p class="note warn">This version has no model file Studio can install.</p>`
+      : v.files.some((f) => f.unsupported) ? `<p class="note warn">${esc(v.files.find((f) => f.unsupported).unsupported)}</p>` : ""}
+    ${v.files.map((f, i) => `<div class="file-row${f.unsupported ? " off" : ""}"><label class="switch"><input type="${isCk ? "radio" : "checkbox"}" name="pick" data-pick="${i}" ${f.unsupported ? "disabled" : isCk ? (i === firstOk ? "checked" : "") : f.suggested ? "checked" : ""}><span></span></label>
+      <div class="grow">${esc(f.name)}<div class="faint">${f.size_kb ? bytes(f.size_kb * 1024) : ""}${f.primary ? " · primary" : ""}${f.unsupported ? " · can't load here" : ""}</div></div>
       <span class="fam ${f.family}">${f.family === "ref2v" ? "R2V" : f.family === "fl2v" ? "T2V/I2V" : "All modes"}</span>${f.role === "helper" ? `<span class="fam helper">helper</span>` : ""}</div>`).join("")}
     <p class="note">${isCk ? "Installs into the base-model picker." : "Modes were guessed from file names; you can change them later. Unticked files look like alternate copies of the same LoRA. Only one main file is ever loaded per mode."}</p>
     ${(v.trained_words || []).length ? `<p class="note">Triggers: ${esc(v.trained_words.slice(0, 8).join(", "))}</p>` : ""}
-    <div class="sheet-foot"><button class="btn primary" id="inst">${v.installed ? "Update install" : "Install"}</button></div>`, (body) => {
+    <div class="sheet-foot"><button class="btn primary" id="inst" ${civOk(v) ? "" : "disabled"}>${v.installed ? "Update install" : "Install"}</button></div>`, (body) => {
     $("#inst", body).onclick = async () => {
       const picked = $$("[data-pick]", body).filter((x) => x.checked).map((x) => v.files[+x.dataset.pick].id);
       if (!picked.length) return toast("Pick at least one file", true);
@@ -1643,6 +1686,7 @@ async function viewSystem() {
     <div class="list">
       <div><div class="grow">Unload when switching model family<div class="sub">T2V/I2V ↔ R2V or base model. Keeps RAM flat.</div></div><label class="switch"><input type="checkbox" data-set="memory.unload_on_family_switch" ${st["memory.unload_on_family_switch"] ? "checked" : ""}><span></span></label></div>
       <div><div class="grow">Drop cache after a job above<div class="sub">fraction of the container's RAM</div></div><input type="number" step="0.05" min="0.3" max="0.95" style="width:86px" data-set="memory.trim_after_job_above" value="${st["memory.trim_after_job_above"]}"></div>
+      <div><div class="grow">Animated live preview<div class="sub">loops the whole clip at ~7 fps while it samples; off shows the first frame only</div></div><label class="switch"><input type="checkbox" data-set="preview.animated" ${st["preview.animated"] ? "checked" : ""}><span></span></label></div>
       <div><div class="grow">Delete VHS's silent duplicate<div class="sub">keeps only the mp4 with sound</div></div><label class="switch"><input type="checkbox" data-set="output.delete_silent_twin" ${st["output.delete_silent_twin"] ? "checked" : ""}><span></span></label></div>
       <div><div class="grow">Video quality (CRF)<div class="sub">lower = better and bigger</div></div><input type="number" min="8" max="30" style="width:86px" data-set="output.crf" value="${st["output.crf"]}"></div>
       <div><div class="grow">Auto prompt &amp; Tweak model<div class="sub">any OpenRouter model id</div></div><input type="text" style="width:170px" data-set="prompting.model" value="${esc(st["prompting.model"] || "")}"></div>
@@ -1747,7 +1791,7 @@ function updateChrome(L) {
   t.hidden = false;
   t.classList.toggle("idle", active.status !== "running");
   const img = $("#tallyImg");
-  if (active.preview_seq > 0) { const src = `/api/jobs/${active.id}/preview?s=${active.preview_seq}`; if (img.getAttribute("src") !== src) img.src = src; } else img.removeAttribute("src");
+  if (active.preview_seq > 0 && active.preview_mime !== "video/mp4") { const src = `/api/jobs/${active.id}/preview?s=${active.preview_seq}`; if (img.getAttribute("src") !== src) img.src = src; } else img.removeAttribute("src");
   $("#tallyText").textContent = active.status === "running"
     ? (active.eta != null ? `${clock(active.eta)} left` : active.stage === "sampling" && active.total_steps ? `${active.step}/${active.total_steps}` : cap(active.stage || "starting"))
     : cap(active.stage || active.status);
