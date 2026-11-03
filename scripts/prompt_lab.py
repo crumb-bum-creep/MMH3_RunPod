@@ -431,7 +431,8 @@ textarea:focus,input:focus,select:focus{outline:2px solid rgba(240,169,59,.5);bo
 .drop .x,.ref .x{position:absolute;top:6px;right:6px;background:rgba(0,0,0,.6);color:#fff;border:0;border-radius:99px;width:26px;height:26px;cursor:pointer}
 .refs{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-top:10px}
 .ref{position:relative;background:#0f141b;border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:12px}
-.ref .media{height:96px;display:grid;place-items:center;background:#0a0e14;color:var(--ink3)}
+.ref .media{position:relative;height:96px;display:grid;place-items:center;background:#0a0e14;color:var(--ink3);cursor:pointer}
+.ref .rep{position:absolute;left:6px;bottom:6px;font-size:11px;font-weight:600;background:rgba(0,0,0,.65);color:#fff;padding:2px 8px;border-radius:99px}
 .ref .media img,.ref .media video{width:100%;height:96px;object-fit:cover}
 .ref .meta{padding:6px 8px}.ref .tag{color:var(--acc);font-weight:700}.ref .name{color:var(--ink3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ref label{display:flex;gap:6px;align-items:center;margin-top:4px;color:var(--ink2)}
@@ -585,13 +586,17 @@ function renderFrames() {
 }
 function renderRefs() {
   const t = tags();
-  $("#refs").innerHTML = media.refs.map((r, i) => `<div class="ref">
-      <div class="media">${r.kind === "image" ? `<img src="${r.data}" alt="">` : r.kind === "video" ? `<video src="${r.data}" muted playsinline></video>` : "♪ audio"}</div>
+  $("#refs").innerHTML = media.refs.map((r, i) => `<div class="ref" data-ref="${i}">
+      <div class="media" data-rep="${i}" title="Tap or drop a file to replace ${esc(t[i])}">${r.kind === "image" ? `<img src="${r.data}" alt="">` : r.kind === "video" ? `<video src="${r.data}" muted playsinline></video>` : "♪ audio"}<span class="rep">↻ Replace</span></div>
       <button class="x" data-rm="${i}" title="Remove">✕</button>
       <div class="meta"><div class="tag">${esc(t[i])}</div><div class="name" title="${esc(r.name)}">${esc(r.name)}</div>
       ${r.kind === "video" ? `<label><input type="checkbox" data-snd="${i}" ${r.use_soundtrack ? "checked" : ""}> use its sound</label>` : ""}</div></div>`).join("");
   $$("[data-rm]").forEach((b) => b.onclick = () => { media.refs.splice(+b.dataset.rm, 1); render(); });
   $$("[data-snd]").forEach((c) => c.onchange = () => { media.refs[+c.dataset.snd].use_soundtrack = c.checked; render(); });
+  $$("[data-rep]").forEach((m) => m.onclick = async () => {
+    const i = +m.dataset.rep; replaceRef(i, (await pick(`${media.refs[i].kind}/*`, false))[0]);
+  });
+  $$("[data-ref]").forEach((el) => dropTarget(el, (fs) => replaceRef(+el.dataset.ref, fs[0])));
 }
 function renderSaved() {
   const items = S.saved || [];
@@ -642,6 +647,15 @@ async function addRefs(files) {
     media.refs.push({ kind, name: f.name, data, use_soundtrack: true });
   }
   render();
+}
+// Swap one reference in its slot. Same kind only, so every tag stays where it was.
+async function replaceRef(i, f) {
+  const old = media.refs[i];
+  if (!f || !old) return;
+  if (kindOf(f) !== old.kind) return toast(`${tags()[i].split("> ")[0].replace(/>?$/, ">")} is ${old.kind === "audio" ? "an audio" : `a ${old.kind}`} slot; pick a ${old.kind} file`, true);
+  const data = old.kind === "image" ? await imageJpeg(f) : await readAsDataURL(f);
+  media.refs[i] = { ...old, name: f.name, data };
+  render(); toast(`Replaced ${tags()[i].split("> ")[0].replace(/>?$/, ">")}`);
 }
 async function setFrame(which, file) {
   if (!file || kindOf(file) !== "image") return toast("Frames must be images", true);

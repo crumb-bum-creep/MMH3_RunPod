@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.4.1
+
+- **Replace a reference in place.** Tap a reference in Create (or its ↻) to swap it for another
+  file of the same kind. It keeps its slot and tag, so `<Picture 1>` stays `<Picture 1>` and the
+  others don't move. A replaced clip keeps your sound on/off choice.
+- **Prompt Lab** (`scripts/prompt_lab.py`): a one-file local page for drafting, tweaking and saving
+  prompts with OpenRouter, no GPU. Its references can be replaced in place too (tap, or drop a file
+  on the tile).
+
 ## 2.4.0
 
 - **CivitAI search finds what you type.** CivitAI's own search only matches the start of a model's

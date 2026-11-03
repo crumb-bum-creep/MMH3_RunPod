@@ -578,7 +578,9 @@ function refTiles() {
   const tags = refTags();
   const tiles = F.refs.map((r, i) => `
     <div class="ref">
-      ${r.kind === "audio" ? `<span class="kind">${ICON.audio}</span>` : `<img src="${thumbIn(r.file)}" alt="" loading="lazy">`}
+      <button class="swap" data-repref="${i}" title="Replace ${esc(tags[i])}" aria-label="Replace this reference">
+        ${r.kind === "audio" ? `<span class="kind">${ICON.audio}</span>` : `<img src="${thumbIn(r.file)}" alt="" loading="lazy">`}
+        <span class="swap-ico">${ICON.reuse}</span></button>
       ${r.kind === "video" ? `<button class="snd ${r.use_soundtrack === false ? "off" : ""}" data-snd="${i}" title="Use this clip's sound">♪</button>` : ""}
       <button class="x" data-rmref="${i}" aria-label="Remove">${ICON.x}</button>
       <span class="tag">${esc(tags[i])}</span>
@@ -683,6 +685,15 @@ function bindCreate() {
     render();
   };
   $$("[data-rmref]", v).forEach((b) => b.onclick = () => { F.refs.splice(+b.dataset.rmref, 1); saveForm(); render(); });
+  // Replace one reference in its slot: same kind, so every other tag stays where it was.
+  $$("[data-repref]", v).forEach((b) => b.onclick = async () => {
+    const i = +b.dataset.repref; const old = F.refs[i]; const tag = refTags()[i].split("> ")[0].replace(/>?$/, ">");
+    const [a] = await pickAsset({ title: `Replace ${tag}`, kinds: [old.kind] });
+    if (!a || a.file === old.file) return;
+    const ref = await makeReference(a);
+    if (old.kind === "video" && old.use_soundtrack === false) ref.use_soundtrack = false;  // keep your sound choice
+    F.refs[i] = ref; saveForm(); render(); toast(`Replaced ${tag}`);
+  });
   $$("[data-snd]", v).forEach((b) => b.onclick = () => { const r = F.refs[+b.dataset.snd]; r.use_soundtrack = r.use_soundtrack === false; saveForm(); render(); });
   const kl = $("#kitLoad"); if (kl) kl.onclick = openKitPicker;
   const ks = $("#kitSave"); if (ks) ks.onclick = () => saveKitSheet(F.refs);
@@ -749,16 +760,19 @@ async function fillSamplerLists() {
   } catch { /* ComfyUI still starting: keep the recipe value only */ }
 }
 
-async function addReference(a) {
-  const L = S.boot.limits.refs;
-  if (F.refs.filter((r) => r.kind === a.kind).length >= L[a.kind]) { toast(`At most ${L[a.kind]} ${a.kind} references`, true); return; }
+async function makeReference(a) {
   const ref = { kind: a.kind, file: a.file };
   if (a.kind === "video") {
     let has = a.has_audio;
     if (has === undefined || has === null) { try { has = (await api(`/api/assets/soundtrack?file=${encodeURIComponent(a.file)}`)).has_audio; } catch { has = true; } }
     ref.use_soundtrack = !!has;
   }
-  F.refs.push(ref); saveForm();
+  return ref;
+}
+async function addReference(a) {
+  const L = S.boot.limits.refs;
+  if (F.refs.filter((r) => r.kind === a.kind).length >= L[a.kind]) { toast(`At most ${L[a.kind]} ${a.kind} references`, true); return; }
+  F.refs.push(await makeReference(a)); saveForm();
 }
 
 function overridesPayload() {

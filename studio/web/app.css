@@ -206,7 +206,10 @@ input[type=range] { width: 100%; accent-color: var(--amber); height: 32px; }
   border: 1px solid var(--line);
 }
 .ref img { width: 100%; height: 100%; object-fit: cover; }
-.ref .tag { position: absolute; left: 5px; bottom: 5px; padding: 2px 7px; border-radius: 6px; background: rgba(8,11,16,.82); font-size: 11px; font-weight: 700; font-stretch: 105%; }
+.ref .swap { position: absolute; inset: 0; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; }
+.ref .swap .swap-ico { position: absolute; right: 5px; bottom: 5px; width: 24px; height: 24px; border-radius: 50%; background: rgba(8,11,16,.75); display: grid; place-items: center; }
+.ref .swap .swap-ico svg { width: 13px; height: 13px; }
+.ref .tag { pointer-events: none; position: absolute; left: 5px; bottom: 5px; padding: 2px 7px; border-radius: 6px; background: rgba(8,11,16,.82); font-size: 11px; font-weight: 700; font-stretch: 105%; }
 .ref .x { position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; border-radius: 50%; border: 0; background: rgba(8,11,16,.75); color: var(--ink); display: grid; place-items: center; }
 .ref .x svg { width: 15px; height: 15px; }
 .ref .kind { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-2); }
