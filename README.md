@@ -60,6 +60,17 @@ stays available on 8188.
   on startup sit under **Quick install**, one tap away (set per LoRA; `auto_install` in
   `loras.yaml`).
 
+## Prompt Lab: workshop prompts without a GPU
+
+`scripts/prompt_lab.py` is one file that runs on your own computer with plain Python 3.9+
+(nothing to install). `python prompt_lab.py` opens a page in your browser where you pick
+Text / Image / Reference, add frames or references, set the length, draft a prompt from an
+idea, edit it, Tweak it, and save the ones you like. It sends OpenRouter the same request
+Studio sends on the pod: the same system prompts, frame and duration block, keyframe
+alignment line and reference tags. Saved prompts are in `prompt_lab_data/saved.json` next
+to the script; Copy one into Create when your pod is up. The system prompts are embedded;
+after changing `config/system_prompts.yaml`, run `python scripts/prompt_lab_sync.py`.
+
 ## Recipes (`config/recipes.yaml`)
 
 A recipe is only values: turbo LoRA, strength, steps, sampler, scheduler, and optionally sigma

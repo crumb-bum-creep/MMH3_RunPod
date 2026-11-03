@@ -713,3 +713,30 @@ def test_installs_never_pick_up_gguf_files(monkeypatch):
         {"id": 1, "name": "x_q80.gguf", "type": "Model", "primary": True},
         {"id": 2, "name": "x_int8.safetensors", "type": "Diffusion Model"}]})
     assert [f["id"] for f in civitai.version(9)["files"]] == [2]
+
+
+def test_prompt_lab_asks_openrouter_the_way_studio_does():
+    """scripts/prompt_lab.py is standalone, so it carries copies of Studio's prompt rules.
+    If this fails after editing config/system_prompts.yaml: python scripts/prompt_lab_sync.py"""
+    import importlib.util
+
+    from studio import graph, prompting
+
+    spec = importlib.util.spec_from_file_location("prompt_lab", paths.IMAGE_ROOT / "scripts" / "prompt_lab.py")
+    lab = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lab)
+    assert lab.PROMPTS == util.image_yaml("system_prompts.yaml")["prompts"]
+    for d in (1, 5, 6, 15):
+        for frames in ((1, 0), (1, 1), (0, 1)):
+            job = {"mode": "i2v", "duration": d, "aspect": "16:9", "megapixels": 0.9,
+                   "start_image": "a" if frames[0] else None, "end_image": "b" if frames[1] else None}
+            ljob = {**job, "start": {"data": "x"} if frames[0] else None, "end": {"data": "y"} if frames[1] else None}
+            assert lab.format_block(ljob) == prompting.format_block(job)
+            body = "integrated_multimodal_description: [Shot 1] a. [Shot 2] b."
+            assert lab.align_keyframes(ljob, body) == prompting.align_keyframes(job, body)
+    refs = [{"kind": "image"}, {"kind": "video"}, {"kind": "audio"}, {"kind": "video", "use_soundtrack": False}]
+    assert lab.reference_tags(refs) == graph.reference_tags(refs)
+    content = lab._r2v_content({"mode": "r2v", "idea": "x", "duration": 5, "refs": [
+        {"kind": "video", "name": "v.mp4", "data": "data:video/mp4;base64,AA==", "use_soundtrack": True}]})
+    assert "<Video 1> <Audio 1>: v.mp4\n  (<Audio 1>: the soundtrack inside <Video 1>)" in content[0]["text"]
+    assert content[1]["text"] == "video_reference <Video 1> (v.mp4) - the next video, whole:"
