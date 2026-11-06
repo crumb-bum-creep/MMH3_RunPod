@@ -131,6 +131,10 @@ def _download(mid: str, entry: dict[str, Any], prog: _Progress, retries: int) ->
 
     token = os.environ.get("HF_TOKEN") or None
     dest = model_path(entry)
+    if _arrived(dest, entry):
+        prog.set(mid, state="ready", error=None)
+        log.info("%s arrived on the volume by itself; not downloading it", mid)
+        return
     work = DOWNLOAD_DIR / mid
     total = None
     try:
@@ -168,6 +172,29 @@ def _download(mid: str, entry: dict[str, Any], prog: _Progress, retries: int) ->
         stop.set()
 
 
+def _arrived(dest: Path, entry: dict[str, Any], watch: float = 12.0) -> bool:
+    """True when the file is (or turns out to be) on disk without us: present already,
+    or growing because something else is writing it (a volume copy), in which case
+    wait until it stops growing. Never downloads a second copy next to it."""
+    if is_present(entry):
+        return True
+    try:
+        size = dest.stat().st_size
+    except OSError:
+        return False
+    deadline = time.time() + 6 * 3600
+    while time.time() < deadline:
+        time.sleep(watch)
+        try:
+            now = dest.stat().st_size
+        except OSError:
+            return False
+        if now == size:
+            break
+        size = now
+    return is_present(entry)
+
+
 def run(groups: list[str]) -> int:
     paths.ensure_dirs()
     fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
@@ -176,6 +203,13 @@ def run(groups: list[str]) -> int:
     except OSError:
         log.info("another provisioner is already running")
         return 0
+    from . import bootgate
+
+    if not bootgate.is_open():
+        log.info("waiting: the volume may still be being copied in (%s)", bootgate.status().get("reason"))
+        util.write_json(STATUS_FILE, {"running": True, "models": {}, "waiting": True, "updated_at": time.time()})
+        bootgate.wait_open()
+        log.info("volume check done (%s); checking models", bootgate.status().get("reason"))
     cfg = util.settings().get("provisioning") or {}
     prog = _Progress()
     todo = [(mid, e) for mid, e in (manifest().get("models") or {}).items()

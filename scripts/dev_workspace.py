@@ -2,7 +2,7 @@
 
     python scripts/dev_workspace.py /tmp/ws [--comfy-port 8189]
 
-Sparse placeholder model files (no real disk use), the seed LoRA catalog with a
+Sparse placeholder model files (no real disk use), a small LoRA catalog with a
 few "installed" files, legacy library/meta files from the previous build, a few
 legacy outputs, and some input media. Used for local UI work and tests.
 """
@@ -29,6 +29,41 @@ def ff(*args: str) -> None:
     subprocess.run(["ffmpeg", "-y", "-v", "error", *args], check=True)
 
 
+DEV_LORAS = """\
+loras:
+- version_id: 3224980
+  enabled: true
+  auto_install: true
+  recommended_strength: 1.2
+  nickname: Digicam
+  tags:
+  - Style/Camera
+  trigger_words:
+  - d1g1cam
+  filename: minimax-h3-digicam.safetensors
+- version_id: 3266628
+  enabled: true
+  auto_install: true
+  recommended_strength: 0.6
+  nickname: Mystic XXX v4
+  tags:
+  - Sexual
+  trigger_words: []
+  filename: MysticXXX_MMH3-V4.safetensors
+- version_id: 3268303
+  enabled: true
+  auto_install: true
+  recommended_strength: 0.5
+  nickname: HearMeMan - AIO Sex v2.5
+  tags:
+  - Sex
+  - General
+  trigger_words:
+  - hmmotion
+  filename: HMNSFW-AIO-V2.5.safetensors
+"""
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("root", type=Path)
@@ -52,7 +87,7 @@ def main() -> None:
 
     cfg = ws / "mmh3/config"
     cfg.mkdir(parents=True)
-    shutil.copy(ROOT / "config/loras.seed.yaml", cfg / "loras.yaml")
+    (cfg / "loras.yaml").write_text(DEV_LORAS)  # a small catalog for the LoRA files above
     (cfg / "settings.yaml").write_text(yaml.safe_dump({"ports": {"comfy": a.comfy_port}}))
 
     out = ws / "ComfyUI/output/MMH3"

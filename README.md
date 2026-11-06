@@ -28,6 +28,12 @@ stays available on 8188.
 
 5. **First boot.** Open port 7860. Studio is up within seconds and shows download progress. You
    can queue jobs right away; they start once their models are on disk.
+6. **Restarting a stopped pod that RunPod migrates.** The new pod can start before RunPod has finished
+   copying your old `/workspace` over. Studio checks for that before downloading anything: if the
+   models aren't on the volume yet, it watches for a short while, and while files keep arriving it
+   holds every download (Create and System say so) until the copy has been quiet for 3 minutes. Then
+   it fetches only what the copy didn't bring. *Download now* skips the wait. Settings live under
+   `provisioning.migration_guard` in `settings.yaml`; `MMH3_MIGRATION_GUARD=0` turns it off.
 
 ## Using it
 
@@ -52,13 +58,25 @@ stays available on 8188.
 - **References.** Upload images, clips and audio from your phone and save named **kits** of
   references to reuse in R2V. Tags like `<Picture 1>` are shown on each tile, and a clip's
   soundtrack can be toggled.
+- **Subjects (beta).** In References → Subjects, define a character, setting or object once: a
+  description plus pictures, clips or a voice, each with a role (face, outfit, voice). Add variants
+  (an outfit, a simpler look, no voice). In Create → Reference, *+ Subject* fills `<Subject 1>`,
+  `<Subject 2>`…: its references are added for you and its `subject_definitions` line is written by
+  Studio. Auto is told to keep each subject's look in that one line, so you can **swap** a subject
+  (or a variant) in a finished prompt: its line and reference tags are rewritten in place, other tags
+  are renumbered if they move, and anything of the old subject still mentioned is listed, with
+  *Tidy with AI* to fix just that. Plain references and kits work exactly as before.
 - **Image editing (ComfyUI).** Open ComfyUI on 8188 → Workflows → *Studio extras* for the MiniMax
   H3 Image Editing workflows (v1 simple, v2 with references and the experimental image VAE). They
   download on boot with `CIVITAI_TOKEN`; System → ComfyUI workflows shows anything they're missing.
 - **More → LoRAs and models.** Your catalog, plus **Browse CivitAI** (search, bookmarks and your
-  collections), with LoRAs and base checkpoints filtered to MiniMax H3. LoRAs set not to download
-  on startup sit under **Quick install**, one tap away (set per LoRA; `auto_install` in
-  `loras.yaml`).
+  collections), with LoRAs and base checkpoints filtered to MiniMax H3, and **Add by link or id**:
+  a CivitAI model page, download link, version id or AIR, a Hugging Face file or repo link (or
+  `owner/repo`), or any direct `.safetensors` link. With *Check first* on, Studio shows the model and
+  every file it found (size, mode, base model) before downloading; off, it installs the suggested
+  file straight away. Downloads resume after a dropped connection or a restart, and base models
+  show their progress (Retry / Resume when needed). LoRAs set not to download on startup sit under
+  **Quick install**, one tap away (`auto_install` in `loras.yaml`). No LoRAs are pre-listed.
 
 ## Prompt Lab: workshop prompts without a GPU
 
@@ -149,5 +167,6 @@ python scripts/validate_graphs.py --setup-dummies <ComfyUI dir>   # real ComfyUI
 ```
 
 The code layout is one module per job: `graph.py` builds the ComfyUI prompt, `recipes.py`,
-`jobs.py` (the queue), `prompting.py`, `library.py`, `loras.py`, `civitai.py`, `provision.py`,
+`jobs.py` (the queue), `prompting.py`, `library.py`, `loras.py` (catalog + downloads), `civitai.py`,
+`sources.py` (add by link), `subjects.py`, `provision.py`, `bootgate.py` (migration guard),
 `supervisor.py`, `server.py`, and `web/` holds the phone app (no build step).

@@ -15,7 +15,7 @@ from typing import Any
 
 from aiohttp import web
 
-from . import __version__, civitai, graph, library, loras, memory, paths, prompting, provision, recipes, util, workflows
+from . import __version__, bootgate, civitai, graph, library, loras, memory, paths, prompting, provision, recipes, sources, subjects, util, workflows
 from .comfy import Comfy, ComfyError
 from .jobs import JobError, Runner
 
@@ -65,7 +65,8 @@ async def errors_mw(request: web.Request, handler):
         return await handler(request)
     except web.HTTPException:
         raise
-    except (JobError, library.LibraryError, recipes.RecipeError, graph.GraphError, prompting.PromptError) as exc:
+    except (JobError, library.LibraryError, recipes.RecipeError, graph.GraphError, prompting.PromptError,
+            subjects.SubjectError) as exc:
         return bad(str(exc))
     except (ComfyError, civitai.CivitaiError) as exc:
         return bad(str(exc), 502)
@@ -95,7 +96,8 @@ async def index(request: web.Request) -> web.StreamResponse:
 
 def _checkpoints() -> list[dict[str, Any]]:
     return [{"id": c["id"], "label": c["label"], "available": c["available"], "builtin": c["builtin"],
-             "image": c.get("image"), "files": c.get("files") or {}} for c in loras.checkpoints()]
+             "image": c.get("image"), "files": c.get("files") or {}, "download": c.get("download")}
+            for c in loras.checkpoints()]
 
 
 async def boot(request: web.Request) -> web.Response:
@@ -129,6 +131,7 @@ async def state(request: web.Request) -> web.Response:
         "memory": memory.read().as_dict(),
         "families": fam,
         "downloads": {"active": bool(downloading), "items": downloading},
+        "gate": bootgate.status(),
         "time": time.time(),
     })
 
@@ -145,7 +148,7 @@ def _prompt_job(form: dict[str, Any]) -> dict[str, Any]:
     mode = str(form.get("mode") or "")
     recipes.family_for(mode)
     job = {k: form.get(k) for k in ("mode", "idea", "aspect", "megapixels", "duration", "start_image",
-                                     "end_image", "refs")}
+                                     "end_image", "refs", "subjects")}
     job["aspect"] = job.get("aspect") or "9:16"
     job["megapixels"] = float(job.get("megapixels") or 0.7)
     job["duration"] = float(job.get("duration") or 5)
@@ -352,6 +355,33 @@ async def kit_delete(request: web.Request) -> web.Response:
     return ok()
 
 
+async def subjects_list(request: web.Request) -> web.Response:
+    return ok({"items": subjects.items()})
+
+
+async def subject_save(request: web.Request) -> web.Response:
+    return ok(subjects.save(await request.json()))
+
+
+async def subject_delete(request: web.Request) -> web.Response:
+    subjects.delete(request.match_info["id"])
+    return ok()
+
+
+async def subjects_compose(request: web.Request) -> web.Response:
+    """Create's reference list for its subject slots (+ loose references), with tags and lines."""
+    body = await request.json()
+    out = subjects.compose(body.get("slots") or [], body.get("loose") or [])
+    out["lines"] = subjects.all_lines(body.get("slots") or [], out["refs"])
+    return ok(out)
+
+
+async def subjects_rewrite(request: web.Request) -> web.Response:
+    """Swap subjects in a prompt in place ({prompt, before: {slots, refs}, after: {slots, refs}})."""
+    body = await request.json()
+    return ok(subjects.rewrite(str(body.get("prompt") or ""), body.get("before") or {}, body.get("after") or {}))
+
+
 async def ref_tags(request: web.Request) -> web.Response:
     return ok({"tags": graph.reference_tags((await request.json()).get("refs") or [])})
 
@@ -409,6 +439,10 @@ async def checkpoint_add(request: web.Request) -> web.Response:
     return ok(ck)
 
 
+async def checkpoint_install(request: web.Request) -> web.Response:
+    return ok(await asyncio.to_thread(loras.install_checkpoint, request.match_info["id"]))
+
+
 async def checkpoint_delete(request: web.Request) -> web.Response:
     ck_id = request.match_info["id"]
     if any(c["id"] == ck_id and c["builtin"] for c in loras.checkpoints()):
@@ -424,6 +458,36 @@ def _mark_installed(result: dict[str, Any]) -> dict[str, Any]:
         for v in item.get("versions") or []:
             v["installed"] = str(v.get("id")) in (cks if item.get("type") == "Checkpoint" else have)
     return result
+
+
+async def install_lookup(request: web.Request) -> web.Response:
+    """Add by link: what a pasted link / id points at, before anything downloads."""
+    body = await request.json()
+    src = sources.parse(str(body.get("text") or ""))
+    if body.get("kind") in ("lora", "checkpoint"):
+        src["kind"] = body["kind"]
+    found = await asyncio.to_thread(sources.lookup, src)
+    return ok(_mark_found(found))
+
+
+def _mark_found(found: dict[str, Any]) -> dict[str, Any]:
+    if found.get("source") == "civitai":
+        have = {str(e.get("version_id")) for e in loras.catalog()} | {
+            str(c.get("version_id")) for c in loras.checkpoints() if c.get("version_id")}
+        found["installed"] = str(found.get("version_id")) in have
+    return found
+
+
+async def install_add(request: web.Request) -> web.Response:
+    """Add by link: install looked-up files ({found, kind, picks}) or, with the check off, straight
+    from the pasted text ({text, kind})."""
+    body = await request.json()
+    kind, name = body.get("kind"), (str(body.get("name") or "").strip() or None)
+    if body.get("found"):
+        result = await asyncio.to_thread(sources.install, body["found"], kind, body.get("picks") or None, name)
+    else:
+        result = await asyncio.to_thread(sources.quick_install, str(body.get("text") or ""), kind, name)
+    return ok(result)
 
 
 async def civitai_search(request: web.Request) -> web.Response:
@@ -490,6 +554,7 @@ async def system(request: web.Request) -> web.Response:
         "civitai_token": bool(civitai.token()), "civitai_domain": civitai.base_url(),
         "workflows": await asyncio.to_thread(workflows.listing, await _node_types(comfy)),
         "password": bool(_password()),
+        "gate": bootgate.status(),
     })
 
 
@@ -547,6 +612,8 @@ async def system_action(request: web.Request) -> web.Response:
         runner.resident = None
     elif action == "provision":
         _spawn_provision([g for g in (body.get("groups") or ["core"]) if g in ("core", "eros")])
+    elif action == "gate-skip":
+        bootgate.skip()
     elif action == "key":
         prompting.save_key(str(body.get("key") or ""))
     elif action == "workflows":
@@ -598,15 +665,25 @@ async def form_state(request: web.Request) -> web.Response:
 
 # ---------------------------------------------------------------------- app
 
+async def _after_gate() -> None:
+    """Catalog seeding and the first LoRA/checkpoint sync write to the volume and start
+    downloads, so they wait while the volume is still being copied in (bootgate)."""
+    await asyncio.to_thread(bootgate.wait_open)
+    await asyncio.to_thread(loras.ensure_seeded)
+    await asyncio.to_thread(loras.sync)
+
+
 async def on_startup(app: web.Application) -> None:
     paths.ensure_dirs()
-    loras.ensure_seeded()
     comfy = Comfy(f"http://127.0.0.1:{(util.settings().get('ports') or {}).get('comfy', 8188)}")
     await comfy.start()
     runner = Runner(comfy)
     await runner.start()
     app["comfy"], app["runner"] = comfy, runner
-    await asyncio.to_thread(loras.sync)
+    if bootgate.is_open():
+        await _after_gate()
+    else:
+        app["gate_task"] = asyncio.create_task(_after_gate())
     asyncio.create_task(asyncio.to_thread(library.refresh_index))
 
 
@@ -650,6 +727,11 @@ def make_app() -> web.Application:
     r.add_post("/api/kits", kit_save)
     r.add_delete("/api/kits/{id}", kit_delete)
     r.add_post("/api/refs/tags", ref_tags)
+    r.add_get("/api/subjects", subjects_list)
+    r.add_post("/api/subjects", subject_save)
+    r.add_delete("/api/subjects/{id}", subject_delete)
+    r.add_post("/api/subjects/compose", subjects_compose)
+    r.add_post("/api/subjects/rewrite", subjects_rewrite)
     r.add_get("/api/loras", lora_list)
     r.add_post("/api/loras", lora_upsert)
     r.add_delete("/api/loras/{key}", lora_delete)
@@ -658,6 +740,9 @@ def make_app() -> web.Application:
     r.add_post("/api/loras/{key}/uninstall", lora_uninstall)
     r.add_post("/api/checkpoints", checkpoint_add)
     r.add_delete("/api/checkpoints/{id}", checkpoint_delete)
+    r.add_post("/api/checkpoints/{id}/install", checkpoint_install)
+    r.add_post("/api/install/lookup", install_lookup)
+    r.add_post("/api/install", install_add)
     r.add_get("/api/civitai/search", civitai_search)
     r.add_get("/api/civitai/collections", civitai_collections)
     r.add_get("/api/civitai/collections/{id}", civitai_collection)

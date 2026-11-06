@@ -276,6 +276,12 @@ async def write(job: dict[str, Any]) -> str:
                     {"role": "user", "content": content}]
         return align_keyframes(job, await _openrouter(messages, cfg, key))
     if mode == "r2v":
+        if job.get("subjects"):  # experimental Subjects: fixed definition lines, swappable prompt
+            from . import subjects
+
+            block = subjects.direction_block(job["subjects"], job.get("refs") or [])
+            if block:
+                job = {**job, "idea": f"{idea}\n\n{block}"}
         return await _refpack_prompt(job, prompts.get("r2v_auto", ""), cfg, key)
     raise PromptError(f"unknown mode {mode}")
 
@@ -292,6 +298,9 @@ async def refine(job: dict[str, Any], prompt: str, request: str) -> str:
     prompts = system_prompts()
     rules = _system_prompt_for(job, prompts)
     system = prompts.get("refine", "") + ("\n\n# PROMPT RULES\n\n" + rules if rules else "")
+    if job.get("mode") == "r2v" and job.get("subjects"):
+        request += ("\n(Subjects: keep every <Subject N> line in subject_definitions as it is unless the change is "
+                    "about it, and keep each subject's appearance only in its definition line.)")
     content: list[dict[str, Any]] = [{"type": "text", "text": (
         f"CHANGE REQUEST:\n{request}\n\n{format_block(job)}\n\nCURRENT PROMPT:\n{prompt}")}]
     if job["mode"] == "i2v":

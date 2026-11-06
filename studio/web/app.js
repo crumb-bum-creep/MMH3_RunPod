@@ -84,14 +84,14 @@ const nameOf = (f) => String(f || "").split("/").pop();
 
 const S = {
   boot: null, live: null, route: "create",
-  assets: null, kits: [], loras: null, outputs: null,
+  assets: null, kits: [], subjects: null, loras: null, outputs: null,
   lib: { filter: "all", group: "" },
 };
 
 const DEFAULT_FORM = {
   mode: "t2v", auto: false, idea: "", prompt: "", drafted: null,
   aspect: "9:16", megapixels: 0.7, duration: 5, recipe: {}, adv: {}, checkpoint: "stock",
-  seed: "", lockSeed: false, count: 1, loras: [], start_image: null, end_image: null, refs: [], updated: 0,
+  seed: "", lockSeed: false, count: 1, loras: [], start_image: null, end_image: null, refs: [], subjects: [], updated: 0,
 };
 let F = loadLocalForm();
 
@@ -255,6 +255,23 @@ function syncAvRecipe() {
   saveForm();
 }
 
+/* Boot check for a volume that's still being copied in (RunPod migration): downloads wait. */
+const gateClosed = () => !!(S.live && S.live.gate && S.live.gate.state !== "open");
+function gateNote() {
+  if (!gateClosed()) return "";
+  const g = S.live.gate;
+  const text = g.state === "copying"
+    ? `Your volume is still being copied in (${bytes(g.copied_bytes || 0)} so far; RunPod migration). Downloads wait until it has been quiet for ${Math.round((g.settle_seconds || 180) / 60)} min, so nothing is fetched twice.`
+    : `Checking whether your volume is being copied in before downloading anything${g.window_left != null ? ` (${clock(g.window_left)} left)` : ""}.`;
+  return `<div class="note warn row" style="align-items:flex-start"><span class="grow">${text}</span><button class="btn small" data-gateskip>Download now</button></div>`;
+}
+function bindGateSkip(root) {
+  $$("[data-gateskip]", root).forEach((b) => b.onclick = async () => {
+    if (!confirm("Start downloading now? If a migration is still copying your volume, models may be downloaded twice and fill the disk.")) return;
+    try { await api("/api/system/gate-skip", { body: {} }); toast("Downloads starting"); pollSoon(); } catch (e) { fail(e); }
+  });
+}
+
 VIEWS.create = function () {
   const b = S.boot; if (!b) return;
   syncAvRecipe();
@@ -269,7 +286,8 @@ VIEWS.create = function () {
   $("#view").innerHTML = `
   <div class="page">
     <div class="seg big" id="modeSeg">${Object.entries(MODES).map(([k, v]) => `<button data-mode="${k}" class="${F.mode === k ? "on" : ""}">${v}</button>`).join("")}</div>
-    ${famInfo && !famInfo.ready ? `<p class="note warn">Models for ${MODES[F.mode]} are still downloading (${esc(famInfo.missing.join(", "))}). You can queue now; jobs start when they finish.</p>` : ""}
+    ${gateNote()}
+    ${famInfo && !famInfo.ready && !gateClosed() ? `<p class="note warn">Models for ${MODES[F.mode]} are still downloading (${esc(famInfo.missing.join(", "))}). You can queue now; jobs start when they finish.</p>` : ""}
 
     <section class="block">
       <div class="block-head">
@@ -286,8 +304,9 @@ VIEWS.create = function () {
           <span class="faint" style="font-size:12px">${b.prompting.key ? "" : "Needs an OpenRouter key (More → System)"}</span>
         </div>
         ${drafted ? `<div class="drafted"><div class="row"><span class="grow muted">This exact prompt will be used. Edit freely.</span><button class="btn small ghost" id="dropDraft">Discard</button></div><textarea id="draftBox">${esc(F.drafted.prompt)}</textarea>${tweakBox()}</div>` : ""}
-      ` : `<div class="prompt-tools"><button class="btn small ghost" id="toAuto">${ICON.spark} Start from an idea instead</button></div>
+      ` : `<div class="prompt-tools"><button class="btn small ghost" id="toAuto">${ICON.spark} Start from an idea instead</button>${F.mode === "r2v" && (F.subjects || []).length ? `<button class="btn small ghost" id="subjLines" title="Write (or refresh) the subject_definitions lines for your subjects">Insert subject lines</button>` : ""}</div>
         ${tweakBox({ hidden: !F.prompt.trim() })}`}
+      ${F.mode === "r2v" && F.swapNote ? swapNoteBox() : ""}
     </section>
 
     ${F.mode === "i2v" ? `
@@ -303,6 +322,7 @@ VIEWS.create = function () {
     ${F.mode === "r2v" ? `
     <section class="block">
       <div class="block-head"><h3>References</h3><span class="hint">${refCounts()}</span></div>
+      ${subjectSlotsBlock()}
       <div class="refs" id="refs">${refTiles()}</div>
       <div class="row" style="margin-top:10px">
         <button class="btn small" id="kitLoad">${ICON.folder} Load kit</button>
@@ -310,7 +330,7 @@ VIEWS.create = function () {
         <span class="grow"></span>
         <button class="btn small ghost" id="refsClear" ${F.refs.length ? "" : "disabled"}>Clear</button>
       </div>
-      <p class="note">Mention references in your prompt by their tag, like &lt;Picture 1&gt;. Auto does this for you.</p>
+      <p class="note">Mention references in your prompt by their tag, like &lt;Picture 1&gt;. Auto does this for you.${(F.subjects || []).length ? " Subjects are &lt;Subject 1&gt;, &lt;Subject 2&gt;…: swapping one rewrites its lines and tags in the prompt." : ""}</p>
     </section>` : ""}
 
     <section class="block">
@@ -357,8 +377,8 @@ VIEWS.create = function () {
         </div>
         <div>
           <label class="field" for="ck">Base model</label>
-          <select id="ck">${b.checkpoints.map((c) => `<option value="${esc(c.id)}" ${c.id === F.checkpoint ? "selected" : ""}>${esc(c.label)}${c.available[fam] === false ? " (not downloaded)" : c.available[fam] === undefined ? " (no model for this mode)" : ""}</option>`).join("")}</select>
-          ${ckMissing ? `<p class="note warn">Not on disk yet. Download it in More → Models.</p>` : ""}
+          <select id="ck">${b.checkpoints.map((c) => `<option value="${esc(c.id)}" ${c.id === F.checkpoint ? "selected" : ""}>${esc(c.label)}${c.available[fam] === false ? (c.download && c.download.state === "downloading" && c.download.total ? ` (downloading ${Math.round(100 * (c.download.done || 0) / c.download.total)}%)` : " (not downloaded)") : c.available[fam] === undefined ? " (no model for this mode)" : ""}</option>`).join("")}</select>
+          ${ckMissing ? `<p class="note warn">${ck.download && ["downloading", "queued"].includes(ck.download.state) ? "Still downloading. You can queue now; jobs start when it's on disk." : `Not on disk yet. Download it in More → LoRAs &amp; models.`}</p>` : ""}
         </div>
         <div>
           <label class="field">Variations (different seeds)</label>
@@ -381,7 +401,7 @@ const TWEAKS = ["More detail", "Tighter", "Add dialogue", "Slower camera", "One 
 /* What the prompt writer needs to know about the clip: mode, shape, frames, references. */
 function promptContext() {
   return { mode: F.mode, idea: F.idea, aspect: F.aspect, megapixels: F.megapixels, duration: F.duration,
-    start_image: F.start_image, end_image: F.end_image, refs: F.refs };
+    start_image: F.start_image, end_image: F.end_image, refs: F.refs, subjects: F.mode === "r2v" ? F.subjects || [] : [] };
 }
 
 function tweakBox({ hidden = false, canUndo } = {}) {
@@ -576,7 +596,12 @@ function refTags() {
 }
 function refTiles() {
   const tags = refTags();
-  const tiles = F.refs.map((r, i) => `
+  const tiles = F.refs.map((r, i) => r.subject ? `
+    <div class="ref subj" title="From <Subject ${r.subject}>${r.role ? ` (${esc(r.role)})` : ""}. Edit the subject to change it.">
+      ${r.kind === "audio" ? `<span class="kind">${ICON.audio}</span>` : `<img src="${thumbIn(r.file)}" alt="" loading="lazy">`}
+      <span class="who">S${r.subject}${r.role ? ` · ${esc(r.role)}` : ""}</span>
+      <span class="tag">${esc(tags[i])}</span>
+    </div>` : `
     <div class="ref">
       <button class="swap" data-repref="${i}" title="Replace ${esc(tags[i])}" aria-label="Replace this reference">
         ${r.kind === "audio" ? `<span class="kind">${ICON.audio}</span>` : `<img src="${thumbIn(r.file)}" alt="" loading="lazy">`}
@@ -638,6 +663,7 @@ function loraChips() {
 
 function bindCreate() {
   const v = $("#view");
+  bindGateSkip(v);
   $$("[data-mode]", v).forEach((b) => b.onclick = () => { F.mode = b.dataset.mode; F.adv = {}; saveForm(); render(); });
   $$("[data-auto]", v).forEach((b) => b.onclick = () => { F.auto = b.dataset.auto === "1"; saveForm(); render(); });
   const pb = $("#promptBox");
@@ -695,9 +721,10 @@ function bindCreate() {
     F.refs[i] = ref; saveForm(); render(); toast(`Replaced ${tag}`);
   });
   $$("[data-snd]", v).forEach((b) => b.onclick = () => { const r = F.refs[+b.dataset.snd]; r.use_soundtrack = r.use_soundtrack === false; saveForm(); render(); });
+  bindSubjectSlots(v);
   const kl = $("#kitLoad"); if (kl) kl.onclick = openKitPicker;
   const ks = $("#kitSave"); if (ks) ks.onclick = () => saveKitSheet(F.refs);
-  const rc = $("#refsClear"); if (rc) rc.onclick = () => { F.refs = []; saveForm(); render(); };
+  const rc = $("#refsClear"); if (rc) rc.onclick = () => { F.refs = []; F.subjects = []; F.swapNote = null; saveForm(); render(); };
 
   // shape
   $$("[data-aspect]", v).forEach((b) => b.onclick = () => { F.aspect = b.dataset.aspect; saveForm(); render(); });
@@ -794,7 +821,7 @@ async function submit(compare) {
     loras: F.loras.filter((l) => (l.families || ["fl2v", "ref2v"]).includes(fam)).map((l) => ({ key: l.key, file: l.file, strength: l.strength, parts: l.parts, nickname: l.nickname })),
   };
   if (F.mode === "i2v") { body.start_image = F.start_image; body.end_image = F.end_image; }
-  if (F.mode === "r2v") body.refs = F.refs;
+  if (F.mode === "r2v") { body.refs = F.refs; body.subjects = F.subjects || []; }
   if (F.auto) {
     body.prompt_mode = "auto"; body.idea = F.idea;
     if (F.drafted && F.drafted.mode === F.mode && F.drafted.idea === F.idea) body.prompt = F.drafted.prompt;
@@ -849,13 +876,210 @@ async function openLoraPicker() {
 }
 async function loadLoras(force = false) { if (!S.loras || force) S.loras = await api("/api/loras"); return S.loras; }
 
+// ------------------------------------------------------------------ subjects (experimental)
+
+const SUBJ_KINDS = { character: "Character", setting: "Setting", object: "Object" };
+const SUBJ_HINT = {
+  character: "Who they are and what they look like, e.g. a broad-shouldered man in his forties with a short grey beard",
+  setting: "The place, e.g. a quiet beach at sunset with a weathered wooden pier",
+  object: "The thing, e.g. a battered red vintage motorcycle",
+};
+async function loadSubjects(force = false) { if (!S.subjects || force) S.subjects = (await api("/api/subjects")).items; return S.subjects; }
+const subjThumb = (refs) => { const r = (refs || []).find((x) => x.kind !== "audio"); return r ? `<img src="${thumbIn(r.file)}" alt="" loading="lazy">` : `<span class="ph">${ICON.image}</span>`; };
+function slotLabel(sl) {
+  const s = (S.subjects || []).find((x) => x.id === sl.id);
+  if (!s) return { name: "(deleted subject)", thumb: `<span class="ph"></span>` };
+  const v = (s.variants || []).find((x) => x.id === sl.variant);
+  return { name: v ? `${s.name} · ${v.name}` : s.name, thumb: subjThumb(v && !v.inherit_refs ? v.refs : (s.refs || []).concat(v ? v.refs : [])), subject: s };
+}
+
+function subjectList() {
+  const list = S.subjects || [];
+  if (!list.length) return `<p class="note" style="margin-top:0">Define a character, place or object once (a description plus pictures, clips or a voice), with variants like an outfit or a silent version. In Create → Reference, add subjects instead of picking files: their references and prompt lines come with them, and swapping one rewrites the prompt in place.</p>`;
+  return `<div class="subj-list">${list.map((s) => `<button class="subj-card" data-subj="${esc(s.id)}">${subjThumb(s.refs)}
+    <div class="grow" style="min-width:0"><h3>${esc(s.name)}</h3><div class="faint" style="font-size:12px">${SUBJ_KINDS[s.kind] || ""} · ${(s.refs || []).length} reference${(s.refs || []).length === 1 ? "" : "s"}${(s.variants || []).length ? ` · ${s.variants.length} variant${s.variants.length === 1 ? "" : "s"}` : ""}</div>
+    <div class="faint" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.description || "")}</div></div>${ICON.chev}</button>`).join("")}</div>`;
+}
+
+/* Subject editor. d: the subject being edited (a copy). vi: index of the variant being edited, or null. */
+function subjectEditor(d, vi = null) {
+  const isVar = vi !== null;
+  const v = isVar ? d.variants[vi] : null;
+  const refsOf = () => (isVar ? v.refs : d.refs);
+  const refGrid = (refs) => `<div class="subj-refs">${refs.map((r, i) => `<div class="subj-ref"><div class="ref">${r.kind === "audio" ? `<span class="kind">${ICON.audio}</span>` : `<img src="${thumbIn(r.file)}" alt="">`}
+      <button class="x" data-srm="${i}" aria-label="Remove">${ICON.x}</button>${r.kind === "video" ? `<button class="snd ${r.use_soundtrack === false ? "off" : ""}" data-ssnd="${i}" title="Use this clip's sound">♪</button>` : ""}</div>
+      <input type="text" data-srole="${i}" value="${esc(r.role || "")}" placeholder="${r.kind === "audio" ? "voice" : "role: face, outfit…"}" maxlength="40"></div>`).join("")}
+      <button class="ref add" id="sAdd">${ICON.plus}<br>Add</button></div>`;
+  const html = isVar ? `
+    <label class="field" for="vName">Variant name</label>
+    <input type="text" id="vName" value="${esc(v.name)}" placeholder="e.g. Tuxedo, No voice, Simple" maxlength="40">
+    <label class="field" for="vDesc" style="margin-top:12px">Description</label>
+    <div class="seg" style="margin-bottom:6px">${[["append", "Add to the description"], ["replace", "Replace it"]].map(([k, n]) => `<button data-vmode="${k}" class="${v.description_mode === k ? "on" : ""}">${n}</button>`).join("")}</div>
+    <textarea id="vDesc" rows="2" placeholder="${v.description_mode === "replace" ? "The whole description for this variant" : "e.g. wearing a black tuxedo"}">${esc(v.description || "")}</textarea>
+    <div class="row" style="margin-top:12px"><div class="grow"><label class="field" style="margin:0">Keep ${esc(d.name || "the subject")}'s references</label><div class="faint" style="font-size:12px">Off: only this variant's own references below.</div></div><label class="switch"><input type="checkbox" id="vInh" ${v.inherit_refs !== false ? "checked" : ""}><span></span></label></div>
+    <div class="row" style="margin-top:10px"><div class="grow"><label class="field" style="margin:0">No voice</label><div class="faint" style="font-size:12px">Drops audio references and clip soundtracks.</div></div><label class="switch"><input type="checkbox" id="vMute" ${v.mute ? "checked" : ""}><span></span></label></div>
+    <h3 style="margin-top:14px">This variant's references</h3>
+    ${refGrid(v.refs)}
+    <div class="sheet-foot"><button class="btn danger" id="vDel">${ICON.trash}</button><button class="btn" id="vBack">Back</button><button class="btn primary" id="vDone">Done</button></div>`
+  : `
+    <label class="field" for="sName">Name <span class="faint">(for you; not written into prompts)</span></label>
+    <input type="text" id="sName" value="${esc(d.name)}" placeholder="e.g. Bob" maxlength="60">
+    <div class="seg" style="margin-top:10px">${Object.entries(SUBJ_KINDS).map(([k, n]) => `<button data-skind="${k}" class="${d.kind === k ? "on" : ""}">${n}</button>`).join("")}</div>
+    <label class="field" for="sDesc" style="margin-top:12px">Description <span class="faint">(goes into the prompt)</span></label>
+    <textarea id="sDesc" rows="3" placeholder="${esc(SUBJ_HINT[d.kind] || "")}">${esc(d.description || "")}</textarea>
+    <h3 style="margin-top:14px">References</h3>
+    <p class="note" style="margin-top:0">One picture, or several for different features: name each one's role (face, full look, outfit, voice). Audio is used as the voice${d.kind === "character" ? "" : " or sound"}.</p>
+    ${refGrid(d.refs)}
+    <div class="section-title"><h2>Variants</h2><button class="btn small" id="vAdd">${ICON.plus} Variant</button></div>
+    ${(d.variants || []).length ? d.variants.map((x, i) => `<div class="var-row"><div class="grow"><b>${esc(x.name)}</b><div class="faint" style="font-size:12px">${esc([x.description ? (x.description_mode === "replace" ? "new description" : `+ ${x.description}`) : "", x.inherit_refs === false ? "own references only" : "", (x.refs || []).length ? `+${x.refs.length} reference${x.refs.length === 1 ? "" : "s"}` : "", x.mute ? "no voice" : ""].filter(Boolean).join(" · ") || "same as the subject")}</div></div><button class="btn small" data-vedit="${i}">Edit</button></div>`).join("")
+      : `<p class="note" style="margin-top:0">e.g. an outfit, a look, a simpler or more detailed version, or one without a voice.</p>`}
+    <div class="sheet-foot">${d.id ? `<button class="btn danger" id="sDel">${ICON.trash}</button>` : ""}${d.id ? `<button class="btn" id="sUse">Use in Create</button>` : ""}<button class="btn primary" id="sSave">Save</button></div>`;
+  const title = isVar ? `${d.name || "Subject"} · ${v.name || "new variant"}` : d.id ? d.name : "New subject";
+  openSheet(title, html, (body) => {
+    const keep = () => {  // copy typed values into d before redrawing
+      if (isVar) { v.name = $("#vName", body).value; v.description = $("#vDesc", body).value; v.inherit_refs = $("#vInh", body).checked; v.mute = $("#vMute", body).checked; }
+      else { d.name = $("#sName", body).value; d.description = $("#sDesc", body).value; }
+      $$("[data-srole]", body).forEach((el) => { refsOf()[+el.dataset.srole].role = el.value; });
+    };
+    $$("[data-srm]", body).forEach((b) => b.onclick = () => { keep(); refsOf().splice(+b.dataset.srm, 1); subjectEditor(d, vi); });
+    $$("[data-ssnd]", body).forEach((b) => b.onclick = () => { keep(); const r = refsOf()[+b.dataset.ssnd]; r.use_soundtrack = r.use_soundtrack === false; subjectEditor(d, vi); });
+    $("#sAdd", body).onclick = async () => {
+      keep();
+      const picked = await pickAsset({ title: "Add references", kinds: ["image", "video", "audio"], max: 9 });
+      for (const a of picked) { const r = await makeReference(a); r.role = a.kind === "audio" ? "voice" : ""; refsOf().push(r); }
+      subjectEditor(d, vi);
+    };
+    if (isVar) {
+      $$("[data-vmode]", body).forEach((b) => b.onclick = () => { keep(); v.description_mode = b.dataset.vmode; subjectEditor(d, vi); });
+      $("#vBack", body).onclick = () => { keep(); subjectEditor(d); };
+      $("#vDone", body).onclick = () => { keep(); if (!v.name.trim()) return toast("Give the variant a name", true); subjectEditor(d); };
+      $("#vDel", body).onclick = () => { d.variants.splice(vi, 1); subjectEditor(d); };
+      return;
+    }
+    $$("[data-skind]", body).forEach((b) => b.onclick = () => { keep(); d.kind = b.dataset.skind; subjectEditor(d); });
+    $("#vAdd", body).onclick = () => { keep(); d.variants = d.variants || []; d.variants.push({ name: "", description: "", description_mode: "append", inherit_refs: true, refs: [], mute: false }); subjectEditor(d, d.variants.length - 1); };
+    $$("[data-vedit]", body).forEach((b) => b.onclick = () => { keep(); subjectEditor(d, +b.dataset.vedit); });
+    const save = async () => {
+      keep();
+      const saved = await api("/api/subjects", { body: d });
+      Object.assign(d, saved); await loadSubjects(true);
+      return saved;
+    };
+    $("#sSave", body).onclick = async () => { try { await save(); toast("Subject saved"); closeSheet(); if (S.route === "refs") render(); else if (S.route === "create") refreshSubjectRefs(); } catch (e) { fail(e); } };
+    const use = $("#sUse", body); if (use) use.onclick = async () => {
+      try {
+        const saved = await save(); closeSheet();
+        F.mode = "r2v"; saveForm(); location.hash = "#create";
+        await addSubjectSlot(saved.id, null);
+      } catch (e) { fail(e); }
+    };
+    const del = $("#sDel", body); if (del) del.onclick = async () => {
+      if (!confirm(`Delete subject "${d.name}"? Its files stay.`)) return;
+      try { await api(`/api/subjects/${d.id}`, { method: "DELETE" }); await loadSubjects(true); closeSheet(); if (S.route === "refs") render(); } catch (e) { fail(e); }
+    };
+  });
+}
+
+/* Create → Reference: subject slots. Slot n is <Subject n> in the prompt. */
+function subjectSlotsBlock() {
+  const slots = F.subjects || [];
+  if (S.subjects === null) { loadSubjects().then(() => { if (S.route === "create" && F.mode === "r2v") render(); }).catch(() => {}); return ""; }
+  if (!slots.length && !S.subjects.length) return `<p class="note" style="margin:0 0 10px">Subjects<span class="beta">beta</span>: define characters, places and objects once in References → Subjects, then add them here.</p>`;
+  return `<div class="subj-slots">${slots.map((sl) => { const l = slotLabel(sl); return `<button class="slot-chip" data-slot-swap="${sl.n}" title="Swap <Subject ${sl.n}>">${l.thumb}<span class="lab"><b>&lt;Subject ${sl.n}&gt;</b><span>${esc(l.name)}</span></span><span class="rm" data-slot-rm="${sl.n}" aria-label="Remove">${ICON.x}</span></button>`; }).join("")}
+    <button class="btn small" id="slotAdd" style="align-self:center">${ICON.plus} Subject<span class="beta">beta</span></button></div>`;
+}
+function bindSubjectSlots(v) {
+  const add = $("#slotAdd", v); if (add) add.onclick = () => subjectPicker(null);
+  $$("[data-slot-swap]", v).forEach((b) => b.onclick = (e) => {
+    const n = +b.dataset.slotSwap;
+    if (e.target.closest("[data-slot-rm]")) return setSlots((F.subjects || []).filter((x) => x.n !== n));
+    subjectPicker(n);
+  });
+  const sl = $("#subjLines", v); if (sl) sl.onclick = () => setSlots(F.subjects || [], { insert: true });
+  const tidy = $("#swapTidy", v); if (tidy) tidy.onclick = () => runTidy(tidy);
+  const dis = $("#swapDismiss", v); if (dis) dis.onclick = () => { F.swapNote = null; saveForm(); render(); };
+}
+function subjectPicker(n) {
+  const cur = n ? (F.subjects || []).find((x) => x.n === n) : null;
+  openSheet(n ? `Swap <Subject ${n}>` : "Add a subject", `<div class="empty">Loading…</div>`, async (body) => {
+    try { await loadSubjects(true); } catch (e) { return fail(e); }
+    const list = S.subjects;
+    body.innerHTML = list.length ? `<div class="subj-list">${list.map((s) => `<div class="subj-card" style="cursor:default">${subjThumb(s.refs)}<div class="grow" style="min-width:0"><h3>${esc(s.name)}</h3>
+        <div class="var-pick"><button class="chip ${cur && cur.id === s.id && !cur.variant ? "on" : ""}" data-pick="${esc(s.id)}:">${(s.variants || []).length ? "Base" : "Use"}</button>${(s.variants || []).map((x) => `<button class="chip ${cur && cur.id === s.id && cur.variant === x.id ? "on" : ""}" data-pick="${esc(s.id)}:${esc(x.id)}">${esc(x.name)}</button>`).join("")}</div></div></div>`).join("")}</div>
+      ${n ? `<p class="note">The prompt keeps everything else: <Subject ${n}>'s definition line and its reference tags are rewritten, and other tags renumbered if they move.</p>` : ""}`
+      : `<div class="empty"><h2>No subjects yet</h2><p>Make one in References → Subjects.</p></div>`;
+    $$("[data-pick]", body).forEach((b) => b.onclick = async () => {
+      const [id, variant] = b.dataset.pick.split(":"); closeSheet();
+      if (n) await setSlots((F.subjects || []).map((x) => (x.n === n ? { n, id, variant: variant || null } : x)));
+      else await addSubjectSlot(id, variant || null);
+    });
+  });
+}
+async function addSubjectSlot(id, variant) {
+  const slots = F.subjects || [];
+  const prompt = (F.auto ? (F.drafted && F.drafted.prompt) : F.prompt) || "";
+  const used = [...prompt.matchAll(/<Subject (\d+)>/g)].map((m) => +m[1]);
+  const n = Math.max(0, ...slots.map((x) => x.n), ...(slots.length ? used : [])) + 1;  // never reuse a label the prompt already has
+  await setSlots([...slots, { n, id, variant }]);
+}
+/* Rebuild the references for new slots and swap them into the current prompt in place. */
+async function setSlots(next, { insert = false } = {}) {
+  await loadSubjects();
+  const before = { slots: F.subjects || [], refs: F.refs };
+  try {
+    const c = await api("/api/subjects/compose", { body: { slots: next, loose: F.refs.filter((r) => !r.subject) } });
+    const after = { slots: next, refs: c.refs };
+    // names in an Auto idea follow the swap ("Bob and Alice" -> "Steve and Suzy")
+    const nameOf = (sl) => { const s = sl && S.subjects.find((x) => x.id === sl.id); return s ? s.name : null; };
+    for (const sl of next) {
+      const old = before.slots.find((x) => x.n === sl.n); const a = nameOf(old), b = nameOf(sl);
+      if (a && b && a !== b) {
+        const re = new RegExp(`\\b${a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g");
+        const wasDrafted = F.drafted && F.drafted.idea === F.idea;
+        F.idea = F.idea.replace(re, b);
+        if (wasDrafted) F.drafted.idea = F.idea;
+      }
+    }
+    const cur = F.auto ? (F.drafted && F.drafted.idea === F.idea ? F.drafted.prompt : "") : F.prompt;
+    const changed = insert || JSON.stringify(before.slots) !== JSON.stringify(next) || JSON.stringify(before.refs) !== JSON.stringify(c.refs);
+    if (cur && cur.trim() && changed && (insert || before.slots.length || /<Subject \d+>/.test(cur))) {
+      const r = await api("/api/subjects/rewrite", { body: { prompt: cur, before, after } });
+      if (r.prompt !== cur) {
+        F.tweakUndo = [...(F.tweakUndo || []).filter((u) => u.auto === F.auto).slice(-9), { auto: F.auto, text: cur }];
+        if (F.auto) F.drafted.prompt = r.prompt; else F.prompt = r.prompt;
+      }
+      F.swapNote = r.notes.length || r.tidy_request ? { notes: r.notes, tidy: r.tidy_request } : null;
+      toast(insert ? "Subject lines updated" : "Prompt updated for the new subjects");
+    }
+    F.subjects = next; F.refs = c.refs; syncAvRecipe(); saveForm(); render();
+  } catch (e) { fail(e); }
+}
+/* After a subject was edited elsewhere, pull its current references into Create. */
+function refreshSubjectRefs() { if ((F.subjects || []).length) setSlots(F.subjects); }
+function swapNoteBox() {
+  const n = F.swapNote;
+  return `<div class="swapnote">${n.notes.length ? `<ul>${n.notes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "<div style='margin-bottom:8px'>Subjects swapped in place.</div>"}
+    <div class="row">${n.tidy ? `<button class="btn small" id="swapTidy">${ICON.spark} Tidy with AI</button>` : ""}<span class="grow faint" style="font-size:12px">${n.tidy ? "Fixes leftover looks, voice and pronouns; changes nothing else." : ""}</span><button class="btn small ghost" id="swapDismiss">OK</button></div></div>`;
+}
+async function runTidy(btn) {
+  const cur = F.auto ? F.drafted && F.drafted.prompt : F.prompt;
+  if (!cur || !F.swapNote || !F.swapNote.tidy) return;
+  btn.disabled = true; btn.innerHTML = `${ICON.spark} Tidying…`;
+  try {
+    const r = await api("/api/refine", { body: { ...promptContext(), prompt: cur, request: F.swapNote.tidy } });
+    F.tweakUndo = [...(F.tweakUndo || []).filter((u) => u.auto === F.auto).slice(-9), { auto: F.auto, text: cur }];
+    if (F.auto) F.drafted.prompt = r.prompt; else F.prompt = r.prompt;
+    F.swapNote = null; saveForm(); render(); toast(`Tidied in ${r.seconds} s (Undo puts it back)`);
+  } catch (e) { fail(e); btn.disabled = false; btn.innerHTML = `${ICON.spark} Tidy with AI`; }
+}
+
 // kits
 async function openKitPicker() {
   await loadAssets(true);
   openSheet("Load a kit", kitList(S.kits, true), (body) => {
     $$("[data-kit]", body).forEach((b) => b.onclick = () => {
       const k = S.kits.find((x) => x.id === b.dataset.kit);
-      F.refs = k.refs.map((r) => ({ ...r })); saveForm(); closeSheet(); if (S.route !== "create") location.hash = "#create"; else render();
+      F.refs = k.refs.map((r) => ({ ...r })); F.subjects = []; F.swapNote = null; saveForm(); closeSheet(); if (S.route !== "create") location.hash = "#create"; else render();
       toast(`Loaded ${k.name}`);
     });
   });
@@ -1247,6 +1471,7 @@ function applyRecord(rec) {
   if (rec.duration) F.duration = Number(rec.duration);
   F.start_image = rec.start_image || null; F.end_image = rec.end_image || null;
   F.refs = rec.refs || [];
+  F.subjects = rec.subjects || []; F.swapNote = null;
   F.avState = F.refs.some((r) => r.kind === "video" || r.kind === "audio"); F.recipeBeforeAv = null;  // a reused clip keeps its own recipe
   F.checkpoint = rec.checkpoint || "stock";
   if (rec.recipe_id) F.recipe[FAMILY[rec.mode]] = rec.recipe_id;
@@ -1297,19 +1522,23 @@ function groupsSheet() {
 VIEWS.refs = async function () {
   const v = $("#view");
   if (!S.assets) v.innerHTML = `<div class="page"><div class="page-head"><h1>References</h1></div><div class="empty">Loading…</div></div>`;
-  try { await loadAssets(true); } catch (e) { fail(e); return; }
+  try { await Promise.all([loadAssets(true), loadSubjects(true)]); } catch (e) { fail(e); return; }
   if (S.route !== "refs") return;
   const kindF = S.refKind || "all";
   const list = S.assets.filter((a) => kindF === "all" || a.kind === kindF);
   v.innerHTML = `<div class="page">
     <div class="page-head"><h1>References</h1><span class="spacer"></span><button class="btn small primary" id="up">${ICON.up} Upload</button></div>
-    <div class="section-title" style="margin-top:0"><h2>Kits</h2><span class="faint">reusable reference sets</span></div>
+    <div class="section-title" style="margin-top:0"><h2>Subjects<span class="beta">beta</span></h2><button class="btn small" id="subjNew">${ICON.plus} New</button></div>
+    ${subjectList()}
+    <div class="section-title"><h2>Kits</h2><span class="faint">reusable reference sets</span></div>
     ${kitList(S.kits, false)}
     <div class="section-title"><h2>Files</h2></div>
     <div class="chips" style="margin-bottom:12px">${[["all", "All"], ["image", "Pictures"], ["video", "Clips"], ["audio", "Audio"]].map(([k, n]) => `<button class="chip ${kindF === k ? "on" : ""}" data-k="${k}">${n}</button>`).join("")}</div>
     ${list.length ? `<div class="assets">${list.map((a) => assetTile(a)).join("")}</div>` : `<div class="empty"><h2>No files</h2><p>Upload pictures, clips or audio from your phone. They're kept on your volume.</p></div>`}
   </div>`;
   $("#up").onclick = async () => { try { await upload(await pickFiles("image/*,video/*,audio/*")); toast("Uploaded"); render(); } catch (e) { fail(e); } };
+  $("#subjNew").onclick = () => subjectEditor({ name: "", kind: "character", description: "", refs: [], variants: [] });
+  $$("[data-subj]").forEach((b) => b.onclick = () => subjectEditor(JSON.parse(JSON.stringify(S.subjects.find((x) => x.id === b.dataset.subj)))));
   $$("[data-k]").forEach((b) => b.onclick = () => { S.refKind = b.dataset.k; render(); });
   $$("[data-kit]").forEach((b) => b.onclick = () => kitSheet(S.kits.find((k) => k.id === b.dataset.kit)));
   $$(".asset").forEach((el) => el.onclick = () => assetSheet(S.assets.find((a) => a.file === el.dataset.file)));
@@ -1322,7 +1551,7 @@ function kitSheet(k) {
       <button class="btn" id="kRen">Rename</button>
       <button class="btn primary" id="kUse">Use in Create</button>
     </div>`, (body) => {
-    $("#kUse", body).onclick = () => { F.mode = "r2v"; F.refs = k.refs.map((r) => ({ ...r })); saveForm(); closeSheet(); location.hash = "#create"; };
+    $("#kUse", body).onclick = () => { F.mode = "r2v"; F.refs = k.refs.map((r) => ({ ...r })); F.subjects = []; F.swapNote = null; saveForm(); closeSheet(); location.hash = "#create"; };
     $("#kRen", body).onclick = () => saveKitSheet(k.refs, k);
     $("#kDel", body).onclick = async () => { if (!confirm(`Delete kit "${k.name}"? Its files stay.`)) return; await api(`/api/kits/${k.id}`, { method: "DELETE" }).catch(fail); closeSheet(); render(); };
   });
@@ -1393,20 +1622,56 @@ async function viewLoras() {
   v.innerHTML = `<div class="page">
     <div class="page-head"><a class="icon-btn" href="#more" aria-label="Back" style="transform:scaleX(-1)">${ICON.chev}</a><h1>LoRAs</h1><span class="spacer"></span>
       <button class="btn small primary" id="browse">${ICON.globe} Browse CivitAI</button></div>
+    <div class="row" style="margin:-4px 0 10px"><button class="btn small grow" id="byLink" title="CivitAI link or id, Hugging Face link or repo, or a direct .safetensors link">${ICON.plus} Add by link or id</button></div>
     ${d.has_token ? "" : `<p class="note warn">Set CIVITAI_TOKEN on the pod for downloads, bookmarks and collections.</p>`}
     <div class="row" style="margin-bottom:6px"><input type="search" id="lq" class="grow" placeholder="Search your catalog" value="${esc(S.loraQ || "")}"><button class="btn small" id="sync" title="Download anything set to download on startup that's missing">Sync</button></div>
     <div id="loraLists"></div>
     <div class="section-title"><h2>Base models</h2></div>
-    <div class="list">${d.checkpoints.map((c) => `<div><div class="grow"><h3>${esc(c.label)}</h3><div class="sub">${Object.entries(c.available).map(([f, ok]) => `${f === "ref2v" ? "R2V" : "T2V/I2V"} ${ok ? "ready" : "missing"}`).join(" · ")}</div></div>
-      ${c.builtin ? (Object.values(c.available).some((x) => !x) && c.id === "eros" ? `<button class="btn small" data-eros>Download</button>` : "") : `<button class="icon-btn" data-rmck="${esc(c.id)}" aria-label="Remove">${ICON.trash}</button>`}</div>`).join("")}</div>
+    <div class="list" id="ckList">${d.checkpoints.map(ckRow).join("")}</div>
   </div>`;
   drawLoraLists();
   const lq = $("#lq"); lq.oninput = debounce(() => { S.loraQ = lq.value; drawLoraLists(); }, 200);
   $("#sync").onclick = () => api("/api/loras/sync", { body: {} }).then(() => { toast("Checking for missing files…"); watchLoraDownloads(true); }).catch(fail);
   $("#browse").onclick = () => civitaiBrowser();
+  $("#byLink").onclick = () => addByLinkSheet();
   const eros = $("[data-eros]"); if (eros) eros.onclick = () => api("/api/system/settings", { method: "PUT", body: { eros_enabled: true } }).then(() => toast("Downloading Eros…")).catch(fail);
-  $$("[data-rmck]").forEach((b) => b.onclick = async () => { if (!confirm("Remove this base model? Delete its file too?")) return; await api(`/api/checkpoints/${b.dataset.rmck}?file=1`, { method: "DELETE" }).catch(fail); S.boot = await api("/api/boot"); viewLoras(); });
+  bindCkRows();
   watchLoraDownloads();
+}
+
+/* A base model row: which modes are ready, and a CivitAI download's live progress. */
+function ckRow(c) {
+  const fams = Object.entries(c.available).map(([f, ok]) => `${f === "ref2v" ? "R2V" : "T2V/I2V"} ${ok ? "ready" : "missing"}`).join(" · ");
+  const d = c.download;
+  let sub = esc(fams), bar = "", action = "";
+  if (d) {
+    const pct = d.total ? Math.round(100 * (d.done || 0) / d.total) : null;
+    const amount = d.total ? `${bytes(d.done || 0)} of ${bytes(d.total)}` : d.done ? bytes(d.done) : "";
+    const gate = S.live && S.live.gate && S.live.gate.state !== "open";
+    if (d.state === "downloading") {
+      sub = `Downloading${pct != null ? ` ${pct}%` : "…"}${amount ? ` · ${amount}` : ""}${d.note ? ` · <span class="faint">${esc(d.note)}</span>` : ""}`;
+      bar = `<div class="bar amber" style="margin:6px 0 0"><i style="width:${pct || 2}%"></i></div>`;
+    } else if (d.state === "queued") {
+      sub = gate ? "Waiting until the volume copy finishes" : "Queued";
+    } else if (d.state === "failed") {
+      sub = `<span class="err">Couldn't download: ${esc((d.error || "").slice(0, 160))}</span>${d.done ? ` <span class="faint">(${bytes(d.done)} kept, Retry resumes)</span>` : ""}`;
+      action = `<button class="btn small primary" data-ckget="${esc(c.id)}">Retry</button>`;
+    } else {
+      sub = d.done ? `Stopped at ${pct != null ? pct + "%" : bytes(d.done)} · ${esc(fams)}` : esc(fams);
+      action = `<button class="btn small primary" data-ckget="${esc(c.id)}">${d.done ? "Resume" : `${ICON.down} Download`}</button>`;
+    }
+  }
+  const right = c.builtin ? (Object.values(c.available).some((x) => !x) && c.id === "eros" ? `<button class="btn small" data-eros>Download</button>` : "")
+    : `${action}<button class="icon-btn" data-rmck="${esc(c.id)}" aria-label="Remove">${ICON.trash}</button>`;
+  return `<div><div class="grow"><h3>${esc(c.label)}</h3><div class="sub">${sub}</div>${bar}</div>${right}</div>`;
+}
+function bindCkRows() {
+  $$("[data-rmck]").forEach((b) => b.onclick = async () => { if (!confirm("Remove this base model? Delete its file too?")) return; await api(`/api/checkpoints/${b.dataset.rmck}?file=1`, { method: "DELETE" }).catch(fail); S.boot = await api("/api/boot"); viewLoras(); });
+  $$("[data-ckget]").forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    try { await api(`/api/checkpoints/${encodeURIComponent(b.dataset.ckget)}/install`, { body: {} }); toast("Downloading…"); watchLoraDownloads(true); }
+    catch (e) { fail(e); b.disabled = false; }
+  });
 }
 
 /* Redraws only the lists, so typing in the search box keeps focus (and the keyboard up). */
@@ -1461,6 +1726,7 @@ function watchLoraDownloads(soon = false) {
     try { await loadLoras(true); } catch { return; }
     if (!location.hash.startsWith("#more/loras") || !$("#loraLists")) return;
     drawLoraLists();
+    const ckl = $("#ckList"); if (ckl && S.loras.checkpoints) { ckl.innerHTML = S.loras.checkpoints.map(ckRow).join(""); bindCkRows(); }
     watchLoraDownloads();
   }, soon ? 900 : 2500);
 }
@@ -1478,7 +1744,7 @@ function loraRow(l) {
 }
 function loraSheet(l) {
   const files = l.files || [];
-  const civ = !!l.version_id && !l.untracked;
+  const civ = (!!l.version_id || !!l.source_url) && !l.untracked;
   openSheet(l.nickname || l.key, `
     <div class="stack">
       <div><label class="field">Nickname</label><input type="text" id="lnick" value="${esc(l.nickname || "")}"></div>
@@ -1520,6 +1786,82 @@ function loraSheet(l) {
       await api(`/api/loras/${encodeURIComponent(l.key)}?file=1`, { method: "DELETE" }).catch(fail); closeSheet(); viewLoras();
     };
   });
+}
+
+// Add by link: CivitAI links / ids / AIR, Hugging Face links or repos, direct .safetensors URLs
+function addByLinkSheet() {
+  const st = { text: "", kind: "auto", check: localStorage.getItem("mmh3.linkCheck") !== "0", found: null, picks: new Set(), busy: false, error: "", name: "" };
+  const kindOf = () => (st.kind === "auto" ? (st.found ? st.found.kind : null) : st.kind);
+  const draw = (body) => {
+    const f = st.found; const kind = kindOf();
+    const usable = f ? f.files.filter((x) => !x.unsupported) : [];
+    const keyOf = (x) => (x.id != null ? x.id : x.url);
+    body.innerHTML = `
+      <label class="field" for="lnk">Link or id</label>
+      <textarea id="lnk" rows="2" placeholder="CivitAI model page, download link or version id · AIR (urn:air:…) · Hugging Face file or repo link (or owner/repo) · direct link to a .safetensors file" style="min-height:64px">${esc(st.text)}</textarea>
+      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+        <div class="seg" style="flex:none">${[["auto", "Auto"], ["lora", "LoRA"], ["checkpoint", "Base model"]].map(([k, n]) => `<button data-lk="${k}" class="${st.kind === k ? "on" : ""}">${n}</button>`).join("")}</div>
+        <span class="grow"></span>
+        <label class="row" style="gap:8px;font-size:13px" title="Look the link up first and show what it points at. Off: install right away with the suggested files.">Check first<span class="switch"><input type="checkbox" id="lchk" ${st.check ? "checked" : ""}><span></span></span></label>
+      </div>
+      <p class="note">${st.check ? "Studio looks the link up and shows the model and its files before anything downloads." : "Installs straight away with the suggested file(s). CivitAI is still asked for the file names; Hugging Face file links and direct links aren't looked up at all."}</p>
+      ${st.error ? `<p class="note warn">${esc(st.error)}</p>` : ""}
+      ${f ? `<div class="civ-item" style="margin-top:6px">${f.image ? `<img src="${esc(f.image)}" alt="" loading="lazy">` : `<span class="ph"></span>`}
+          <div class="grow" style="min-width:0"><h3 style="overflow-wrap:anywhere">${esc(f.title)}</h3><div class="faint" style="font-size:12px;overflow-wrap:anywhere">${esc(f.subtitle || "")}${f.civitai_type ? ` · ${esc(f.civitai_type)}` : ""}${f.installed ? " · already installed" : ""}</div>
+          ${(f.versions || []).length > 1 ? `<select id="lver" style="margin-top:6px">${f.versions.map((v) => `<option value="${v.id}" ${String(v.id) === String(f.version_id) ? "selected" : ""}>${esc(v.name)} · ${esc(v.base_model || "")}</option>`).join("")}</select>` : ""}</div></div>
+        ${f.warning ? `<p class="note warn">${esc(f.warning)}</p>` : ""}
+        ${st.kind === "auto" && !f.kind_known ? `<p class="note">Looks like a ${kind === "checkpoint" ? "base model" : "LoRA"} (from its name and size). Pick LoRA or Base model above if that's wrong.</p>` : ""}
+        <h3 style="margin-top:12px">Files</h3>
+        ${f.files.map((x, i) => `<div class="file-row${x.unsupported ? " off" : ""}"><label class="switch"><input type="${kind === "checkpoint" ? "radio" : "checkbox"}" name="lpick" data-lpick="${i}" ${x.unsupported ? "disabled" : st.picks.has(keyOf(x)) ? "checked" : ""}><span></span></label>
+          <div class="grow" style="overflow-wrap:anywhere">${esc(x.path || x.name)}<div class="faint">${x.size_kb ? bytes(x.size_kb * 1024) : "size unknown"}${x.primary ? " · primary" : ""}${x.unsupported ? ` · ${esc(x.unsupported)}` : ""}</div></div>
+          <span class="fam ${x.family}">${x.family === "ref2v" ? "R2V" : x.family === "fl2v" ? "T2V/I2V" : "All modes"}</span>${x.role === "helper" ? `<span class="fam helper">helper</span>` : ""}</div>`).join("")}
+        ${(f.trained_words || []).length ? `<p class="note">Triggers: ${esc(f.trained_words.slice(0, 8).join(", "))}</p>` : ""}
+        <label class="field" for="lname" style="margin-top:10px">Name <span class="faint">(optional)</span></label>
+        <input type="text" id="lname" value="${esc(st.name)}" placeholder="${esc(f.title)}">` : ""}
+      ${!f && !st.check ? `<label class="field" for="lname" style="margin-top:10px">Name <span class="faint">(optional)</span></label><input type="text" id="lname" value="${esc(st.name)}">` : ""}
+      <div class="sheet-foot">
+        ${f ? `<button class="btn" id="lagain">Look up again</button>` : ""}
+        <button class="btn primary" id="lgo" ${st.busy ? "disabled" : ""}>${st.busy ? "Working…" : !st.check || f ? `${ICON.down} Install${f && usable.length && kind === "lora" && st.picks.size > 1 ? ` ${st.picks.size} files` : ""}` : "Find"}</button>
+      </div>`;
+    const ta = $("#lnk", body); ta.oninput = () => { st.text = ta.value; if (st.found) { st.found = null; st.error = ""; draw(body); $("#lnk", body).focus(); } };
+    $$("[data-lk]", body).forEach((b) => b.onclick = () => { st.kind = b.dataset.lk; if (kindOf() === "checkpoint" && st.picks.size > 1) st.picks = new Set([...st.picks].slice(0, 1)); draw(body); });
+    $("#lchk", body).onchange = (e) => { st.check = e.target.checked; try { localStorage.setItem("mmh3.linkCheck", st.check ? "1" : "0"); } catch {} st.found = null; draw(body); };
+    const nm = $("#lname", body); if (nm) nm.oninput = () => { st.name = nm.value; };
+    $$("[data-lpick]", body).forEach((el) => el.onchange = () => {
+      const x = f.files[+el.dataset.lpick]; const k = keyOf(x);
+      if (kindOf() === "checkpoint") st.picks = new Set([k]); else if (el.checked) st.picks.add(k); else st.picks.delete(k);
+      draw(body);
+    });
+    const lv = $("#lver", body); if (lv) lv.onchange = () => { st.text = `v:${lv.value}`; find(body); };
+    const again = $("#lagain", body); if (again) again.onclick = () => find(body);
+    $("#lgo", body).onclick = () => (st.check && !f ? find(body) : install(body));
+  };
+  const find = async (body) => {
+    if (!st.text.trim()) { st.error = "Paste a link or an id first"; return draw(body); }
+    st.busy = true; st.error = ""; draw(body);
+    try {
+      st.found = await api("/api/install/lookup", { body: { text: st.text, kind: st.kind === "auto" ? null : st.kind } });
+      const kind = kindOf(); const ok = st.found.files.filter((x) => !x.unsupported);
+      const sug = ok.filter((x) => x.suggested);
+      st.picks = new Set((kind === "checkpoint" ? (sug.length ? sug : ok).slice(0, 1) : sug).map((x) => (x.id != null ? x.id : x.url)));
+    } catch (e) { st.found = null; st.error = e.message; }
+    st.busy = false; draw(body);
+  };
+  const install = async (body) => {
+    if (!st.text.trim() && !st.found) { st.error = "Paste a link or an id first"; return draw(body); }
+    const kind = kindOf();
+    if (st.found && !kind) { st.error = "Pick LoRA or Base model"; return draw(body); }
+    if (st.found && !st.picks.size) { st.error = "Pick at least one file"; return draw(body); }
+    st.busy = true; st.error = ""; draw(body);
+    try {
+      const r = await api("/api/install", { body: st.found
+        ? { found: st.found, kind, picks: [...st.picks], name: st.name }
+        : { text: st.text, kind: st.kind === "auto" ? null : st.kind, name: st.name } });
+      toast(`${r.kind === "checkpoint" ? "Base model" : "LoRA"} downloading in the background`);
+      closeSheet(); S.boot = await api("/api/boot"); if (location.hash.startsWith("#more/loras")) viewLoras();
+    } catch (e) { st.error = e.message; st.busy = false; draw(body); }
+  };
+  openSheet("Add by link or id", "", (body) => draw(body));
 }
 
 // CivitAI browser
@@ -1671,6 +2013,7 @@ async function viewSystem() {
     <div class="row" style="margin-top:8px"><button class="btn small" data-act="free" data-unload="0">Drop cache</button><button class="btn small" data-act="free" data-unload="1">Unload models</button><button class="btn small" data-act="restart-comfy">Restart ComfyUI</button></div>
 
     <div class="section-title"><h2>Models</h2><button class="btn small ghost" data-act="provision">Check again</button></div>
+    ${d.gate && d.gate.state !== "open" ? (S.live ? ((S.live.gate = d.gate), gateNote()) : "") : d.gate && d.gate.reason ? `<p class="note faint" style="margin-top:0">Boot volume check: ${esc(d.gate.reason)}.</p>` : ""}
     <div class="list">${models.map((m) => `<div><span class="dot ${m.present ? "ok" : m.state === "failed" ? "bad" : m.state === "downloading" ? "warn" : ""}"></span>
       <div class="grow"><div style="font-size:14px;overflow-wrap:anywhere">${esc(m.file.split("/").pop())}</div><div class="sub">${m.present ? "ready" : m.state === "downloading" ? `downloading ${m.total ? Math.round(100 * (m.done || 0) / m.total) + "%" : ""}` : m.state === "failed" ? `failed: ${esc(m.error || "")}` : m.group === "eros" ? "optional" : esc(m.state)}</div></div></div>`).join("")}</div>
 
@@ -1716,6 +2059,7 @@ async function viewSystem() {
       toast("Done"); setTimeout(viewSystem, 1500);
     } catch (e) { fail(e); }
   });
+  bindGateSkip(v);
   $$("[data-wf]").forEach((b) => b.onclick = async () => {
     const reset = b.textContent.trim() === "Reset";
     if (reset && !confirm("Replace this workflow with the original from CivitAI? Changes you saved to it in ComfyUI are lost.")) return;
@@ -1787,7 +2131,9 @@ async function poll() {
     }
     lastRunningId = running ? running.id : null;
     if (S.route === "queue") VIEWS.queue();
-    if (S.route === "create" && prev && JSON.stringify(prev.families) !== JSON.stringify(L.families) && !document.activeElement.matches("textarea,input")) render();
+    const sig = (x) => JSON.stringify([x.families, x.gate && x.gate.state]);
+    const changed = prev ? sig(prev) !== sig(L) : !!(L.gate && L.gate.state !== "open");  // first poll: show the volume check
+    if (S.route === "create" && changed && !document.activeElement.matches("textarea,input")) render();
   } catch { $("#conn").classList.remove("on"); }
   const busy = S.live && S.live.pending.length;
   pollTimer = setTimeout(poll, document.hidden ? 8000 : busy ? 1500 : 4000);

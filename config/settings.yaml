@@ -51,3 +51,11 @@ preview:
 provisioning:
   workers: 3
   retries: 4
+  # Hold downloads while a RunPod migration is still copying the old volume in
+  # (studio/bootgate.py). MMH3_MIGRATION_GUARD=0 on the pod turns it off.
+  migration_guard:
+    enabled: true
+    fresh_window_seconds: 90     # empty volume: watch this long for files arriving
+    partial_window_seconds: 300  # Studio's files are there but the models aren't
+    settle_seconds: 180          # a copy counts as finished after this long without new data
+    threshold_mb: 256

@@ -438,17 +438,26 @@ def test_quick_install_loras_skip_boot_sync(workspace, monkeypatch):
     assert next(e for e in loras.catalog() if e["version_id"] == 12)["auto_install"] is False
 
 
-def test_existing_catalog_takes_seed_auto_install_once(workspace):
-    _catalog(workspace, [{"version_id": 3260276, "nickname": "Mystic XXX v3", "filename": "MysticXXX_MMH3-V3.safetensors"},
-                         {"version_id": 3224980, "nickname": "Digicam", "filename": "minimax-h3-digicam.safetensors"},
-                         {"version_id": 777, "nickname": "Mine"}])
+def test_retired_recommended_loras_leave_quick_install_once(workspace):
+    loras.SEED_PRUNED.unlink(missing_ok=True)
+    _catalog(workspace, [
+        {"version_id": 3260276, "nickname": "Mystic XXX v3", "auto_install": False, "filename": "never_got.safetensors"},
+        {"version_id": 3224980, "nickname": "Digicam", "auto_install": False, "filename": "digi_have.safetensors"},
+        {"version_id": 3266628, "nickname": "Mystic v4", "auto_install": True, "filename": "v4.safetensors"},
+        {"version_id": 777, "nickname": "Mine", "auto_install": False}])
+    _touch_lora("digi_have.safetensors")
     loras.ensure_seeded()
-    by = {e["version_id"]: e for e in loras.catalog()}
-    assert by[3260276]["auto_install"] is False and by[3224980]["auto_install"] is False
-    assert "auto_install" not in by[777]  # not in the seed: untouched, downloads as before
-    loras.upsert({"version_id": 3260276, "auto_install": True})  # your choice sticks
+    kept = {e["version_id"] for e in loras.catalog()}
+    assert kept == {3224980, 3266628, 777}  # installed, set to download, or not from the old seed
+    loras.upsert({"version_id": 3260276, "auto_install": False})  # re-added later by you: stays
     loras.ensure_seeded()
-    assert next(e for e in loras.catalog() if e["version_id"] == 3260276)["auto_install"] is True
+    assert 3260276 in {e["version_id"] for e in loras.catalog()}
+
+
+def test_a_new_volume_gets_no_recommended_loras(workspace):
+    loras.CATALOG.unlink(missing_ok=True)
+    loras.ensure_seeded()
+    assert loras.catalog() == []
 
 
 def _vhs_next(folder, prefix):

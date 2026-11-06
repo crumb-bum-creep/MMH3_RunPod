@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import loras, memory, paths, util
+from . import bootgate, memory, paths, util
 
 log = util.setup_logging("supervisor")
 paths.LOGS.mkdir(parents=True, exist_ok=True)
@@ -122,7 +122,9 @@ class Service:
 
 def main() -> None:
     paths.ensure_dirs()
-    loras.ensure_seeded()
+    # Before anything can download: if the volume is still being copied in (a RunPod
+    # migration), downloads wait for it. Catalog seeding moved behind the same gate.
+    bootgate.start()
     settings = util.settings()
     ports = settings.get("ports") or {}
 

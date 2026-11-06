@@ -272,7 +272,7 @@ def normalize_record(meta: dict[str, Any]) -> dict[str, Any]:
     if meta.get("studio"):  # written by this build
         out = {k: meta.get(k) for k in ("mode", "prompt_mode", "idea", "prompt", "aspect", "megapixels",
                                           "duration", "seed", "start_image", "end_image", "refs",
-                                          "checkpoint", "recipe_id", "overrides")}
+                                          "checkpoint", "recipe_id", "overrides", "subjects")}
         out["loras"] = meta.get("lora_picks") or [{"key": l.get("file"), "file": l.get("file"),
                                                   "strength": l.get("strength", 1.0)} for l in meta.get("loras") or []]
         return out

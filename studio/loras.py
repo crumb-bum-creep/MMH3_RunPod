@@ -39,31 +39,48 @@ LORA_DIR = paths.MODELS / "loras"
 UNET_DIR = paths.MODELS / "diffusion_models"
 TURBO_PREFIXES = ("minimax_h3_fl2v_turbo", "minimax_h3_ref2v_turbo", "minimax_h3_hyperflow")
 _lock = threading.RLock()
-_worker: threading.Thread | None = None
-_queue: list[tuple[str, dict[str, Any]]] = []
+
+
+# The "recommended" LoRAs earlier images seeded under Quick install. No longer
+# offered: install what you want from the CivitAI browser (or by link/id).
+RETIRED_SEED = {3205014, 3206518, 3215304, 3224980, 3226989, 3228089, 3228867, 3236596, 3242519,
+                3243753, 3250559, 3252213, 3258236, 3260276, 3264127, 3264805, 3266628, 3268303}
+SEED_PRUNED = paths.DATA / "seed_loras_retired.flag"
 
 
 def ensure_seeded() -> None:
+    """A new volume starts with the image's seed catalog (empty now). Once per
+    volume, the retired recommended LoRAs are dropped from an existing catalog,
+    unless you installed one or set it to download on startup."""
     seed = paths.IMAGE_CONFIG / "loras.seed.yaml"
     if not CATALOG.exists():
+        CATALOG.parent.mkdir(parents=True, exist_ok=True)
         if seed.exists():
-            CATALOG.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(seed, CATALOG)
+        else:
+            _save([])
+        SEED_PRUNED.parent.mkdir(parents=True, exist_ok=True)
+        SEED_PRUNED.touch()
         return
-    # A catalog copied before `auto_install` existed: take the seed's choice once per
-    # entry, so the quick-install LoRAs stop downloading on every boot.
-    seeded = {str(e.get("version_id")): e["auto_install"]
-              for e in (util.read_yaml(seed, {}) or {}).get("loras") or [] if "auto_install" in e}
+    if SEED_PRUNED.exists():
+        return
+    disk = _disk(LORA_DIR)
     with _lock:
         items = catalog()
-        changed = False
-        for e in items:
-            vid = str(e.get("version_id"))
-            if "auto_install" not in e and vid in seeded:
-                e["auto_install"] = bool(seeded[vid])
-                changed = True
-        if changed:
-            _save(items)
+        keep = [e for e in items
+                if not (_vid(e) in RETIRED_SEED and e.get("auto_install") is not True
+                        and not any(f.get("name") in disk for f in _entry_files(e)))]
+        if len(keep) != len(items):
+            _save(keep)
+    SEED_PRUNED.parent.mkdir(parents=True, exist_ok=True)
+    SEED_PRUNED.touch()
+
+
+def _vid(e: dict[str, Any]) -> int | None:
+    try:
+        return int(e.get("version_id"))
+    except (TypeError, ValueError):
+        return None
 
 
 # --------------------------------------------------------------------------- catalog
@@ -154,7 +171,8 @@ def listing() -> dict[str, Any]:
         files = []
         for f in _entry_files(e):
             known.add(f["name"])
-            st = status.get(f"{e.get('version_id')}:{f.get('id')}") or status.get(str(e.get("version_id"))) or {}
+            skey = f"url:{f['name']}" if f.get("url") else f"{e.get('version_id')}:{f.get('id')}"
+            st = _live(skey, status.get(skey) or status.get(str(e.get("version_id"))) or {})
             installed = f["name"] in disk
             idle = ("queued" if auto_installs(e) else "available") if f.get("install", True) else "skipped"
             files.append({**f, "installed": installed,
@@ -175,7 +193,7 @@ def listing() -> dict[str, Any]:
                       "untracked": True, "recommended_strength": 1.0, "trigger_words": [], "tags": [],
                       "families": ["fl2v", "ref2v"],
                       "files": [{"name": fn, "family": "any", "role": "main", "installed": True, "state": "ready"}]})
-    return {"items": items, "busy": bool(_worker and _worker.is_alive()), "has_token": bool(civitai.token()),
+    return {"items": items, "busy": busy(), "has_token": bool(civitai.token()),
             "domain": civitai.base_url()}
 
 
@@ -192,7 +210,8 @@ def upsert(entry: dict[str, Any]) -> dict[str, Any]:
                 match["version_id"] = int(entry["version_id"])
             items.insert(0, match)
         for k in ("enabled", "recommended_strength", "nickname", "tags", "trigger_words", "notes",
-                  "filename", "model_id", "base_model", "version_name", "image", "files", "auto_install"):
+                  "filename", "model_id", "base_model", "version_name", "image", "files", "auto_install",
+                  "source_url"):
             if k in entry and entry[k] is not None:
                 match[k] = entry[k]
         files = match.get("files")
@@ -222,6 +241,9 @@ def install(key: str) -> dict[str, Any]:
     if entry is None:
         raise civitai.CivitaiError("that LoRA isn't in the catalog")
     if not entry.get("version_id"):
+        if any(f.get("url") for f in entry.get("files") or []):
+            enqueue_entry(entry, force=True)
+            return entry
         raise civitai.CivitaiError("a local file has nothing to download")
     if not entry.get("files") or any(f.get("id") is None for f in entry.get("files") or []):
         _enqueue(("refresh", {**entry, "_download": True}))
@@ -283,7 +305,10 @@ def _merge_files(old: list[dict[str, Any]] | None, new: list[dict[str, Any]],
 # --------------------------------------------------------------------------- checkpoints
 
 def checkpoints() -> list[dict[str, Any]]:
-    """Base checkpoints: image manifest entries + ones installed from CivitAI."""
+    """Base checkpoints: image manifest entries + ones installed from CivitAI.
+
+    A CivitAI checkpoint that isn't on disk yet carries `download`: its state
+    (queued / downloading / failed / interrupted), bytes done and total, error."""
     m = util.image_yaml("models.yaml")
     models = m.get("models") or {}
     out = []
@@ -294,7 +319,44 @@ def checkpoints() -> list[dict[str, Any]]:
         out.append({**ck, "builtin": False})
     for ck in out:
         ck["available"] = {fam: (paths.MODELS / rel).is_file() for fam, rel in ck["files"].items()}
+        if not ck["builtin"] and not all(ck["available"].values()):
+            ck["download"] = _checkpoint_progress(ck)
     return out
+
+
+def _checkpoint_progress(ck: dict[str, Any]) -> dict[str, Any]:
+    rows = []
+    prefix = f"ck{ck.get('version_id')}:"
+    saved = (util.read_json(STATUS, {}) or {}).get("items") or {}
+    names = {rel.split("/")[-1] for rel in (ck.get("files") or {}).values()}
+    for f in ck.get("downloads") or [{"id": None, "name": n} for n in sorted(names)]:
+        if (UNET_DIR / f["name"]).is_file():
+            continue
+        key = f"url:{f['name']}" if f.get("url") else f"{prefix}{f.get('id')}"
+        if f.get("id") is None and not f.get("url"):  # a record from before `downloads`: file id unknown
+            key = next((k for k in saved if k.startswith(prefix)), key)
+        st = _live(key, saved.get(key) or {})
+        part = UNET_DIR / (f["name"] + ".part")
+        if not st.get("done") and part.exists():
+            st["done"] = part.stat().st_size
+        st.setdefault("total", int(float(f.get("size_kb") or 0) * 1024) or None)
+        rows.append(st)
+    if not rows:
+        return {"state": "missing"}
+    order = ("failed", "downloading", "queued", "interrupted", "missing")
+    state = min((r.get("state") or "missing" for r in rows), key=lambda x: order.index(x) if x in order else 9)
+    return {"state": state, "done": sum(r.get("done") or 0 for r in rows),
+            "total": sum(r.get("total") or 0 for r in rows) or None,
+            "error": next((r.get("error") for r in rows if r.get("error")), None),
+            "note": next((r.get("note") for r in rows if r.get("note") and r.get("state") == "downloading"), None)}
+
+
+def _live(key: str, st: dict[str, Any]) -> dict[str, Any]:
+    """A saved status, corrected for a Studio restart: 'downloading' with no worker on it was interrupted."""
+    st = dict(st)
+    if st.get("state") in ("queued", "downloading") and key not in _pending:
+        st["state"] = "interrupted"
+    return st
 
 
 def checkpoint_file(ck_id: str, family: str) -> str | None:
@@ -316,15 +378,122 @@ def add_checkpoint(version_id: int, file_id: int | None = None, label: str | Non
         if f["family"] in ("ref2v", "any"):
             mapping.setdefault("ref2v", rel)
     ck = {"id": f"civ{int(version_id)}", "label": label or f"{v.get('model_name')} · {v.get('name')}",
-          "version_id": int(version_id), "files": mapping, "image": v.get("image")}
+          "version_id": int(version_id), "files": mapping, "image": v.get("image"),
+          "downloads": [{"id": f["id"], "name": f["name"], "size_kb": f.get("size_kb")} for f in files]}
     with _lock:
         data = util.read_json(CHECKPOINTS, {}) or {}
         items = [c for c in data.get("items") or [] if c.get("id") != ck["id"]]
         items.insert(0, ck)
         util.write_json(CHECKPOINTS, {"items": items})
-    for f in files:
-        _enqueue(("checkpoint", {"version_id": int(version_id), "file": f, "dest": UNET_DIR / f["name"]}))
+    enqueue_checkpoint(ck)
     return ck
+
+
+def _checkpoint_downloads(ck: dict[str, Any]) -> list[dict[str, Any]]:
+    """The files a CivitAI checkpoint downloads. Records saved before `downloads` existed
+    are matched to the version's files by name (one CivitAI lookup)."""
+    if ck.get("downloads"):
+        return ck["downloads"]
+    names = {rel.split("/")[-1] for rel in (ck.get("files") or {}).values()}
+    v = civitai.version(int(ck["version_id"]))
+    found = [{"id": f["id"], "name": f["name"], "size_kb": f.get("size_kb")} for f in v["files"] if f["name"] in names]
+    if found:
+        with _lock:
+            data = util.read_json(CHECKPOINTS, {}) or {}
+            for c in data.get("items") or []:
+                if c.get("id") == ck.get("id"):
+                    c["downloads"] = found
+            util.write_json(CHECKPOINTS, data)
+    return found
+
+
+def enqueue_checkpoint(ck: dict[str, Any]) -> int:
+    """Queue a checkpoint's missing files (resuming any .part). Returns how many were queued."""
+    downloads = ck.get("downloads") or []
+    if not ck.get("version_id") and not any(f.get("url") for f in downloads):
+        return 0
+    n = 0
+    for f in downloads if not ck.get("version_id") else _checkpoint_downloads(ck):
+        if not (UNET_DIR / f["name"]).is_file():
+            vid = int(ck["version_id"]) if ck.get("version_id") else None
+            n += _enqueue(("checkpoint", {"version_id": vid, "file": f, "dest": UNET_DIR / f["name"]}))
+    return n
+
+
+def safe_filename(name: str) -> str:
+    """A bare .safetensors file name, safe to put in a models folder."""
+    import re
+
+    base = re.sub(r"[^A-Za-z0-9._()+-]+", "_", str(name or "").replace("\\", "/").split("/")[-1]).strip("._")
+    if not base.lower().endswith(".safetensors"):
+        raise civitai.CivitaiError(f"Studio can only load .safetensors files ({name or 'no file name'})")
+    return base
+
+
+def add_url_lora(files: list[dict[str, Any]], nickname: str | None = None, trigger_words: list[str] | None = None,
+                 source: str | None = None) -> dict[str, Any]:
+    """A LoRA from a Hugging Face or direct link: catalog entry keyed by its main file name."""
+    clean = []
+    for f in files:
+        name = safe_filename(f.get("name"))
+        guess = civitai.classify_files([{"name": name}])[0]
+        clean.append({"id": None, "name": name, "url": f["url"], "size_kb": f.get("size_kb"),
+                      "family": f.get("family") or guess["family"], "role": f.get("role") or guess["role"],
+                      "install": True})
+    if not clean:
+        raise civitai.CivitaiError("nothing to install")
+    entry = upsert({"key": clean[0]["name"], "filename": clean[0]["name"], "files": clean,
+                    "nickname": nickname or Path(clean[0]["name"]).stem, "trigger_words": trigger_words or [],
+                    "source_url": source or clean[0]["url"]})
+    enqueue_entry(entry, force=True)
+    return entry
+
+
+def add_url_checkpoint(files: list[dict[str, Any]], label: str | None = None) -> dict[str, Any]:
+    """A base checkpoint from a Hugging Face or direct link."""
+    import hashlib
+
+    downloads, mapping = [], {}
+    for f in files[:1]:  # one diffusion model per checkpoint entry, like the CivitAI browser
+        name = safe_filename(f.get("name"))
+        fam = f.get("family") or civitai.classify_files([{"name": name}])[0]["family"]
+        downloads.append({"id": None, "name": name, "url": f["url"], "size_kb": f.get("size_kb")})
+        if fam in ("fl2v", "any"):
+            mapping["fl2v"] = f"diffusion_models/{name}"
+        if fam in ("ref2v", "any"):
+            mapping["ref2v"] = f"diffusion_models/{name}"
+    if not downloads:
+        raise civitai.CivitaiError("nothing to install")
+    ck = {"id": "url" + hashlib.sha1(downloads[0]["url"].encode()).hexdigest()[:8],
+          "label": label or Path(downloads[0]["name"]).stem, "version_id": None, "files": mapping,
+          "downloads": downloads, "source_url": downloads[0]["url"]}
+    with _lock:
+        data = util.read_json(CHECKPOINTS, {}) or {}
+        items = [c for c in data.get("items") or [] if c.get("id") != ck["id"]]
+        items.insert(0, ck)
+        util.write_json(CHECKPOINTS, {"items": items})
+    enqueue_checkpoint(ck)
+    return ck
+
+
+def install_checkpoint(ck_id: str) -> dict[str, Any]:
+    """Download (or resume, or retry) a CivitAI checkpoint now."""
+    ck = next((c for c in checkpoints() if c["id"] == ck_id), None)
+    if ck is None:
+        raise civitai.CivitaiError("that base model isn't in your list")
+    if ck["builtin"]:
+        raise civitai.CivitaiError("built-in base models download from System")
+    enqueue_checkpoint(ck)
+    return ck
+
+
+def resume_checkpoints() -> None:
+    """Boot: pick up every CivitAI checkpoint that isn't fully on disk yet."""
+    for ck in (util.read_json(CHECKPOINTS, {}) or {}).get("items") or []:
+        try:
+            enqueue_checkpoint(ck)
+        except Exception as exc:
+            log.warning("can't resume checkpoint %s: %s", ck.get("id"), exc)
 
 
 def remove_checkpoint(ck_id: str, delete_files: bool = False) -> None:
@@ -339,9 +508,32 @@ def remove_checkpoint(ck_id: str, delete_files: bool = False) -> None:
                 p = (paths.MODELS / rel).resolve()
                 if paths.MODELS.resolve() in p.parents:
                     p.unlink(missing_ok=True)
+                    p.with_suffix(p.suffix + ".part").unlink(missing_ok=True)
 
 
 # --------------------------------------------------------------------------- downloads
+#
+# Two lanes, each with its own worker thread: "small" for LoRAs and catalog
+# refreshes, "big" for base checkpoints (20-60 GB), so a checkpoint never holds
+# up a LoRA and vice versa. Every download resumes from its .part file and
+# retries with a fresh CivitAI link: one dropped connection in a 20 GB transfer
+# used to throw the whole file away with nothing on screen saying so.
+
+BIG_FILE_KB = 4 * 1024 * 1024
+RETRIES = 8
+_queues: dict[str, list[tuple[str, dict[str, Any]]]] = {"small": [], "big": []}
+_workers: dict[str, threading.Thread] = {}
+_pending: set[str] = set()   # status keys queued or downloading, so a second tap doesn't double up
+log = util.setup_logging("loras")
+
+
+class _Retry(Exception):
+    """A failure worth another attempt (dropped connection, short read)."""
+
+
+class _Fatal(Exception):
+    """A failure no retry will fix (refused, not a model file, disk full)."""
+
 
 def _set_status(key: str, **values: Any) -> None:
     with _lock:
@@ -351,63 +543,196 @@ def _set_status(key: str, **values: Any) -> None:
         util.write_json(STATUS, data)
 
 
-def _fetch(version_id: int, file: dict[str, Any], dest: Path, status_key: str) -> None:
-    if dest.exists() and dest.stat().st_size > 1024 * 1024:
-        _set_status(status_key, state="ready", error=None)
-        return
-    total = int(float(file.get("size_kb") or 0) * 1024) or None
-    _set_status(status_key, state="downloading", done=0, total=total, error=None)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
+def _status(key: str) -> dict[str, Any]:
+    return ((util.read_json(STATUS, {}) or {}).get("items") or {}).get(key) or {}
+
+
+REFUSED = {
+    "CivitAI": "CivitAI refused the download. Set CIVITAI_TOKEN on the pod (some models also need you to accept "
+               "their terms on the site once).",
+    "Hugging Face": "Hugging Face refused the download: the repo is private or gated. Set HF_TOKEN on the pod "
+                    "(and accept the model's terms on its page).",
+}
+
+
+def _source_of(url: str) -> str:
+    host = url.split("://", 1)[-1].split("/", 1)[0].lower()
+    if "civitai" in host:
+        return "CivitAI"
+    if host.endswith(("huggingface.co", "hf.co")):
+        return "Hugging Face"
+    return host or "the server"
+
+
+def _auth_for(url: str) -> dict[str, str]:
+    """Hugging Face takes HF_TOKEN as a header (dropped on its CDN redirect, which is signed)."""
+    if _source_of(url) == "Hugging Face" and os.environ.get("HF_TOKEN", "").strip():
+        return {"Authorization": f"Bearer {os.environ['HF_TOKEN'].strip()}"}
+    return {}
+
+
+def _attempt(url: str, tmp: Path, status_key: str) -> tuple[int, int | None]:
+    """One pass at the download, continuing tmp if it exists. Returns (bytes on disk, total)."""
+    src = _source_of(url)
+    have = tmp.stat().st_size if tmp.exists() else 0
+    headers = {"User-Agent": "MMH3-Studio", **_auth_for(url)}
+    if have:
+        headers["Range"] = f"bytes={have}-"
     try:
-        done, last = 0, 0.0
-        with requests.get(civitai.download_url(version_id, file.get("id")), stream=True,
-                          headers={"User-Agent": "MMH3-Studio"}, timeout=(30, 600)) as r:
-            if r.status_code in (401, 403):
-                raise RuntimeError("CivitAI refused the download. Set CIVITAI_TOKEN on the pod.")
-            r.raise_for_status()
-            with tmp.open("wb") as out:
+        r = requests.get(url, stream=True, headers=headers, timeout=(30, 300), allow_redirects=True)
+    except requests.RequestException as exc:
+        raise _Retry(f"couldn't reach {src} ({type(exc).__name__})") from None
+    with r:
+        if r.status_code in (401, 403):
+            raise _Fatal(REFUSED.get(src, f"{src} refused the download (HTTP {r.status_code})."))
+        if r.status_code == 404:
+            raise _Fatal(f"{src} says this file doesn't exist (any more)")
+        if r.status_code == 416 and have:  # asked past the end: the .part is already whole (or bigger)
+            return have, have
+        if r.status_code == 429 or r.status_code >= 500:
+            raise _Retry(f"{src} answered HTTP {r.status_code}")
+        if r.status_code not in (200, 206):
+            raise _Fatal(f"{src} answered HTTP {r.status_code}")
+        ctype = r.headers.get("Content-Type", "")
+        if ctype.startswith(("text/html", "application/json")):
+            raise _Fatal(f"{src} sent a web page instead of the file. Check the link (and the token, if it "
+                         "needs one).")
+        length = int(r.headers.get("Content-Length") or 0) or None
+        if r.status_code == 206:
+            rng = r.headers.get("Content-Range", "")  # bytes 100-999/1000
+            total = int(rng.rsplit("/", 1)[1]) if "/" in rng and rng.rsplit("/", 1)[1].isdigit() else (
+                have + length if length else None)
+            mode = "ab"
+        else:  # the server ignored the range: start over
+            have, total, mode = 0, length, "wb"
+        _set_status(status_key, state="downloading", done=have, total=total, error=None)
+        done, last = have, 0.0
+        try:
+            with tmp.open(mode) as out:
                 for chunk in r.iter_content(chunk_size=8 * 1024 * 1024):
                     out.write(chunk)
                     done += len(chunk)
                     if time.time() - last > 1.5:
-                        _set_status(status_key, done=done)
+                        _set_status(status_key, done=done, total=total)
                         last = time.time()
-        os.replace(tmp, dest)
-        _set_status(status_key, state="ready", done=done, error=None)
-    except requests.RequestException as exc:
-        tmp.unlink(missing_ok=True)
-        _set_status(status_key, state="failed", error=f"download failed ({type(exc).__name__})")
-    except Exception as exc:
-        tmp.unlink(missing_ok=True)
-        _set_status(status_key, state="failed", error=str(exc)[:200])
+        except requests.RequestException as exc:  # (an OSError subclass, so first)
+            _set_status(status_key, done=done)
+            raise _Retry(f"the connection dropped at {done // (1024 * 1024)} MB ({type(exc).__name__})") from None
+        except OSError as exc:
+            if getattr(exc, "errno", None) == 28:
+                raise _Fatal("the volume is full. Free some space (or remove a model) and tap Retry.") from None
+            raise _Fatal(f"couldn't write the file: {exc}") from None
+        return done, total
 
 
-def _enqueue(item: tuple[str, dict[str, Any]]) -> None:
-    global _worker
+def _fetch(version_id: int, file: dict[str, Any], dest: Path, status_key: str, retries: int = RETRIES) -> bool:
+    """Download one CivitAI file to dest, resuming and retrying. True when it's on disk."""
+    return _download(lambda: civitai.download_url(version_id, file.get("id")), file, dest, status_key, retries)
+
+
+def _download(url_fn, file: dict[str, Any], dest: Path, status_key: str, retries: int = RETRIES) -> bool:
+    """Download to dest, resuming from dest.part and asking url_fn() for a fresh link each attempt."""
+    if dest.exists() and dest.stat().st_size > 1024 * 1024:
+        _set_status(status_key, state="ready", error=None)
+        return True
+    expected = int(float(file.get("size_kb") or 0) * 1024) or None
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _set_status(status_key, state="downloading", done=tmp.stat().st_size if tmp.exists() else 0,
+                total=expected, error=None, attempt=1)
+    last_error = "download failed"
+    for attempt in range(1, retries + 1):
+        try:
+            done, total = _attempt(url_fn(), tmp, status_key)
+            if total and done < total:
+                raise _Retry(f"the connection ended early ({done // (1024 * 1024)} of {total // (1024 * 1024)} MB)")
+            if not total and expected and done < expected * 0.98:
+                raise _Retry("the file came back shorter than CivitAI lists it")
+            os.replace(tmp, dest)
+            _set_status(status_key, state="ready", done=done, total=total or done, error=None)
+            log.info("downloaded %s (%d MB)", dest.name, done // (1024 * 1024))
+            return True
+        except _Fatal as exc:
+            last_error = str(exc)
+            break
+        except _Retry as exc:
+            last_error = str(exc)
+            log.warning("%s: attempt %d/%d: %s", dest.name, attempt, retries, exc)
+            if attempt < retries:
+                _set_status(status_key, state="downloading", error=None, attempt=attempt + 1,
+                            note=f"retrying: {last_error}")
+                time.sleep(min(60, 5 * attempt))
+        except Exception as exc:  # anything else: report it, keep the .part for a Retry
+            last_error = f"{type(exc).__name__}: {exc}"[:200]
+            break
+    log.warning("download of %s failed: %s", dest.name, last_error)
+    _set_status(status_key, state="failed", error=last_error[:300])
+    return False
+
+
+def _job_key(kind: str, job: dict[str, Any]) -> str:
+    if job.get("file", {}).get("url"):
+        return f"url:{job['file']['name']}"
+    if kind == "lora":
+        return f"{job['version_id']}:{job['file'].get('id')}"
+    if kind == "checkpoint":
+        return f"ck{job['version_id']}:{job['file'].get('id')}"
+    return f"refresh:{job.get('version_id')}"
+
+
+def _enqueue(item: tuple[str, dict[str, Any]]) -> bool:
+    """Queue a job on its lane. False when the same file is already queued or downloading."""
+    kind, job = item
+    key = _job_key(kind, job)
+    big = kind == "checkpoint" or float((job.get("file") or {}).get("size_kb") or 0) > BIG_FILE_KB
+    lane = "big" if big else "small"
     with _lock:
-        _queue.append(item)
-        if not (_worker and _worker.is_alive()):
-            _worker = threading.Thread(target=_work, daemon=True, name="civitai-downloads")
-            _worker.start()
+        if key in _pending:
+            return False
+        _pending.add(key)
+        _queues[lane].append(item)
+        if kind in ("lora", "checkpoint"):
+            _set_status(key, state="queued", error=None)
+        w = _workers.get(lane)
+        if not (w and w.is_alive()):
+            w = threading.Thread(target=_work, args=(lane,), daemon=True, name=f"civitai-{lane}")
+            _workers[lane] = w
+            w.start()
+    return True
 
 
-def _work() -> None:
+def busy() -> bool:
+    return any(w.is_alive() for w in _workers.values())
+
+
+def _work(lane: str) -> None:
+    from . import bootgate
+
+    bootgate.wait_open()  # never download while the volume is still being copied in
     while True:
         with _lock:
-            if not _queue:
+            if not _queues[lane]:
+                _workers.pop(lane, None)
                 return
-            kind, job = _queue.pop(0)
+            kind, job = _queues[lane].pop(0)
+        key = _job_key(kind, job)
         try:
-            if kind == "lora":
-                _fetch(job["version_id"], job["file"], LORA_DIR / job["file"]["name"],
-                       f"{job['version_id']}:{job['file'].get('id')}")
+            if job.get("file", {}).get("url"):
+                url = job["file"]["url"]
+                _download(lambda: url, job["file"], job.get("dest") or LORA_DIR / job["file"]["name"], key)
+            elif kind == "lora":
+                _fetch(job["version_id"], job["file"], LORA_DIR / job["file"]["name"], key)
             elif kind == "checkpoint":
-                _fetch(job["version_id"], job["file"], job["dest"], f"ck{job['version_id']}:{job['file'].get('id')}")
+                _fetch(job["version_id"], job["file"], job["dest"], key)
             elif kind == "refresh":
                 _refresh_entry(job)
         except Exception as exc:  # never let one bad entry stop the queue
-            util.setup_logging("loras").warning("download job failed: %s", exc)
+            log.warning("download job failed: %s", exc)
+            if kind in ("lora", "checkpoint"):
+                _set_status(key, state="failed", error=str(exc)[:200])
+        finally:
+            with _lock:
+                _pending.discard(key)
 
 
 def enqueue_entry(entry: dict[str, Any], force: bool = False) -> None:
@@ -419,7 +744,11 @@ def enqueue_entry(entry: dict[str, Any], force: bool = False) -> None:
     if not (force or auto_installs(entry) or any(f["name"] in disk for f in files)):
         return
     for f in files:
-        if f.get("install", True) and f["name"] not in disk and entry.get("version_id"):
+        if not f.get("install", True) or f["name"] in disk:
+            continue
+        if f.get("url"):
+            _enqueue(("lora", {"version_id": None, "file": f, "dest": LORA_DIR / f["name"]}))
+        elif entry.get("version_id"):
             _enqueue(("lora", {"version_id": int(entry["version_id"]), "file": f}))
 
 
@@ -458,10 +787,14 @@ def sync() -> bool:
         if vid not in have:
             upsert({"version_id": int(vid)})
     for e in catalog():
+        if e.get("enabled", True) and not e.get("version_id") and any(f.get("url") for f in e.get("files") or []):
+            enqueue_entry(e)  # added by link (Hugging Face / direct URL)
+            continue
         if not e.get("enabled", True) or not e.get("version_id"):
             continue
         if not e.get("files") or any(f.get("id") is None for f in e.get("files") or []):
             _enqueue(("refresh", e))
         else:
             enqueue_entry(e)
+    resume_checkpoints()
     return True

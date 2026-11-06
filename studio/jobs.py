@@ -181,6 +181,9 @@ class Runner:
                     "overrides": {k: overrides[k] for k in recipe.get("overridden", [])},
                     "loras": lora_list, "lora_picks": picks, "start_image": start_image, "end_image": end_image,
                     "refs": refs if mode == "r2v" else [], "group": group,
+                    "subjects": [{"n": sl.get("n"), "id": sl.get("id"), "variant": sl.get("variant")}
+                                 for sl in form.get("subjects") or [] if isinstance(sl, dict) and sl.get("id")]
+                    if mode == "r2v" else [],
                     "compare": bool(form.get("compare")), "label": recipe.get("label") or recipe["id"],
                     "stage": "", "note": "", "error": None, "step": 0, "total_steps": 0,
                 }
@@ -243,7 +246,7 @@ class Runner:
     def retry(self, job_id: str) -> list[dict[str, Any]]:
         job = self._get(job_id)
         form = {k: job.get(k) for k in ("mode", "idea", "prompt", "aspect", "megapixels", "duration",
-                                         "checkpoint", "start_image", "end_image", "refs",
+                                         "checkpoint", "start_image", "end_image", "refs", "subjects",
                                          "recipe_id", "overrides", "seed", "prompt_mode")}
         form["loras"] = job.get("lora_picks") or job.get("loras") or []
         return self.submit(form)
@@ -583,6 +586,7 @@ class Runner:
             "recipe_id": job["recipe_id"], "recipe": job["recipe"], "overrides": job.get("overrides") or {},
             "loras": job["loras"], "lora_picks": job.get("lora_picks") or [], "start_image": job["start_image"], "end_image": job["end_image"],
             "refs": job["refs"], "reference_tags": graph.reference_tags(job["refs"]) if job["refs"] else [],
+            "subjects": job.get("subjects") or [],
             "group": job.get("group"), "compare": job.get("compare"), "label": job.get("label"),
             "prompt_id": job.get("prompt_id"), "created": job["created"], "started": job.get("started"),
             "finished": finished, "timings": timings,

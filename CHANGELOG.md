@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.5.0
+
+- **Checkpoints picked in the CivitAI browser now actually download.** They were listed as base models
+  and then never arrived. The download ran inside Studio as one plain stream with no retry: a single
+  dropped connection anywhere in a 20–60 GB transfer deleted what had arrived and recorded a failure
+  that nothing on screen showed, and a Studio restart (or a pod restart) lost the queue, with nothing
+  re-queueing checkpoints at boot. Boot-time models never had the problem because they go through the
+  Hugging Face downloader, which retries and resumes. Now every CivitAI download resumes from its
+  `.part` file and retries with a fresh link (8 attempts); a refusal, a web page instead of a file, or a
+  full disk fails at once with the reason. Checkpoints download on their own lane, so they never wait
+  behind LoRAs (or the reverse), and an unfinished one is picked up again at boot. Base models show
+  *Downloading 34% · 7.1 of 21 GB*, the reason a download stopped, and Retry / Resume. A second tap
+  never queues the same file twice.
+- **Restarting a pod that RunPod migrates no longer downloads everything twice.** A migrated pod can
+  start while RunPod is still copying the old `/workspace` in, so the provisioner saw an empty volume
+  and started fetching ~100 GB while the copy landed on top. Before any download (models, LoRAs,
+  checkpoints, workflows) Studio now checks the volume: core models already there means a normal
+  restart; otherwise it watches for files arriving that nobody in the container is writing (90 s on an
+  empty volume, 5 min when Studio's own files are there but the models aren't). While a copy is
+  running every download waits, and Create/System say so with a *Download now* button. A model file
+  that is still growing on its own is never downloaded next to itself. This is a heuristic (RunPod
+  doesn't flag a migration), so it errs toward a short wait.
+- **No more recommended LoRAs under Quick install.** A new volume starts with an empty catalog. An
+  existing one drops the old recommended entries once, unless you installed one or set it to download
+  on startup.
+- **Add by link or id** (LoRAs & models): CivitAI model pages, download links (`fileId` respected),
+  version ids (`m:` for a model id), AIR URNs, Hugging Face file links, repo links or `owner/repo`
+  (pick files from the repo), and direct `.safetensors` links. *Check first* shows what was found (name,
+  version and the model's other versions, base model with a warning if it isn't H3, each file's size and
+  mode) before downloading; turn it off to install the suggested file right away. LoRA or base model is
+  taken from CivitAI, or guessed from the name and size elsewhere, and can be overridden. `HF_TOKEN` is
+  used for gated Hugging Face repos.
+- **Subjects (beta).** Characters, settings and objects with descriptions, role-tagged references and
+  variants (add to / replace the description, keep or drop the base references, no voice). In Create →
+  Reference they fill `<Subject N>` slots: references come with them and Studio writes their
+  `subject_definitions` lines. Auto keeps each subject's appearance in that line only, so a subject can be
+  swapped in a finished prompt without regenerating it: the line and tags are rewritten in place, other
+  tags renumbered, an Auto idea's names follow ("Bob" becomes "Steve"), leftovers of the old subject are
+  listed, and *Tidy with AI* fixes only those (Undo puts it back). *Insert subject lines* does the same for
+  a prompt you wrote. Off unless you add a subject; references and kits are unchanged.
+
 ## 2.4.1
 
 - **Replace a reference in place.** Tap a reference in Create (or its ↻) to swap it for another

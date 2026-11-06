@@ -232,3 +232,32 @@ def test_live_preview_is_a_loop_unless_turned_off(stack):
         assert run() == "image/jpeg"
     finally:
         stack.call("/api/system/settings", {"preview.animated": True}, method="PUT")
+
+
+def test_subjects_swap_and_render(stack):
+    bob = stack.call("/api/subjects", {"name": "Bob", "description": "a man with a grey beard",
+                                       "refs": [{"kind": "image", "file": "mmh3/2026-09/portrait_1.png", "role": "face"}]})
+    steve = stack.call("/api/subjects", {"name": "Steve", "description": "a man with curly blond hair",
+                                         "refs": [{"kind": "image", "file": "mmh3/2026-09/portrait_2.png"}]})
+    assert {s["name"] for s in stack.call("/api/subjects")["items"]} >= {"Bob", "Steve"}
+    slots = [{"n": 1, "id": bob["id"]}]
+    c = stack.call("/api/subjects/compose", {"slots": slots, "loose": []})
+    assert c["tags"] == ["<Picture 1>"] and c["lines"][0].startswith("<Subject 1> is a man with a grey beard")
+    prompt = "subject_definitions:\n" + c["lines"][0] + "\n\n" + PROMPT
+    new_slots = [{"n": 1, "id": steve["id"]}]
+    c2 = stack.call("/api/subjects/compose", {"slots": new_slots, "loose": []})
+    r = stack.call("/api/subjects/rewrite", {"prompt": prompt, "before": {"slots": slots, "refs": c["refs"]},
+                                             "after": {"slots": new_slots, "refs": c2["refs"]}})
+    assert "curly blond hair" in r["prompt"] and "grey beard" not in r["prompt"] and r["tidy_request"]
+    jobs = stack.call("/api/generate", {"mode": "r2v", "prompt": r["prompt"], "refs": c2["refs"], "subjects": new_slots})
+    (job,) = stack.wait_done(jobs["jobs"])
+    assert job["status"] == "done", job
+    rec = stack.call(f"/api/outputs/reuse?file={job['output']['file']}")
+    assert rec["subjects"] == [{"n": 1, "id": steve["id"], "variant": None}] and rec["refs"][0]["subject"] == 1
+
+
+def test_add_by_link_validates_before_any_download(stack):
+    r = stack.call("/api/install", {"text": "not a link", "kind": "lora"})
+    assert r["http"] in (400, 502) and "link" in r["error"]
+    r = stack.call("/api/install", {"text": "https://example.com/model.gguf", "kind": "lora"})
+    assert r["http"] in (400, 502) and ".safetensors" in r["error"]
